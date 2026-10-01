@@ -1,0 +1,19 @@
+# Line endings are normalised to LF in the working tree, not just in the index.
+#
+# This is load-bearing for Phase 0 rather than tidiness. Two checks compare file
+# *content*: the schema-immutability check compares a version file against the
+# content at the commit that introduced it, read from git, and 3.8 asserts that
+# re-running the extraction produces byte-identical output. On Windows the
+# default `core.autocrlf` behaviour gives the working tree CRLF while git stores
+# LF, so both comparisons would fail on a clean checkout for a reason that has
+# nothing to do with schemas or the extraction. `eol=lf` makes the working tree
+# byte-identical to what git stores, so "unchanged" means unchanged.
+* text=auto eol=lf
+
+# Binary artifacts, never normalised.
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.lock binary

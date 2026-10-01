@@ -1,0 +1,10 @@
+schema: spec-driven
+created: 2026-10-01
+goal: "Phase 0 of the Open House implementation plan, covering both halves.
+  0a: reference repo identification across all 4 resource repos, license and
+  attribution settlement, full inventory, behavior extraction, cross-repo
+  comparison, hardcoding audit, slot vocabulary, room-type mapping, edge-case
+  and pain-point registers, integration dependency ledger, and the merged
+  behavior catalog deliverable. 0b: the frozen versioned schema set, the
+  repository module layout and purity invariants, and a hand-written example
+  house and pack validating against the schemas."

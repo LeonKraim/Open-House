@@ -1,0 +1,52 @@
+# Open House — local Home Assistant container for development and E2E testing.
+#
+# "HAOS" in the project brief means a real Home Assistant instance we control.
+# The Docker-native way to get one is the Home Assistant Container image
+# (ghcr.io/home-assistant/home-assistant), driven in host-network mode so
+# discovery, mDNS and the websocket API behave as they do on a real install.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.yml up -d
+#   docker compose -f docker/docker-compose.yml logs -f
+#
+# The UI is on http://localhost:8123 once the container reports ready.
+# Onboarding (creating the owner account) is done by the `tools/ha/onboard.py`
+# helper so the whole thing can be driven headlessly from CI and from tests.
+
+name: open-house
+
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: open-house-ha
+    restart: unless-stopped
+    # Ports are published rather than using network_mode: host. On Docker
+    # Desktop for Windows "host" means the Linux VM's namespace, which is not
+    # reachable from the Windows host, so localhost:8123 would refuse.
+    ports:
+      - "8123:8123"
+    privileged: true
+    volumes:
+      - ./ha-config:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /run/dbus:/run/dbus:ro
+    environment:
+      TZ: Europe/Amsterdam
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8123/manifest.json"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 90s
+
+  # Deterministic mock device fleet used by the E2E suite (see sim/).
+  # Runs the FakeHouse adapter and exposes it over MQTT so the real HA
+  # container can be bound to the same entities the simulator drives.
+  mocks:
+    image: eclipse-mosquitto:2
+    container_name: open-house-mocks
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro

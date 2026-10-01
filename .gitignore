@@ -1,0 +1,47 @@
+# Secrets and local state -- never commit.
+.env.local
+*.token
+secrets.yaml
+
+# The four reference repos are separate clones with their own history and their
+# own licences. They are read as input and never committed here; the corpus is
+# the derived artifact. Committing them would relicense nothing and would put
+# four more .git trees inside this one.
+/ressources/
+
+# The unfiltered extraction. The committed `catalog/` holds facts for all four
+# repos -- paths, ids, classes, vocabulary terms, entity identifiers -- and no
+# field that can hold authored text. This directory holds the same records
+# verbatim, including the aliases, display names, comments and YAML blocks of
+# the two repos that grant nothing, and those are what a licence withholds
+# rather than what it lets us keep. It exists so the local provenance gate can
+# compare a shipped string against its source. It sits outside `catalog/`
+# because every data file in `catalog/` must validate against a schema and this
+# store is the one file the corpus validator is required to reject.
+.local/
+
+# Home Assistant runtime state for the dev container -- the database, logs,
+# registries and the config onboarding writes. All of it is generated, none of
+# it is authored, and it is ignored wholesale so a container run can never
+# commit a token or a device registry. Our own configuration lives in this
+# repository (`custom_components/`, `packs/`, `engine/`) and is never written
+# here. It is not mounted yet either: the compose file currently mounts only
+# this directory, localtime and dbus, and the mount arrives with the integration
+# in a later phase.
+docker/ha-config/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# Node / panel
+node_modules/
+panel/dist/
