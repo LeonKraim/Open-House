@@ -1,0 +1,61 @@
+[project]
+name = "oh-tools"
+version = "0.0.0"
+description = "Validation and generation tooling for the Open House catalog."
+requires-python = ">=3.12"
+
+# This list is normative, not incidental. The engine-purity invariant in
+# `specs/architecture-invariants/spec.md` reads exactly this array as the
+# declared dependency list and fails any import under `engine/` that is neither
+# stdlib, first-party, nor named here. Adding a dependency is therefore a change
+# to an enforced boundary, which is the point: an undeclared import is a build
+# failure rather than a surprise at runtime.
+dependencies = [
+    "pydantic>=2.9",
+    "pyyaml>=6.0",
+    "jsonschema>=4.23",
+    "typer>=0.12",
+]
+
+[project.scripts]
+oh-catalog = "tools.catalog.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "hypothesis>=6.112",
+    "ruff>=0.6",
+    "pyright>=1.1.380",
+    "pre-commit>=3.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["tools"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "PTH", "RUF"]
+# `E501` is line length, which the formatter already owns; leaving it on would
+# make the linter and the formatter disagree about the same line.
+ignore = ["E501"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+include = ["tools"]
+# The engine skeleton is deliberately empty in Phase 0 -- its purity is asserted
+# rather than exercised -- so strict checking there would report nothing useful.
+exclude = ["engine", "ha_adapter", "sim", "custom_components"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"

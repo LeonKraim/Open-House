@@ -1,0 +1,36 @@
+{
+  "$id": "https://open-house.invalid/schemas/catalog/rooms.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Real rooms across the reference repos",
+  "description": "Every room that exists in any of the four setups, with the repo and path it came from. This file is the evidence base for `room_types.yaml`: a room type's `source_rooms` are drawn from here, so a type that no real room produced cannot be recorded, and the corroboration rule for `default: true` can be checked by joining through this file rather than by trusting a comment.",
+  "schema_version": "1.0.0",
+  "type": "object",
+  "required": ["rooms"],
+  "additionalProperties": false,
+  "properties": {
+    "rooms": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/room"}
+    }
+  },
+  "$defs": {
+    "room": {
+      "type": "object",
+      "required": ["name", "repo", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The room as the repo spells it. Kept verbatim, including a non-English name: this is the record of what exists, and normalising it here would destroy the evidence the room-type map is derived from."
+        },
+        "repo": {"type": "string", "minLength": 1},
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repo-relative path of the file the room was read from."
+        }
+      }
+    }
+  }
+}

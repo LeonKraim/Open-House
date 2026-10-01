@@ -1,0 +1,17 @@
+{
+  "$id": "https://open-house.invalid/schemas/catalog/slots.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Slot vocabulary",
+  "description": "The placeholder vocabulary, derived from cross-repo usage rather than invented. Each slot is validated by the runtime `slot` schema, which is the published contract and already carries the example rule -- every example names its source repo and a reuse status, an example may carry empty `raw_ids` only when the artifact yielded none, and such an example must carry our own description instead. Repeating any of that here would create a second copy free to drift from the first.",
+  "schema_version": "1.0.0",
+  "type": "object",
+  "required": ["slots"],
+  "additionalProperties": false,
+  "properties": {
+    "slots": {
+      "type": "array",
+      "items": {"$ref": "../slot/1.0.0.json"},
+      "description": "Every multi-source slot carries examples from at least two different source repos: an overlap across repos is the strongest signal that a slot belongs in the defaults, and a single-repo slot does not have that signal. The cross-record rule is the validator's, not the schema's."
+    }
+  }
+}

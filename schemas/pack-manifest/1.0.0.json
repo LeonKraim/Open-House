@@ -1,0 +1,58 @@
+{
+  "$id": "https://open-house.invalid/schemas/pack-manifest/1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pack manifest",
+  "schema_version": "1.0.0",
+  "supersedes": null,
+  "description": "A pack's declaration of what it needs and what it provides. `requires_slots` is what makes a pack portable: the pack names the placeholders it must be plugged into, and never names a house, a room or an entity, because a pack that named one would only work in the house it was written in.",
+  "type": "object",
+  "required": ["name", "version", "description", "requires_slots", "provides"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "description": {"type": "string", "minLength": 1},
+    "requires_slots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "description": "Slot names, resolved against slots.yaml. A pack that names a slot no slot file defines is a pack that cannot be installed anywhere."
+    },
+    "provides": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/provided"},
+      "description": "Every entry carries the artifact class it confers, because the class-pinning rule is what stops a pack smuggling an unpinnable artifact past the licence gate by calling it a helper."
+    },
+    "min_engine_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}
+  },
+  "$defs": {
+    "provided": {
+      "type": "object",
+      "required": ["path", "class"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repo-relative path. A string fact, so its shape comes from `schemas/catalog/fact-shapes.yaml` shared by every filed fact."
+        },
+        "class": {
+          "enum": [
+            "package",
+            "automation",
+            "script",
+            "scene",
+            "helper",
+            "template",
+            "blueprint",
+            "dashboard",
+            "custom_integration",
+            "other"
+          ],
+          "description": "The artifact class this entry confers, drawn from the closed class set rather than from free text."
+        }
+      }
+    }
+  }
+}

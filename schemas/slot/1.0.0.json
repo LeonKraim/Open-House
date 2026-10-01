@@ -1,0 +1,74 @@
+{
+  "$id": "https://open-house.invalid/schemas/slot/1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Slot",
+  "schema_version": "1.0.0",
+  "supersedes": null,
+  "description": "A placeholder a device is plugged into. The product promise is that a user binds devices to slots and the rest follows, so a slot is the unit that makes a pack configurable without a pack author knowing which house it lands in.",
+  "type": "object",
+  "required": ["name", "accepts_domains", "required", "source_repos", "examples"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "Controlled-vocabulary name, lower snake case."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "accepts_domains": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "pattern": "^[a-z_]+$"},
+      "description": "Home Assistant domains a binding may use, e.g. `light`."
+    },
+    "required": {
+      "type": "boolean",
+      "description": "True when a room of a type providing this slot cannot be set up without it."
+    },
+    "source_repos": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string"},
+      "description": "Every repo whose usage produced this slot."
+    },
+    "examples": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/example"},
+      "description": "At least one, and at least two different repos when source_repos has more than one."
+    }
+  },
+  "$defs": {
+    "example": {
+      "type": "object",
+      "required": ["repo", "reuse_status_code"],
+      "additionalProperties": false,
+      "properties": {
+        "repo": {"type": "string"},
+        "reuse_status_code": {
+          "enum": ["reusable", "ideas_only"],
+          "description": "Copied from the licence record so the example is auditable without a join."
+        },
+        "raw_ids": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Raw records this example was drawn from. Empty is permitted, but only with a description."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Our own words. Required when raw_ids is empty, and required in place of an entity reference when the source does not grant reuse."
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"raw_ids": {"maxItems": 0}}},
+          "then": {"required": ["description"]}
+        }
+      ]
+    }
+  }
+}

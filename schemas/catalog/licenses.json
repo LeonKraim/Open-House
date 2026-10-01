@@ -1,0 +1,89 @@
+{
+  "$id": "https://open-house.invalid/schemas/catalog/licenses.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Per-repo licence records",
+  "description": "One record per reference repo, split by artifact kind because a repo's code and its prose are under different licences. The derived fields appear here so that a hand-written value can be contradicted by the derivation table rather than merely ignored -- the schema says the field exists, and the `licenses` check says what it must equal.",
+  "schema_version": "1.0.0",
+  "type": "object",
+  "required": ["repos"],
+  "additionalProperties": false,
+  "properties": {
+    "repos": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/record"}
+    }
+  },
+  "$defs": {
+    "licenceValue": {
+      "enum": ["public_domain", "mit", "apache_2_0", "cc_by_nc_sa", "no_licence"],
+      "description": "Licence values only, ordered least to most restrictive by the published order. A status is never a value: three of these five share the status `reusable`, so an order over statuses could not rank them."
+    },
+    "status": {"enum": ["reusable", "ideas_only"]},
+    "obligation": {
+      "enum": ["attribution", "state_changes", "share_alike", "non_commercial"]
+    },
+    "contact": {
+      "type": "object",
+      "required": ["channel", "attempted_on", "outcome"],
+      "additionalProperties": false,
+      "description": "Recorded whether or not contact was made, which is why `not_attempted` is a value rather than an absent block.",
+      "properties": {
+        "channel": {"type": "string", "minLength": 1},
+        "attempted_on": {
+          "type": ["string", "null"],
+          "description": "Null when nothing happened. There is no date on which nothing happened, and the check refuses one."
+        },
+        "outcome": {
+          "enum": ["not_attempted", "contacted", "granted", "declined", "no_response"]
+        },
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"outcome": {"const": "not_attempted"}}},
+          "then": {"required": ["reason"]}
+        }
+      ]
+    },
+    "record": {
+      "type": "object",
+      "required": [
+        "repo",
+        "author",
+        "license_code",
+        "license_prose",
+        "license_file",
+        "reuse_status_code",
+        "reuse_status_prose",
+        "obligations"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "repo": {"type": "string", "minLength": 1},
+        "author": {"type": "string", "minLength": 1},
+        "license_code": {"$ref": "#/$defs/licenceValue"},
+        "license_prose": {"$ref": "#/$defs/licenceValue"},
+        "license_file": {
+          "type": ["string", "null"],
+          "description": "Null means no licence file was found, and null is therefore `no_licence` whatever the README claims."
+        },
+        "reuse_status_code": {"$ref": "#/$defs/status"},
+        "reuse_status_prose": {"$ref": "#/$defs/status"},
+        "obligations": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/obligation"},
+          "description": "The union for this repo's code licence. Per-row obligations are a union again, over the sources a row cites."
+        },
+        "readme_licence_claim": {
+          "type": ["string", "null"],
+          "description": "A README's claim is recorded because it is evidence, not because it is a grant."
+        },
+        "licence_claim_discrepancy": {
+          "type": ["string", "null"],
+          "description": "Required alongside a claim that the licence file does not support: a claim with no recorded discrepancy is a claim someone will later read as settled."
+        },
+        "author_contact": {"$ref": "#/$defs/contact"}
+      }
+    }
+  }
+}

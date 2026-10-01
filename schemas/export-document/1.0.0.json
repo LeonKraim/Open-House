@@ -1,0 +1,37 @@
+{
+  "$id": "https://open-house.invalid/schemas/export-document/1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Export document",
+  "schema_version": "1.0.0",
+  "supersedes": null,
+  "description": "The shape of a house exported to a file. Shape-frozen in Phase 0; the round-trip property is Phase 3's. A binding carries the registry id as well as the entity id because an entity id alone is not stable across a re-pair, and an export that cannot be re-imported is not an export.",
+  "type": "object",
+  "required": ["format_version", "house"],
+  "additionalProperties": false,
+  "properties": {
+    "format_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "house": {"type": "string", "minLength": 1},
+    "exported_at": {"type": "string", "minLength": 1},
+    "bindings": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/binding"}
+    }
+  },
+  "$defs": {
+    "binding": {
+      "type": "object",
+      "required": ["room", "slot", "registry_id", "entity_id"],
+      "additionalProperties": false,
+      "properties": {
+        "room": {"type": "string", "minLength": 1},
+        "slot": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "registry_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Required: a binding carrying only an entity_id cannot be re-imported after a re-pair, so the schema refuses it."
+        },
+        "entity_id": {"type": "string", "pattern": "^[a-z_]+\\.[a-z0-9_]+$"}
+      }
+    }
+  }
+}

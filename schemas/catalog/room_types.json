@@ -1,0 +1,30 @@
+{
+  "$id": "https://open-house.invalid/schemas/catalog/room_types.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Room-type map",
+  "description": "The room types derived from the real rooms, plus the `house` scope. Each type is validated by the runtime `room-type` schema rather than by a shape restated here: the runtime schema is the published contract, and a second copy in the catalog would be free to drift from it. The `house` scope is separate because a behaviour scoped to the house must not be forced through a room type it has nothing to do with.",
+  "schema_version": "1.0.0",
+  "type": "object",
+  "required": ["room_types"],
+  "additionalProperties": false,
+  "properties": {
+    "room_types": {
+      "type": "array",
+      "items": {"$ref": "../room-type/1.0.0.json"},
+      "description": "The union of real rooms is not truncated by the corroboration rule: a type that exists in only one repo is recorded with `default: false`, because the map has to be able to express every real room even where only one house has one."
+    },
+    "house": {
+      "type": "object",
+      "required": ["slots"],
+      "additionalProperties": false,
+      "description": "Slots that belong to the house. A house-scoped behaviour can require only slots named here, and a room-scoped one only slots some room type provides.",
+      "properties": {
+        "slots": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+          "description": "Resolved against `catalog/slots.yaml`; the membership rule is the validator's, because a JSON Schema reference cannot reach into a YAML document's contents."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "$id": "https://open-house.invalid/schemas/catalog/repos.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Repository identification records",
+  "description": "The per-repo identification records required by the `reference-catalog` capability: one per reference repo, each naming what that repo is and the one thing it contributes that the others do not. `best_at` is not decoration -- it is what stops the four repos being treated as interchangeable sources and keeps the derived vocabulary from being an average of four different opinions.",
+  "schema_version": "1.0.0",
+  "type": "object",
+  "required": ["repos"],
+  "additionalProperties": false,
+  "properties": {
+    "repos": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/repo"}
+    }
+  },
+  "$defs": {
+    "repo": {
+      "type": "object",
+      "required": [
+        "name",
+        "repo_url",
+        "author",
+        "purpose",
+        "ha_style",
+        "scale",
+        "ha_version",
+        "best_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "repo_url": {"type": "string", "minLength": 1},
+        "author": {"type": "string", "minLength": 1},
+        "purpose": {"type": "string", "minLength": 1},
+        "ha_style": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "package",
+              "split-include",
+              "blueprint-driven",
+              "custom-integration",
+              "dashboard-strategy",
+              "appdaemon"
+            ]
+          },
+          "description": "Deliberately unordered. An earlier draft required the most characteristic style first, which turned out to be a claim about the repo that nothing could check."
+        },
+        "scale": {"type": "string", "minLength": 1},
+        "ha_version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Checked against the repo's `.HA_VERSION` at curation time, not in CI: the clones are absent from CI by design."
+        },
+        "best_at": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The one thing this repo contributes that the others do not."
+        }
+      }
+    }
+  }
+}

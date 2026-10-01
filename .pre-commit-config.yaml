@@ -1,0 +1,53 @@
+# Every hook runs from the project virtualenv rather than from a hook-owned
+# environment. The alternative -- `astral-sh/ruff-pre-commit` and a pinned
+# `pyright` mirror -- would put a second copy of each tool in the repository's
+# toolchain, at a version the `pyproject.toml` does not control, so a line that
+# passes the hook could still fail `ruff check` run by hand and vice versa. One
+# version of each tool is the point; the tools are declared in the `dev`
+# dependency group and this file only says when they run.
+#
+# Consequence worth stating: these hooks need the virtualenv to exist and the
+# `python` on PATH to be its interpreter (`uv run pre-commit ...`, or a shell
+# with `.venv` activated). That is the same requirement as `oh-catalog validate`
+# run by hand, so it adds no new precondition.
+minimum_pre_commit_version: "3.8"
+
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        description: Lint, with the fixes ruff can apply itself.
+        entry: python -m ruff check --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: ruff-format
+        name: ruff format
+        description: Format, so the linter and the formatter cannot disagree.
+        entry: python -m ruff format
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: pyright
+        name: pyright
+        description: Strict type checking over the tooling.
+        # The whole tree, not the staged files: a type error is a property of
+        # the module graph, and checking one file of it proves nothing.
+        entry: python -m pyright
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: oh-catalog-validate
+        name: oh-catalog validate
+        description: >
+          Every Phase 0 invariant: layout, engine purity, registry boundary,
+          version control, schema succession and immutability, the catalog's
+          own data files, and the licence records.
+        entry: python -m tools.catalog.cli validate
+        language: system
+        pass_filenames: false
+        always_run: true

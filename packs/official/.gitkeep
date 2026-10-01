@@ -1,0 +1,5 @@
+# Official packs.
+#
+# Not a Python package: a pack is data, and this directory holds the packs this
+# project ships. The hand-written example house, pack and export land here in
+# Phase 0 section 7.

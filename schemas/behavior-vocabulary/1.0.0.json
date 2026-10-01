@@ -1,0 +1,34 @@
+{
+  "$id": "https://open-house.invalid/schemas/behavior-vocabulary/1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Behaviour vocabulary",
+  "schema_version": "1.0.0",
+  "supersedes": null,
+  "description": "The closed vocabulary of triggers, conditions and actions a behaviour may use. The term set is learned from the extraction rather than known in advance, which makes this the one runtime schema expected to gain a version in Phase 0: created here with the terms known at this point, then superseded by 1.1.0 carrying the terms the extraction derived. The shape is frozen; only the term lists change, and they change by publishing a new version file, never by editing this one.",
+  "type": "object",
+  "required": ["triggers", "conditions", "actions", "axes"],
+  "additionalProperties": false,
+  "properties": {
+    "triggers": {"$ref": "#/$defs/terms"},
+    "conditions": {"$ref": "#/$defs/terms"},
+    "actions": {"$ref": "#/$defs/terms"},
+    "axes": {
+      "type": "object",
+      "description": "The mode and profile axes a behaviour may be gated on.",
+      "required": ["modes", "profiles"],
+      "additionalProperties": false,
+      "properties": {
+        "modes": {"$ref": "#/$defs/terms"},
+        "profiles": {"$ref": "#/$defs/terms"}
+      }
+    }
+  },
+  "$defs": {
+    "terms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "description": "Closed list, unique by construction rather than by a uniqueness keyword: JSON Schema cannot express it portably, so it is enforced by the vocabulary check instead."
+    }
+  }
+}

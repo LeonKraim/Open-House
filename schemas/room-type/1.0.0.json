@@ -1,0 +1,48 @@
+{
+  "$id": "https://open-house.invalid/schemas/room-type/1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Room type",
+  "schema_version": "1.0.0",
+  "supersedes": null,
+  "description": "A kind of room, and the slots it provides. The union of real rooms is not truncated by the corroboration rule: a type that exists in one repo is recorded as `default: false`, because the map must be able to express every real room even where only one house has one.",
+  "type": "object",
+  "required": ["name", "default", "source_rooms", "provides_slots"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "default": {
+      "type": "boolean",
+      "description": "True when Phase 1 may pre-populate this type for a new user. A `default: true` type must trace to source rooms in at least two different repos: this is a quality gate on what we assume on a stranger's behalf, not a coverage rule."
+    },
+    "source_rooms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/source_room"}
+    },
+    "provides_slots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "description": "Slot names this type provides. Scope checking reads this."
+    }
+  },
+  "$defs": {
+    "source_room": {
+      "type": "object",
+      "required": ["repo", "room"],
+      "additionalProperties": false,
+      "properties": {
+        "repo": {"type": "string"},
+        "room": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

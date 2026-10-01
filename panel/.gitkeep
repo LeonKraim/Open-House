@@ -1,0 +1,5 @@
+# Package marker.
+#
+# `panel/` is a TypeScript + Lit build, not a Python package, so there is no
+# `__init__.py` and no `py.typed`. This file exists so the directory is present
+# in a fresh clone and the layout check can assert it by existence alone.

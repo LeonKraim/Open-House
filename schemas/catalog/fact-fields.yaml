@@ -1,0 +1,91 @@
+# The fact allowlist: what a committed raw record is allowed to hold.
+#
+# `schemas/catalog/raw-behaviors.json` is generated from this file, so the two
+# cannot drift in field *names*. Generation is a single-source-of-truth device
+# rather than a barrier -- editing this file and regenerating moves both together
+# by design -- so the field-name guarantee is carried by the bidirectional
+# equality check beside it, which fails when a schema property is absent from the
+# allowlist *and* when an allowlist entry is absent from the schema.
+#
+# It is a file rather than a prose enumeration for a reason worth recording. An
+# earlier draft said "the fact fields enumerated above and nothing else" and then
+# "an allowlist is checked against the schema's own field set". Both cannot be the
+# definition: the first is exactly the hand-kept list, and under the second the
+# check is circular -- the checked set and the checking set are one object, so a
+# field added to the schema is added to the allowlist in the same instant and the
+# guard can never fire.
+#
+# Each field declares exactly one of:
+#   enum:       a closed inline list of permitted values
+#   integer:    a whole number, optionally bounded
+#   boolean:    true or false
+#   list_of:    a list whose elements are all of one of the above, or a shape
+#   shape:      one or more names from `fact-shapes.yaml`
+#   vocabulary: the terms of one axis of the current `behavior-vocabulary`
+#   enum_ref:   a closed set that lives in another committed file
+#
+# A free-form string is not an option here, and there is no `string` key to
+# write. A field that cannot be expressed in the forms above does not belong in
+# the committed record.
+$id: https://open-house.invalid/schemas/catalog/fact-fields.yaml
+title: Fact fields
+schema_version: "1.0.0"
+supersedes: null
+
+fields:
+  path:
+    shape: selected_path
+    note: >-
+      Where the record came from. Admitted by membership in the committed
+      selected-path set rather than by a pattern, because a pattern that
+      excluded authored text would also exclude real filenames.
+
+  id:
+    shape: [dotted_id, slug]
+    note: >-
+      Two shapes rather than one because an artifact's id is either taken from
+      Home Assistant's own dotted object id or normalised into a slug. Both are
+      closed character classes, so naming two cannot smuggle in a third.
+
+  class:
+    enum: [package, automation, script, scene, helper, template, blueprint, dashboard, custom_integration, other]
+    note: >-
+      The artifact class the file received from its deciding rule. Committed as
+      a fact: it is our classification, not anyone's authored text.
+
+  triggers:
+    list_of: {vocabulary: triggers}
+    note: The trigger terms this artifact uses, drawn from the behaviour vocabulary.
+
+  conditions:
+    list_of: {vocabulary: conditions}
+    note: The condition terms this artifact uses.
+
+  actions:
+    list_of: {vocabulary: actions}
+    note: The action terms this artifact uses.
+
+  slots:
+    list_of: {enum_ref: catalog/slots.yaml#name}
+    note: >-
+      The slots this artifact binds. The closed set is the slot vocabulary
+      itself, which is why the reference is to `catalog/slots.yaml` rather than
+      to the raw entity ids: the slot a hardcoded reference maps to is the
+      product's own vocabulary, derived in §5.
+
+  unclaimed:
+    enum: [non_behavior_file, duplicate_of, vendor_config, malformed]
+    nullable: true
+    note: >-
+      The unclaimed register, carried as a field on each record rather than as a
+      file of its own: the marker exists only in relation to a raw record, and a
+      second file would be a second copy of the raw id set that could drift from
+      the first. Null means a shipped row claims this record.
+
+  entity_refs:
+    list_of: {shape: entity_ref}
+    note: >-
+      The `domain.object_id` strings this artifact references. The only place a
+      raw Home Assistant identifier appears in the committed store, and it is
+      admitted deliberately: an identifier is a fact about a naming scheme, and
+      `spec.txt`'s hardcoding audit cannot be complete without one.

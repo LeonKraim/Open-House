@@ -1,0 +1,99 @@
+{
+  "$id": "https://open-house.invalid/schemas/catalog/file_rules.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "File selection rules",
+  "description": "The single ordered rule list that partitions every reference repo into selected and excluded files. A selected file's artifact class is the class of its deciding rule and is never inferred from the file's content, because inference would need the file and the file lives only in a clone -- so the class is a property of the rule, and the rule is committed.",
+  "schema_version": "1.0.0",
+  "type": "object",
+  "required": ["rules", "authored_paths"],
+  "additionalProperties": false,
+  "properties": {
+    "rules": {
+      "type": "array",
+      "description": "Applied in ascending `order`, first match wins. An ordered list rather than a map because precedence is the whole semantics.",
+      "items": {"$ref": "#/$defs/rule"}
+    },
+    "authored_paths": {
+      "type": "array",
+      "description": "Entries in `rules` that must receive a named class, listed again here so the requirement that at least one `custom_integration` and at least one `blueprint` be covered is checkable without re-deriving which rules those are. Each is a rule in the same list, carrying a low `order` so it wins.",
+      "items": {
+        "type": "object",
+        "required": ["path", "class"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "class": {"$ref": "#/$defs/artifactClass"}
+        }
+      }
+    },
+    "altered_core_copies": {
+      "type": "array",
+      "description": "Copies of Home Assistant's own core files that a repo has modified. Excluded by a named rule with its own reason, and never attributed to the repo's author: the author changed them, but did not write them.",
+      "items": {
+        "type": "object",
+        "required": ["path", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "artifactClass": {
+      "enum": [
+        "package",
+        "automation",
+        "script",
+        "scene",
+        "helper",
+        "template",
+        "blueprint",
+        "dashboard",
+        "custom_integration",
+        "other"
+      ]
+    },
+    "rule": {
+      "type": "object",
+      "required": ["order", "pattern", "kind", "class", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "order": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unique across the list. Uniqueness is a cross-record rule and is enforced by the validator, not here: JSON Schema cannot express it portably."
+        },
+        "pattern": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Glob, matched against the repo-relative path."
+        },
+        "kind": {"enum": ["select", "exclude"]},
+        "class": {
+          "oneOf": [
+            {"$ref": "#/$defs/artifactClass"},
+            {"type": "null"}
+          ],
+          "description": "Required on a select rule and null on an exclude rule -- an exclude rule confers no class, and a select rule that conferred none would leave a selected file unclassified."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Every rule says why it exists. An exclude rule with no reason is how configuration gets silently swallowed."
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "select"}}},
+          "then": {"properties": {"class": {"not": {"type": "null"}}}}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "exclude"}}},
+          "then": {"properties": {"class": {"type": "null"}}}
+        }
+      ]
+    }
+  }
+}

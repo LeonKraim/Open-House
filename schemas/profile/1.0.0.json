@@ -1,0 +1,25 @@
+{
+  "$id": "https://open-house.invalid/schemas/profile/1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Profile",
+  "schema_version": "1.0.0",
+  "supersedes": null,
+  "description": "A named bundle of mode defaults and behaviour enablement -- the 'premade and preintegrated' idea applied to a whole house rather than one button.",
+  "type": "object",
+  "required": ["name", "description", "modes", "enabled_behaviours"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+    "description": {"type": "string", "minLength": 1},
+    "modes": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "description": "Mode names this profile activates."
+    },
+    "enabled_behaviours": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "description": "Behaviour ids this profile enables."
+    }
+  }
+}

@@ -1,0 +1,53 @@
+# The closed set of fact-shapes.
+#
+# A fact field in `schemas/catalog/raw-behaviors.json` may not carry a pattern of
+# its own. A pattern alone constrains nothing, because any pattern satisfies
+# "has a pattern" -- `^.*$` is a pattern -- so stating the rule that way would
+# relocate the guarantee into the regex and into whoever wrote it. This file is
+# where the shapes live instead, and it is a committed artifact, so admitting a
+# new shape is an edit somebody reviews rather than a free choice at the point of
+# use.
+#
+# Every shape below either pins a tight character class or admits a value by
+# membership. That is the whole point: expression is authored text, and none of
+# these four shapes can hold any.
+$id: https://open-house.invalid/schemas/catalog/fact-shapes.yaml
+title: Fact shapes
+schema_version: "1.0.0"
+supersedes: null
+
+shapes:
+  entity_ref:
+    kind: pattern
+    pattern: '^[a-z_]+\.[a-z0-9_]+$'
+    note: >-
+      A `domain.object_id` pair as Home Assistant spells it. Committed for all
+      four repos, including the two that grant nothing: an identifier is a fact
+      about someone's naming scheme, and the hardcoding audit `spec.txt` requires
+      cannot be complete without one.
+
+  dotted_id:
+    kind: pattern
+    pattern: '^[a-z0-9_]+(?:\.[a-z0-9_]+)+$'
+    note: >-
+      At least one dot, so it cannot be confused with a slug. Used for ids taken
+      from Home Assistant's own object ids, where the dot is the namespace.
+
+  slug:
+    kind: pattern
+    pattern: '^[a-z0-9_]+$'
+    note: >-
+      A normalised identifier with no dot. Lowercase, digits and underscore only:
+      no spaces, no uppercase, no punctuation, and therefore nothing that can
+      carry a sentence.
+
+  selected_path:
+    kind: membership
+    source: catalog/inventory.json
+    note: >-
+      Membership, not a pattern, and this is the one shape where that choice is
+      load-bearing. A pattern tight enough to exclude authored text would also
+      reject real tracked paths: fwartner's filenames are German, and real paths
+      carry spaces and non-ASCII characters. Membership admits every real
+      selected path without admitting prose, because the set it admits against is
+      the committed inventory of paths we chose.

@@ -1,0 +1,114 @@
+{
+  "$id": "https://open-house.invalid/schemas/catalog/behaviors.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Merged behaviour catalog",
+  "description": "The deliverable of Phase 0's reference research: one row per behaviour, merged across the repos that had it. A row separates what the behaviour **is** -- committed in our own words -- from how a particular repo **spelled** it, which is expression and is withheld unless every source grants reuse. `license`, `reuse_status` and `obligations` are derived from the code halves of `licenses.yaml` and are present so that a hand-written value can be contradicted by the derivation table rather than merely ignored.",
+  "schema_version": "1.0.0",
+  "type": "object",
+  "required": ["behaviors"],
+  "additionalProperties": false,
+  "properties": {
+    "behaviors": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/behaviour"}
+    },
+    "change_notice": {
+      "type": ["string", "null"],
+      "description": "Populated when any row is adapted from a source under a licence requiring `state_changes`, and it names what changed and whom to credit. Null when no such source contributed: the notice is an obligation attached to specific sources, not a blanket disclaimer."
+    }
+  },
+  "$defs": {
+    "licenceValue": {
+      "enum": ["public_domain", "mit", "apache_2_0", "cc_by_nc_sa", "no_licence"]
+    },
+    "behaviour": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "description",
+        "category",
+        "scope",
+        "source_repos",
+        "required_slots",
+        "optional_slots",
+        "concept",
+        "raw_ids",
+        "license",
+        "reuse_status",
+        "obligations",
+        "classification",
+        "retention",
+        "change_notice"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+(?:\\.[a-z0-9_]+)*$",
+          "description": "Unique across the file. Duplicate ids fail validation naming the id; uniqueness is a cross-record rule and so is the validator's."
+        },
+        "name": {"type": "string", "minLength": 1},
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "In our own words, never a source's. An empty description fails naming the row."
+        },
+        "category": {"type": "string", "minLength": 1},
+        "scope": {"enum": ["room", "house"]},
+        "source_repos": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1},
+          "description": "Every repo the behaviour was found in. A single-source row classified `generic` must also appear in `overlap_exceptions.yaml`, because one repo's opinion is not corroboration."
+        },
+        "required_slots": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+          "description": "Every entry must be available to the row's scope -- a slot some room type provides for `room`, or one the `house` scope provides for `house`. Checked by the validator, which can read `room_types.yaml` and this file together."
+        },
+        "optional_slots": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+        },
+        "concept": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What the behaviour means, always populated and always in our own words. This is the half of the row that is ours even when every source withholds reuse."
+        },
+        "expression": {
+          "type": ["object", "null"],
+          "description": "How a source spelled it. Must be empty unless every source repo's **code** reuse status is `reusable`; populated while any source is non-granting fails validation. Deliberately permitted to be null rather than omitted: the field's presence with a null value is the record that the question was asked.",
+          "additionalProperties": true
+        },
+        "raw_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1},
+          "description": "The raw records this row was derived from. Every shipped row cites at least one, and an empty list fails naming the row: a row with no provenance cannot be audited against the licence whose statuses it carries."
+        },
+        "license": {
+          "$ref": "#/$defs/licenceValue",
+          "description": "The most restrictive source **code** licence under the published order. A licence value, never a status."
+        },
+        "reuse_status": {"enum": ["reusable", "ideas_only"]},
+        "obligations": {
+          "type": "array",
+          "items": {
+            "enum": ["attribution", "state_changes", "share_alike", "non_commercial"]
+          },
+          "description": "The union of the source code licences' obligations. A union rather than the strictest single source's list, because an obligation is a thing we must do and dropping one because another source did not impose it would be self-serving."
+        },
+        "classification": {"enum": ["generic", "module_candidate", "discard"]},
+        "retention": {
+          "type": ["string", "null"],
+          "description": "`audit` on a `discard` row and null otherwise. A discarded personal behaviour is retained for audit rather than deleted: it is the record that we saw it and why it did not ship."
+        },
+        "change_notice": {
+          "type": ["string", "null"],
+          "description": "Non-null, naming what changed and whom to credit, when a source imposes `state_changes`; null otherwise."
+        }
+      }
+    }
+  }
+}

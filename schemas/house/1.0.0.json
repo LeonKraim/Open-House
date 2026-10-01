@@ -1,0 +1,65 @@
+{
+  "$id": "https://open-house.invalid/schemas/house/1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "House",
+  "schema_version": "1.0.0",
+  "supersedes": null,
+  "description": "A configured house: rooms, each of a type, with its slots bound or left empty. The whole point of the product is that this is the only thing a user writes, and even this is largely generated from what they plug in.",
+  "type": "object",
+  "required": ["name", "rooms", "house_scope"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {"type": "string", "minLength": 1},
+    "rooms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/room"}
+    },
+    "house_scope": {
+      "type": "object",
+      "description": "Slots that belong to the house rather than a room, so a house-scoped behaviour is not forced through a room type it has nothing to do with.",
+      "required": ["slots"],
+      "additionalProperties": false,
+      "properties": {
+        "slots": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+          "description": "Slot names made available at house scope."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "room": {
+      "type": "object",
+      "required": ["id", "name", "type", "bindings"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "name": {"type": "string", "minLength": 1},
+        "type": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "The name of a room type. Resolved against room_types.yaml."
+        },
+        "bindings": {
+          "type": "object",
+          "description": "Slot name to binding. A slot the type provides may be absent, which is how an optional slot is left unbound.",
+          "additionalProperties": {"$ref": "#/$defs/binding"}
+        }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "required": ["entity_id"],
+      "additionalProperties": false,
+      "properties": {
+        "entity_id": {"type": "string", "pattern": "^[a-z_]+\\.[a-z0-9_]+$"},
+        "registry_id": {
+          "type": "string",
+          "description": "The device registry id, when the binding is a device rather than a bare entity."
+        }
+      }
+    }
+  }
+}

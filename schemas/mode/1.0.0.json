@@ -1,0 +1,20 @@
+{
+  "$id": "https://open-house.invalid/schemas/mode/1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Mode",
+  "schema_version": "1.0.0",
+  "supersedes": null,
+  "description": "A house-wide state a behaviour can be gated on -- home, away, sleep, holiday. Modes are what make a 'bed button' expressible as something more than a pile of service calls.",
+  "type": "object",
+  "required": ["name", "description"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+    "description": {"type": "string", "minLength": 1},
+    "exclusive_group": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "Modes sharing a group are mutually exclusive, which is how 'only one of these at a time' is expressed without a rule that enumerates pairs."
+    }
+  }
+}
