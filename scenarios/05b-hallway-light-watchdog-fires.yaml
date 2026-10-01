@@ -1,0 +1,36 @@
+# seed: 5b of catalog/edge_cases.yaml -- a light is left on past the watchdog
+# window and the scenario asserts it is switched off; a reload inside the window
+# asserts it is left alone. (This file is the first half: the window passing with
+# the light still on; `05-hallway-light-watchdog.yaml` is the second.)
+#
+# The assertion is `because` and not merely `must`: the light being off is a fact
+# a state assertion can read, but *the timeout turned it off* is the claim the
+# seed is about, and the two are indistinguishable in the device's state. The
+# citation requires both the rule and its outcome, so a record that reached the
+# rule and declined cannot satisfy it.
+name: hallway light watchdog -- past the window
+given:
+  house: minimal
+  seed: 11
+  started_at: "2026-01-01T23:00:00+00:00"
+  enable_flags:
+    behaviour.motion_lighting.enabled: true
+when:
+  - set_state:
+      entity_id: binary_sensor.living_room_motion
+      state: "on"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: binary_sensor.living_room_motion
+      state: "off"
+  - advance_time:
+      minutes: 6
+then:
+  - state:
+      entity_id: light.living_room
+      is: "off"
+  - log:
+      because:
+        rule: lighting.motion_light_off
+        outcome: acted

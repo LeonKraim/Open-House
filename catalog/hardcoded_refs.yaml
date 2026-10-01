@@ -683,6 +683,12 @@ refs:
   naming_convention: german_compounded
   slot: null
   constant: device_tracker
+- entity_ref: fan.ventilator_wohnzimmer
+  repo: fwartner
+  scope: room
+  naming_convention: german_compounded
+  slot: fan
+  constant: null
 - entity_ref: input_select.presence_mode
   repo: fwartner
   scope: room
@@ -2153,6 +2159,72 @@ refs:
   naming_convention: domain_room_function
   slot: null
   constant: device_tracker
+- entity_ref: fan.air_purifiers
+  repo: johnkoht
+  scope: room
+  naming_convention: domain_room_function
+  slot: fan
+  constant: null
+- entity_ref: fan.gianlucas_bedroom_air_purifier
+  repo: johnkoht
+  scope: room
+  naming_convention: domain_room_function
+  slot: fan
+  constant: null
+- entity_ref: fan.jr_suite_air_purifier
+  repo: johnkoht
+  scope: room
+  naming_convention: domain_room_function
+  slot: fan
+  constant: null
+- entity_ref: fan.kitchen_air_purifier
+  repo: johnkoht
+  scope: room
+  naming_convention: domain_room_function
+  slot: fan
+  constant: null
+- entity_ref: fan.main_bedroom_air_purifier
+  repo: johnkoht
+  scope: room
+  naming_convention: domain_room_function
+  slot: fan
+  constant: null
+- entity_ref: fan.mudroom_bathroom_fan
+  repo: johnkoht
+  scope: room
+  naming_convention: domain_room_function
+  slot: fan
+  constant: null
+- entity_ref: fan.ninos_bedroom_air_purifier
+  repo: johnkoht
+  scope: room
+  naming_convention: domain_room_function
+  slot: fan
+  constant: null
+- entity_ref: fan.office_air_purifier
+  repo: johnkoht
+  scope: room
+  naming_convention: domain_room_function
+  slot: fan
+  constant: null
+- entity_ref: fan.powder_room_fan
+  repo: johnkoht
+  scope: room
+  naming_convention: domain_room_function
+  slot: fan
+  constant: null
+- entity_ref: fan.studio
+  repo: johnkoht
+  scope: room
+  naming_convention: domain_room_function
+  slot: fan
+  constant: null
+- entity_ref: fan.winix_basement
+  repo: johnkoht
+  scope: room
+  naming_convention: domain_room_function
+  slot: fan
+  constant: null
 - entity_ref: input_select.air_quality_state
   repo: johnkoht
   scope: room

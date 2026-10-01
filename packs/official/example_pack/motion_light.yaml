@@ -1,0 +1,34 @@
+# What `packs/official/example-pack.yaml` confers, and the file its `provides`
+# entry pins. The entry declares the class `automation`; this file is the
+# automation.
+#
+# It names **slots, not entities**. Every `entity_id` below is a slot name --
+# `motion_sensor`, `light_group` -- and not a `domain.object_id`: the pack is
+# portable because it says which placeholder it acts through, and the engine
+# binds that placeholder to whatever entity the room it is installed in supplies.
+# A file that named `light.kitchen_ceiling` would only work in the house it was
+# written in, which is the one thing a pack may not be.
+#
+# The engine's interpreter does not read this file: a pack's behaviour is what the
+# engine evaluates, and the manifest above is where a behaviour is declared.
+# What this file is for is the other direction of the same idea -- it is the
+# artifact a person can read to see what the pack hands over.
+alias: Motion turns the light group on
+description: >-
+  Turns the room's light group on when its motion sensor reports motion, unless
+  the room already has light.
+trigger:
+  - platform: state
+    entity_id: motion_sensor
+    to: "on"
+condition:
+  - condition: state
+    entity_id: lux_sensor
+    state: "below_light_threshold"
+action:
+  - service: light.turn_on
+    target:
+      entity_id: light_group
+    data:
+      brightness_pct: 100
+mode: single

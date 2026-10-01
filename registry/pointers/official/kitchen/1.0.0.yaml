@@ -1,0 +1,7 @@
+name: kitchen
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/official/kitchen.yaml
+sha256: sha256:93fdbda3451d88dcb7773b5be47d19ef359e40b5a67d7809329b33ec9f3f7fcb
+tier: official

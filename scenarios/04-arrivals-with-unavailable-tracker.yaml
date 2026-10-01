@@ -1,0 +1,43 @@
+# seed: 4 of catalog/edge_cases.yaml -- several household members reach the house
+# within a minute of one another, and the speaker starts a separate greeting for
+# each, so the messages talk over one another and one arrival is welcomed twice.
+#
+# The guard this seed records groups the arriving people, waits for the entry
+# contact, and drops a tracker that returns from a dropout. Phase 1 has no
+# presence vocabulary and no announcer, so this scenario states the *provocation*
+# exactly -- three trackers arriving inside a minute while one is unavailable --
+# and asserts the claim that survives without the behaviour: the unavailable
+# tracker is distinguishable from an arriving one, and nothing acted.
+name: three arrivals while one tracker is unavailable
+given:
+  house: minimal
+  seed: 9
+  started_at: "2026-01-01T18:00:00+00:00"
+when:
+  - add_entity:
+      entity_id: person.alex
+      state: "not_home"
+  - add_entity:
+      entity_id: person.sam
+      state: "home"
+  - add_entity:
+      entity_id: person.jo
+      state: "not_home"
+  - set_availability:
+      entity_id: person.sam
+      available: false
+  - set_state:
+      entity_id: person.alex
+      state: "home"
+  - set_state:
+      entity_id: person.jo
+      state: "home"
+  - advance_time:
+      minutes: 1
+then:
+  - availability:
+      entity_id: person.sam
+      is: false
+  - log:
+      must_not:
+        - outcome: acted

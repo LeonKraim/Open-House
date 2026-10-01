@@ -1,0 +1,53 @@
+# seed: 23 of catalog/edge_cases.yaml -- automations fire while the system is
+# being worked on by hand and undo the work being done.
+#
+# The guard this seed records is a single house-wide maintenance boolean that
+# every affected automation requires to be off, so service work suspends them
+# without disabling the automations one at a time. Phase 1 has no maintenance
+# boolean, but it does have the stronger half of that arrangement already: every
+# behaviour is off unless the household switches it on, so a house being worked on
+# with nothing enabled has nothing that can undo the work. The scenario sets the
+# flag, makes the manual change, and then opens the window in which a lighting
+# behaviour would have acted, asserting the work stands and nothing claimed
+# credit. The negative assertion is the tripwire: whichever phase adds a
+# maintenance flag must have the behaviours consult it, because this scenario
+# enables the module and would otherwise go red.
+name: service work with the maintenance flag set
+given:
+  house: minimal
+  seed: 79
+  started_at: "2026-01-01T11:00:00+00:00"
+when:
+  - add_entity:
+      entity_id: input_boolean.maintenance_mode
+      state: "off"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: input_boolean.maintenance_mode
+      state: "on"
+  - user_action:
+      entity_id: light.living_room
+      state: "on"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: binary_sensor.living_room_motion
+      state: "on"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: binary_sensor.living_room_motion
+      state: "off"
+  - advance_time:
+      minutes: 30
+then:
+  - state:
+      entity_id: input_boolean.maintenance_mode
+      is: "on"
+  - state:
+      entity_id: light.living_room
+      is: "on"
+  - log:
+      must_not:
+        - outcome: acted

@@ -1,0 +1,14 @@
+# The revocation list.
+#
+# This is the source of truth; `revoked.json` is generated from it by
+# `python -m tools.registry.cli generate`, the same run that writes `index.json`.
+# A revocation is not a deletion: the pointer file stays, the index entry stays,
+# and the store refuses to install a revoked pack and says why.
+#
+# An entry names a pack and, optionally, the version and the digest it revokes.
+# A bare `name` revokes every version of that pack, which is the right entry for
+# a pack whose author withdrew it; naming a `version` revokes one release, which
+# is the right entry for a release that shipped a defect. `reason` is required
+# and is shown to the household, because "revoked" without a why is an
+# instruction nobody can weigh.
+revocations: []

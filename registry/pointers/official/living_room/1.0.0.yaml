@@ -1,0 +1,7 @@
+name: living_room
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/official/living_room.yaml
+sha256: sha256:f30ee3fd921c00fd6ce2b05aade5994c053a89402f7422dc17ca47ee2b524248
+tier: official

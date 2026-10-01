@@ -1,0 +1,53 @@
+# seed: 21 of catalog/edge_cases.yaml -- a network access point that drops off
+# the network stays down until somebody notices, and restarting it by hand is the
+# only recovery anyone has.
+#
+# The guard this seed records power-cycles the access point's switch port once it
+# has been disconnected for a couple of minutes, but only when the upstream
+# gateway is itself up, re-checking that the access point is still down before it
+# acts. Phase 1 has no network recovery, so the scenario states both halves of the
+# guard's condition in order -- a disconnect while the gateway is up, and a
+# disconnect while the gateway is down -- and asserts the state the house is left
+# in at the end. The negative assertion is the tripwire: the phase that adds port
+# cycling must recover the first half and leave the second alone, and this
+# scenario goes red when it does not.
+name: an access point down with the gateway up and then down
+given:
+  house: minimal
+  seed: 71
+  started_at: "2026-01-01T23:30:00+00:00"
+when:
+  - add_entity:
+      entity_id: binary_sensor.gateway_online
+      state: "on"
+  - add_entity:
+      entity_id: binary_sensor.access_point_online
+      state: "on"
+  - add_entity:
+      entity_id: switch.access_point_port
+      state: "on"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: binary_sensor.access_point_online
+      state: "off"
+  - advance_time:
+      minutes: 3
+  - set_state:
+      entity_id: binary_sensor.gateway_online
+      state: "off"
+  - advance_time:
+      minutes: 3
+then:
+  - state:
+      entity_id: binary_sensor.access_point_online
+      is: "off"
+  - state:
+      entity_id: binary_sensor.gateway_online
+      is: "off"
+  - state:
+      entity_id: switch.access_point_port
+      is: "on"
+  - log:
+      must_not:
+        - outcome: acted

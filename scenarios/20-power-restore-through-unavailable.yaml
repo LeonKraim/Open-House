@@ -1,0 +1,62 @@
+# seed: 20 of catalog/edge_cases.yaml -- a restore event that follows an outage
+# through an unavailable state is swallowed, so the household is told the power
+# went out but never told it came back.
+#
+# The guard this seed records recognises the restore by comparing the outage
+# automation's own last run against the current time rather than the sensor's
+# previous state, so a restore that passes through unavailable is still announced.
+# Phase 1 has no announcer, so the scenario states the shape the guard has to cope
+# with: a power source that reports a state, goes unavailable mid-outage, comes
+# back with a restored reading. The claim Phase 1 can make is that the restored
+# reading is what the house sees afterwards -- the outage's unavailable window
+# does not leave the source stuck at its last out-of-date value, which is the
+# condition the guard exists to detect through.
+name: a power source returns through an unavailable window
+given:
+  house: minimal
+  seed: 67
+  started_at: "2026-01-01T05:30:00+00:00"
+when:
+  - add_entity:
+      entity_id: binary_sensor.mains_power
+      state: "on"
+  - add_entity:
+      entity_id: sensor.mains_voltage
+      state: "230"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: binary_sensor.mains_power
+      state: "off"
+  - set_state:
+      entity_id: sensor.mains_voltage
+      state: "0"
+  - set_availability:
+      entity_id: sensor.mains_voltage
+      available: false
+  - advance_time:
+      minutes: 5
+  - set_state:
+      entity_id: binary_sensor.mains_power
+      state: "on"
+  - set_availability:
+      entity_id: sensor.mains_voltage
+      available: true
+  - set_state:
+      entity_id: sensor.mains_voltage
+      state: "230"
+  - advance_time:
+      minutes: 1
+then:
+  - state:
+      entity_id: binary_sensor.mains_power
+      is: "on"
+  - state:
+      entity_id: sensor.mains_voltage
+      is: "230"
+  - availability:
+      entity_id: sensor.mains_voltage
+      is: true
+  - log:
+      must_not:
+        - outcome: acted

@@ -1,0 +1,7 @@
+name: garage
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/official/garage.yaml
+sha256: sha256:52d1a01f18a60fff2145260b08a5c9eb0f9f682d0b2b3a7c6e9e299914fd9c73
+tier: official

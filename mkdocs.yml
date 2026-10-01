@@ -1,0 +1,24 @@
+site_name: Open House
+docs_dir: docs
+
+nav:
+  - User guide: user-guide.md
+  - Attribution: attribution.md
+  - Reference:
+      - Arbitration: reference/arbitration.md
+      - Author contact: reference/author-contact.md
+      - Fan role and slot: reference/fan-role-and-slot.md
+      - Pack install: reference/pack-install.md
+      - Pack manifest: reference/pack-manifest.md
+      - Pack sandbox: reference/pack-sandbox.md
+      - Pack versions and licences: reference/pack-versions-and-licences.md
+      - Phase 0 verification: reference/phase-0-verification.md
+      - Phase 1 verification: reference/phase-1-verification.md
+      - Phase 2 verification: reference/phase-2-verification.md
+      - Reference: ccostan: reference/ccostan.md
+      - Reference: renemarc: reference/renemarc.md
+      - Reference: fwartner: reference/fwartner.md
+      - Reference: johnkoht: reference/johnkoht.md
+
+theme:
+  name: material

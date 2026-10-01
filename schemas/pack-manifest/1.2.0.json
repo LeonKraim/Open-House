@@ -1,0 +1,243 @@
+{
+  "$id": "https://open-house.invalid/schemas/pack-manifest/1.2.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pack manifest",
+  "schema_version": "1.2.0",
+  "supersedes": "1.1.0",
+  "description": "A pack's declaration of what it needs, what it provides and what it may do. 1.1.0 fixed what a pack may be (a closed-shape document with `kind`, `optional_slots` and `behaviours`), but left four questions for the parts of a pack no phase had yet needed: it could not say which engine it was written for, under what licence, in what language, or -- the one the sandbox turns on -- which services and which slots each of its behaviours may reach. This version answers all four and closes what 1.1.0 explicitly deferred: `kind` is an enum because the corpus the pattern was waiting for now exists, `min_engine_version` is retired for `engine_api` because a lower bound cannot express an upper one, and `$defs.behaviour` gains `priority`, `services` and `slots` so that a manifest states a behaviour's rank, its permissions and the slots it acts through rather than leaving them to be inferred. `profile` was deliberately NOT added to the provided-artifact class enum beside `mode`: the frozen `schemas/profile/1.0.0.json` is a whole-house bundle a house activates, and this version ships the state a behaviour is gated on rather than the bundle that activates it. A document is valid because it validates; everything this version requires is a clause here, and every vocabulary it references is referenced rather than restated.",
+  "type": "object",
+  "required": ["name", "version", "description", "kind", "engine_api", "license", "i18n", "provides"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "description": {"type": "string", "minLength": 1},
+    "kind": {
+      "type": "string",
+      "enum": ["module", "room-template", "behavior", "profile-set", "house-template"],
+      "description": "The kind of pack this is. 1.1.0 carried this as a pattern and said why in its own words -- \"A pattern and not an enum because no corpus of packs exists to derive a closed set of kinds from, and inventing one here would freeze...\" -- and 1.2.0 ships that corpus, so the closure is this version's to make."
+    },
+    "requires_slots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "description": "Slot names, resolved against slots.yaml. A pack that names a slot no slot file defines is a pack that cannot be installed anywhere. Required for the kinds that are plugged into a room and forbidden nowhere; the per-kind conditionals below say which kinds must carry it."
+    },
+    "optional_slots": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "description": "Slots the pack can use but does not require, so a house missing one still installs it. Separate from `requires_slots` rather than folded in, because the two say different things about the house the pack lands in and one list cannot carry both."
+    },
+    "provides": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/provided"},
+      "description": "Every entry carries the artifact class it confers, because the class-pinning rule is what stops a pack smuggling an unpinnable artifact past the licence gate by calling it a helper."
+    },
+    "behaviours": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/behaviour"},
+      "description": "The behaviours the pack declares, each named by a trigger, a condition and an action drawn from `behavior-vocabulary`'s published axes. The terms are referenced, not restated, so the pack cannot use a behaviour term the vocabulary does not carry. Required for the kinds that do something in a room; a template declares what a room has rather than what it does, so the per-kind conditionals below forbid it there."
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/reference"},
+      "description": "Installed packs this pack needs, each an installed pack's name and a semver range its version must satisfy. Resolved against the house's installed set and never against the repository, because what a pack may rely on is what the house actually holds."
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/reference"},
+      "description": "Packs this pack must not share a house with, each a name and a range it must not satisfy. Checked in both directions -- from the arriving pack to the installed set and from each installed pack to the arriving one -- because a conflict one pack states and the other does not is still a conflict."
+    },
+    "engine_api": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?:\\s*(?:[<>]=?|=|\\^|~)?\\s*(?:[0-9]+(?:\\.[0-9]+){0,2}|[0-9]+\\.[xX*](?:\\.[xX*])?|[xX*])\\s*(?:\\|\\|)?)+$",
+      "description": "The engine API range this pack is written for, as a semver range: comparators over dotted versions, joined by whitespace or `||`. It supersedes `min_engine_version`, which pinned a lower bound and could not express an upper one, so a pack broken by the next major version could not say so. Checked against the engine's own declared API version, which is published in an artifact of its own rather than read from `pyproject.toml` -- whose `version` is `0.0.0` and moves for packaging reasons, which would make every range a lie."
+    },
+    "license": {
+      "type": "string",
+      "enum": ["public_domain", "mit", "apache_2_0", "cc_by_nc_sa", "no_licence"],
+      "description": "The pack's licence, as one of the codes `schemas/catalog/licenses.json` publishes -- the same codes `catalog/behaviors.yaml`'s rows already speak, so a manifest that said `MIT` would be a third spelling of one fact. Each code carries its SPDX identifier in that artifact rather than in a second list here."
+    },
+    "i18n": {
+      "$ref": "#/$defs/i18n",
+      "description": "A default string for every user-visible name the pack declares, with locale overrides resolved over it. Required rather than optional, because a name with no default is a name some locale cannot render."
+    },
+    "derives_from": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z0-9_]+)+$"},
+      "description": "The corpus row ids this pack reproduces expression from, read against `catalog/behaviors.yaml`. Carried by a derived pack and forbidden on a hand-written one, because a file a person wrote reproduces no row's expression -- provenance that lives only in a report on the machine that ran the derivation stops travelling the moment the pack is copied, and an empty list is not a derivation."
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"kind": {"const": "module"}}, "required": ["kind"]},
+      "then": {
+        "description": "A module is the kind that does something in a room: it is plugged into the room's placeholders and it carries the behaviours that act through them.",
+        "required": ["requires_slots", "behaviours"],
+        "properties": {
+          "provides": {
+            "items": {"not": {"properties": {"class": {"const": "mode"}}, "required": ["class"]}},
+            "description": "A module provides automations, scripts and scenes; a mode is what a profile-set confers, so the class is refused here rather than left to a convention."
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "behavior"}}, "required": ["kind"]},
+      "then": {
+        "description": "A behaviour pack is one behaviour offered on its own, so it carries exactly one and the slots it acts through.",
+        "required": ["requires_slots", "behaviours"],
+        "properties": {
+          "behaviours": {"minItems": 1, "maxItems": 1},
+          "provides": {
+            "items": {"not": {"properties": {"class": {"const": "mode"}}, "required": ["class"]}}
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "room-template"}}, "required": ["kind"]},
+      "then": {
+        "description": "A room template declares what a room has -- its slots and the room type it reproduces -- and not what it does, so it carries no behaviours of its own.",
+        "not": {"required": ["behaviours"]},
+        "properties": {
+          "provides": {
+            "items": {"not": {"properties": {"class": {"const": "mode"}}, "required": ["class"]}}
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "house-template"}}, "required": ["kind"]},
+      "then": {
+        "description": "A house template declares the house a pack set lands in -- the slots the whole house offers, read from the room catalog's house entry -- and not what any room does, so it carries no behaviours of its own.",
+        "not": {"required": ["behaviours"]},
+        "properties": {
+          "provides": {
+            "items": {"not": {"properties": {"class": {"const": "mode"}}, "required": ["class"]}}
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "profile-set"}}, "required": ["kind"]},
+      "then": {
+        "description": "A profile-set confers a mode -- the state a behaviour is gated on, which is what `schemas/mode/1.0.0.json` fixes and what the engine already enforces exclusivity over. It must provide at least one, or it confers nothing.",
+        "properties": {
+          "provides": {
+            "contains": {
+              "properties": {"class": {"const": "mode"}},
+              "required": ["class"]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "provided": {
+      "type": "object",
+      "required": ["path", "class"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repo-relative path. A string fact, so its shape comes from `schemas/catalog/fact-shapes.yaml` shared by every filed fact. Resolved against the repository root and required to stay inside the pack's own directory -- resolving against the root is only sound if the answer is still inside the pack."
+        },
+        "class": {
+          "enum": [
+            "package",
+            "automation",
+            "script",
+            "scene",
+            "helper",
+            "template",
+            "blueprint",
+            "dashboard",
+            "custom_integration",
+            "other",
+            "mode"
+          ],
+          "description": "The artifact class this entry confers, drawn from the closed class set rather than from free text. `mode` is 1.2.0's one addition to 1.1.0's ten, and the ten are unchanged and in their published order: a class removed would invalidate every pack that pinned it. The file an entry pins must be of the class it declares -- a file of class `mode` validates against `schemas/mode/1.0.0.json` -- which is what stops a pack conferring an artifact of a class it did not name. `profile` is deliberately absent: what it would pin is the whole-house bundle `schemas/profile/1.0.0.json` fixes, and this phase ships the state a behaviour is gated on rather than the bundle that activates it."
+        }
+      }
+    },
+    "behaviour": {
+      "type": "object",
+      "required": ["action"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "trigger": {
+          "$ref": "https://open-house.invalid/schemas/behavior-vocabulary/1.1.0.json#/properties/triggers/items",
+          "description": "A trigger block kind, resolved against the published vocabulary rather than restated here."
+        },
+        "condition": {
+          "$ref": "https://open-house.invalid/schemas/behavior-vocabulary/1.1.0.json#/properties/conditions/items",
+          "description": "A condition block kind, resolved against the published vocabulary rather than restated here."
+        },
+        "action": {
+          "$ref": "https://open-house.invalid/schemas/behavior-vocabulary/1.1.0.json#/properties/actions/items",
+          "description": "The action block kind the behaviour ends in. Required, because a behaviour with no action does nothing and the action is the one axis every behaviour the extraction found carries."
+        },
+        "priority": {
+          "type": "integer",
+          "description": "What arbitration ranks this behaviour by when two behaviours propose for one entity in one tick. A clause of the behaviour rather than of the pack, because one pack's two behaviours may compete at different ranks. Omission takes the default `catalog/pack-policy.yaml` publishes, so a manifest may state what it means and is not required to restate what the default already says."
+        },
+        "services": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"},
+          "description": "The services this behaviour may call, as `domain.service`. The set is the behaviour's declaration of permissions and not a comment on them: the sandbox refuses a call the behaviour's own clause omits, and the pack's effective permission set is computed from these clauses rather than written a second time by hand, so the declaration cannot disagree with the behaviours it describes."
+        },
+        "slots": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+          "description": "The pack-declared slots this behaviour reaches entities through. A clause of the behaviour rather than of the pack, because a pack that declares two slots cannot otherwise say which one a behaviour reads: the sandbox admits a command only through a slot the command's own behaviour names, and a physical button's press is reached the same way rather than through whichever slot the engine happened to visit."
+        }
+      }
+    },
+    "reference": {
+      "type": "object",
+      "required": ["name", "range"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "range": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?:\\s*(?:[<>]=?|=|\\^|~)?\\s*(?:[0-9]+(?:\\.[0-9]+){0,2}|[0-9]+\\.[xX*](?:\\.[xX*])?|[xX*])\\s*(?:\\|\\|)?)+$",
+          "description": "The same semver range grammar `engine_api` takes, so a pack author has one range syntax and not two."
+        }
+      }
+    },
+    "i18n": {
+      "type": "object",
+      "required": ["default"],
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"type": "string", "minLength": 1},
+          "description": "One default string per user-visible name the pack declares: the pack's own name and description, and each declared behaviour's name. The schema requires the block and its non-emptiness; that the keys cover every declared name is checked against the manifest's own `behaviours`, because a static schema cannot name the keys a document will declare."
+        },
+        "locales": {
+          "type": "object",
+          "propertyNames": {"pattern": "^[a-z]{2}(-[A-Z]{2})?$"},
+          "additionalProperties": {"$ref": "#/$defs/i18nOverrides"},
+          "description": "Per-locale overrides, resolved over the default: a locale with no override reads the default, and an override for a string whose default is absent is refused, because an override is a replacement for something and a replacement with nothing behind it is a string that disappears in every other locale."
+        }
+      }
+    },
+    "i18nOverrides": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"type": "string", "minLength": 1}
+    }
+  }
+}

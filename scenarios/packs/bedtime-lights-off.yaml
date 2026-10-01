@@ -1,0 +1,44 @@
+# The shipped Bedtime pack -- `packs/official/bedtime.yaml`'s `lights_off`.
+#
+# The Bedtime button is the first of the three `module` packs task 7.1-7.3 adds,
+# and this is its scenario: a bedroom with its lighting bound, the pack installed,
+# and a tick in which the pack's `lights_off` behaviour proposes `light.turn_off`
+# for the room's light group. The `climate_zone` binding is optional to the pack
+# and unbound by no room here, which is what shows a required and an optional slot
+# installing together.
+#
+# Two enable flags are set and not one. A pack behaviour arrives disabled and its
+# whole family arrives with it -- `engine/engine.py`'s `_gate` reads the module
+# flag first and the behaviour's own second -- so a scenario that set only the
+# behaviour's flag would watch the run record `skipped: disabled` and learn
+# nothing about the pack.
+name: bedtime switches the room lighting off
+given:
+  house:
+    name: Bedtime House
+    rooms:
+      - id: bedroom
+        name: Bedroom
+        type: bedroom
+        bindings:
+          light_group:
+            entity_id: light.bedroom
+          climate_zone:
+            entity_id: climate.bedroom
+    house_scope:
+      slots: [house_mode]
+  seed: 11
+  started_at: "2026-01-01T23:00:00+00:00"
+  enable_flags:
+    module.bedtime.enabled: true
+    behaviour.bedtime.lights_off.enabled: true
+when:
+  - install_pack:
+      manifest: packs/official/bedtime.yaml
+  - advance_time:
+      minutes: 1
+then:
+  - log:
+      because:
+        rule: lights_off
+        outcome: acted

@@ -28,8 +28,12 @@ RESSOURCES = ROOT / "ressources"
 #: and this is the one file whose whole point is to hold what the corpus may not.
 LOCAL = ROOT / ".local"
 
-#: The eight runtime concepts, each of which gets version directories under
-#: `schemas/<concept>/`.
+#: The runtime concepts, each of which gets version directories under
+#: `schemas/<concept>/`. The first eight are Phase 0's; `engine-api` is Phase 2's
+#: addition, and it is here rather than elsewhere because the concept's versions
+#: *are* the engine's published API versions and the immutability rule that
+#: governs every published version is what stops that promise being edited after
+#: packs have been written against it.
 RUNTIME_CONCEPTS: tuple[str, ...] = (
     "room-type",
     "slot",
@@ -39,6 +43,7 @@ RUNTIME_CONCEPTS: tuple[str, ...] = (
     "mode",
     "profile",
     "export-document",
+    "engine-api",
 )
 
 #: The artifact classes a selected file can receive, in the order the

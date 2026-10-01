@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Open House panel (development harness)</title>
+    <style>
+      /* A stand-in for Home Assistant's theme variables, so `npm run dev`
+         renders the panel with the colours it will actually inherit. */
+      :root {
+        --primary-color: #03a9f4;
+        --primary-text-color: #212121;
+        --secondary-text-color: #727272;
+        --primary-background-color: #fafafa;
+        --card-background-color: #ffffff;
+        --secondary-background-color: rgba(0, 0, 0, 0.04);
+        --divider-color: rgba(0, 0, 0, 0.12);
+        --error-color: #db4437;
+        --warning-color: #ff9800;
+        --success-color: #0f9d58;
+        --ha-card-border-radius: 12px;
+      }
+      body {
+        margin: 0;
+        background: var(--primary-background-color);
+        font-family: Roboto, "Segoe UI", sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      The development harness. It is not shipped: Vite's lib build ignores
+      `index.html` and emits only `dist/open-house-panel.js`. It exists so the
+      panel can be looked at, and its mock backend stood in for the integration
+      before the integration existed.
+    -->
+    <open-house-panel></open-house-panel>
+    <script type="module" src="/src/dev/dev-entry.ts"></script>
+  </body>
+</html>

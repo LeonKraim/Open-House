@@ -1,0 +1,25 @@
+{
+  "name": "open-house-panel",
+  "private": true,
+  "version": "0.0.0",
+  "description": "The Open House sidebar panel: a Lit web-component bundle loaded through Home Assistant's panel_custom.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "gen:types": "node scripts/generate-types.mjs",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "test": "node --test src/api/client.test.ts src/components/schema-form.test.ts",
+    "dev": "node scripts/generate-types.mjs && vite"
+  },
+  "dependencies": {
+    "lit": "^3.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  }
+}

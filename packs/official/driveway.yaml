@@ -1,0 +1,48 @@
+# The driveway room template -- task 7.5.
+#
+# A `room-template` is the kind a person picks when they say "this is a
+# driveway", and **the pack's name is the room type**: `catalog/room_types.yaml`
+# calls this type `driveway`, so this pack is called `driveway`, and
+# `tools/catalog/templates.py` is the check that joins the two by that name. The
+# schema's own description of the kind -- it "declares what a room has ... and the
+# room type it reproduces" -- needs the type to be stated somewhere, and a name
+# is the one place a manifest already has.
+#
+# `requires_slots` is the whole of the rest of the declaration, and it is the room
+# catalog's list rather than a second copy of it: the `driveway` entry carries
+# exactly these slots, and the check fails when the two drift. So the template
+# cannot offer a slot its type does not -- the rule the schema states and cannot
+# itself enforce, because the catalog is not a schema -- and it cannot be renamed
+# away from its type without a finding naming both.
+#
+# Every slot is declared required rather than split across `optional_slots`: the
+# type's `provides_slots` is what a room of this kind *offers*, and the template
+# reproduces the type. A house that has bound only some of them is a house that
+# has not finished the room, which is the empty-placeholder case the phase exists
+# for.
+#
+# The kind carries no `behaviours`, and the schema's conditional for it refuses
+# one: what a room *has* is the template's business and what it *does* is a
+# module's.
+#
+# `provides` pins a file of class `other`, the honest member of the closed class
+# set. `room-type` and `house` are not classes the manifest schema names; of the
+# ten it does, `template` is read off a file by the keys Home Assistant gives a
+# template block, and this file is not one. The class-pinning rule requires *an*
+# artefact, so the artefact is the one a person can read.
+name: driveway
+version: "1.0.0"
+description: >-
+  The driveway room template: the slots a driveway offers, and nothing about what
+  acts through them.
+kind: room-template
+engine_api: ">=1.0.0 <2.0.0"
+license: mit
+requires_slots: [motion_sensor]
+provides:
+  - path: packs/official/driveway/room.yaml
+    class: other
+i18n:
+  default:
+    pack: Driveway room
+    description: The slots a driveway offers.

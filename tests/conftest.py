@@ -164,7 +164,7 @@ def seed_concepts(root: Path, concepts: tuple[str, ...] | list[str]) -> None:
     """Give every named concept a single, current 1.0.0 version file.
 
     Tests that are about one concept's succession start from a tree where the
-    other seven are already satisfied, so that a failure cannot be a missing
+    other eight are already satisfied, so that a failure cannot be a missing
     schema somewhere else being reported under the same check.
     """
     for concept in concepts:

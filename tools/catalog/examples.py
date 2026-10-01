@@ -69,6 +69,24 @@ VALIDATED: tuple[tuple[str, str], ...] = (
     ("example-pack.yaml", "pack-manifest"),
 )
 
+#: The concept every other pack file is validated against.
+#:
+#: This exists because the tuple above is a hand-written list, and a hand-written
+#: list of what to validate is a list a file can be absent from. Tasks 7.4 and
+#: 7.5's eight new manifests arrived that way: they were named in `HANDWRITTEN`,
+#: they passed the allowlist, `oh-catalog validate` was green -- and not one of
+#: them had been validated against anything, because this check never looked at a
+#: file it was not told about. The closure over the directory is what makes "each
+#: shipped pack passes validation" a statement about the packs rather than about
+#: the list.
+#:
+#: `pack-manifest` is the default and not an assumption about names: a file in
+#: this directory that is not a house document or an export is a pack, which is
+#: the only other thing the directory is for, and the two exceptions are named
+#: above rather than inferred because their concepts do not follow from their
+#: suffixes.
+DEFAULT_CONCEPT = "pack-manifest"
+
 #: Every runtime schema is published under this prefix, which is what makes a
 #: cross-file `$ref` (`../slot/1.0.0.json`) resolve to a file in this repository
 #: rather than to the network. The same prefix `validate.py` publishes under,
@@ -162,18 +180,38 @@ def _check_allowlist(report: Report) -> None:
 
 
 def _check_documents(report: Report) -> None:
-    """Each example is a document of its concept's current runtime schema."""
+    """Every pack file is a document of its concept's current runtime schema.
+
+    The named examples first, which is where a *missing* shipped artifact is
+    reported, and then every other file in the directory as a pack -- the closure
+    `DEFAULT_CONCEPT` explains. The two loops are separate because the first has
+    a claim the second cannot make: a name in `VALIDATED` with no file behind it
+    is a shipped artifact that has gone, and there is no list of the second kind
+    to be absent from.
+    """
     directory = _packs_directory()
-    for filename, concept in VALIDATED:
-        path = directory / filename
-        where = f"packs/official/{filename}"
-        if not path.is_file():
+    named = {filename for filename, _ in VALIDATED}
+    documents: list[tuple[Path, str]] = [
+        (directory / filename, concept) for filename, concept in VALIDATED
+    ]
+
+    for filename, _ in VALIDATED:
+        if not (directory / filename).is_file():
             report.add(
                 CHECK,
-                where,
+                f"packs/official/{filename}",
                 "is missing; the example is a shipped artifact and its absence "
                 "is what the CI exit criterion fails on",
             )
+
+    for path in _pack_files():
+        if path.name not in named:
+            documents.append((path, DEFAULT_CONCEPT))
+
+    for path, concept in documents:
+        where = f"packs/official/{path.name}"
+        if not path.is_file():
+            # Reported by the loop above, and reported once.
             continue
         try:
             document = _current_schema(concept)

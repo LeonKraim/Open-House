@@ -1,0 +1,20 @@
+# What `packs/official/bedtime.yaml` confers, and the file its `provides` entry
+# pins. The entry declares the class `automation`; this file is that artefact.
+#
+# It is documentation rather than input: the engine binds the manifest's clauses,
+# and the interpreter never reads this file -- the same division the room
+# templates' pinned files are written to, and the class is read off the file
+# (`trigger` or `action` among its keys) so the entry's declaration is checked
+# rather than trusted.
+#
+# The trigger names a slot, not an entity: a person binds their own button to the
+# pack's behaviour, and no `domain.object_id` appears here.
+alias: Bedtime button
+trigger:
+  - platform: state
+    entity_id: light_group
+    to: "off"
+action:
+  - service: light.turn_off
+    target:
+      entity_id: light_group

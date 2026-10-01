@@ -1,0 +1,95 @@
+{
+  "entries": [
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "bathroom",
+      "path": "packs/official/bathroom.yaml",
+      "pointer": "pointers/official/bathroom/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:31277e9e5bedd9e8606857926c5551937d13b3a2b5dc2425a2ceeff1e829a915",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "bedroom",
+      "path": "packs/official/bedroom.yaml",
+      "pointer": "pointers/official/bedroom/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:dfef918295c84a55f5943d3ce399ab7a7f1c074329b27abaca8a22f8d873774a",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "driveway",
+      "path": "packs/official/driveway.yaml",
+      "pointer": "pointers/official/driveway/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:fbb015ff5de100af8c672ee151fba1d7c48732eae0fbac7be32815265b59bd6a",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "example_pack",
+      "path": "packs/official/example-pack.yaml",
+      "pointer": "pointers/official/example_pack/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:28fc55df56157494eb9d99ff872104362ac2e7c9d506162b0701d371444c5157",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "garage",
+      "path": "packs/official/garage.yaml",
+      "pointer": "pointers/official/garage/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:52d1a01f18a60fff2145260b08a5c9eb0f9f682d0b2b3a7c6e9e299914fd9c73",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "guest_mode",
+      "path": "packs/official/guest-mode.yaml",
+      "pointer": "pointers/official/guest_mode/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:53e42eae260dcbd18017f1c2b8a6ed6f74b8db9120742f7784c25badd2ec8d38",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "house",
+      "path": "packs/official/house.yaml",
+      "pointer": "pointers/official/house/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:1eb86a10dc3e0239200d75cb8c7db70e94d523fde775f28ace3322583989a35d",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "kitchen",
+      "path": "packs/official/kitchen.yaml",
+      "pointer": "pointers/official/kitchen/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:93fdbda3451d88dcb7773b5be47d19ef359e40b5a67d7809329b33ec9f3f7fcb",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "living_room",
+      "path": "packs/official/living_room.yaml",
+      "pointer": "pointers/official/living_room/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:f30ee3fd921c00fd6ce2b05aade5994c053a89402f7422dc17ca47ee2b524248",
+      "tier": "official",
+      "version": "1.0.0"
+    }
+  ],
+  "schema_version": "1.0.0"
+}

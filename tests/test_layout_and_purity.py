@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 PURITY = "engine-purity"
+COMPOSITION_ROOT = "composition-root-purity"
 LAYOUT = "layout"
 
 
@@ -40,11 +41,22 @@ def _purity_report() -> Report:
     return report
 
 
+def _composition_root_report() -> Report:
+    report = Report()
+    invariants.check_composition_root_purity(report)
+    return report
+
+
+def _composition_root_diagnostics(report: Report) -> list[str]:
+    return [d.where for d in report.diagnostics if d.check == COMPOSITION_ROOT]
+
+
 def test_committed_tree_is_clean(real_root: Path) -> None:
-    """The repository as committed satisfies both invariants."""
+    """The repository as committed satisfies every structural invariant."""
     report = Report()
     invariants.check_layout(report)
     invariants.check_engine_purity(report)
+    invariants.check_composition_root_purity(report)
     assert report.diagnostics == [], report.render()
 
 
@@ -187,7 +199,7 @@ def test_a_non_python_module_is_not_asked_for_python_markers(fake_root: Path) ->
     exactly right, which is the failure a "required marker" check makes by
     default and the reason this case is asserted rather than assumed.
     """
-    for package in ("engine", "ha_adapter", "sim", "custom_components"):
+    for package in ("engine", "ha_adapter", "sim", "custom_components", "openhouse"):
         write(fake_root, f"{package}/__init__.py", "")
         write(fake_root, f"{package}/py.typed", "")
     (fake_root / "panel").mkdir()
@@ -198,7 +210,7 @@ def test_a_non_python_module_is_not_asked_for_python_markers(fake_root: Path) ->
 
 
 def test_layout_passes_on_a_complete_tree(fake_root: Path) -> None:
-    for package in ("engine", "ha_adapter", "sim", "custom_components"):
+    for package in ("engine", "ha_adapter", "sim", "custom_components", "openhouse"):
         write(fake_root, f"{package}/__init__.py", "")
         write(fake_root, f"{package}/py.typed", "")
     (fake_root / "panel").mkdir()
@@ -258,3 +270,154 @@ def test_paths_module_is_not_confused_with_the_catalog_directory() -> None:
     """
     assert paths.CATALOG.name == "catalog"
     assert paths.ROOT.name != "tools"
+
+
+# --------------------------------------------------------------------------
+# The composition root -- task 1.2
+# --------------------------------------------------------------------------
+
+
+def test_composition_root_import_of_engine_and_sim_is_allowed(fake_root: Path) -> None:
+    """The direction the composition root exists for (`design.md` D12).
+
+    Wiring the engine to the simulator is the package's whole job, so both
+    imports are legal here. An implementation that rejected every first-party
+    import -- the symmetric-looking mistake -- would pass every violating
+    fixture below and make the package unable to do its one thing, which is why
+    the admitting case is asserted beside the rejecting ones.
+    """
+    write(
+        fake_root,
+        "openhouse/facade.py",
+        "import engine\nfrom sim import clock\nfrom openhouse import operations\n",
+    )
+    assert _composition_root_report().diagnostics == []
+
+
+def test_engine_import_of_the_composition_root_is_rejected(fake_root: Path) -> None:
+    """Task 1.2's failing fixture: the edge points one way only.
+
+    A falsifying implementation would scan `openhouse/` for engine imports and
+    never the reverse, which is the half that already works -- the check would
+    pass every "the facade may import the engine" fixture and miss the rule that
+    makes the facade's location a decision rather than an accretion.
+    """
+    write(fake_root, "engine/leak.py", "from openhouse import facade\n")
+    report = _composition_root_report()
+    assert _composition_root_diagnostics(report) == ["engine/leak.py"]
+    assert "openhouse" in report.render()
+
+
+def test_sim_import_of_the_composition_root_is_rejected(fake_root: Path) -> None:
+    """The simulator is held to the same rule, not the engine alone.
+
+    The spec says "neither the engine nor the simulator may import it", so an
+    implementation that scanned only `engine/` would pass the engine fixture and
+    silently leave the simulator free to import the facade.
+    """
+    write(fake_root, "sim/leak.py", "import openhouse\n")
+    report = _composition_root_report()
+    assert _composition_root_diagnostics(report) == ["sim/leak.py"]
+    assert "openhouse" in report.render()
+
+
+def test_a_guarded_engine_import_of_the_composition_root_is_rejected(
+    fake_root: Path,
+) -> None:
+    """Guarded and `TYPE_CHECKING` imports are imports, as they are for HA.
+
+    The Phase 0 precedent is deliberate: an import under `TYPE_CHECKING` is how
+    the edge hides from a reader while remaining a real dependency for a type
+    checker and for anyone who later moves the import to module scope.
+    """
+    write(
+        fake_root,
+        "engine/guarded.py",
+        "from __future__ import annotations\n"
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from openhouse import operations\n",
+    )
+    assert _composition_root_diagnostics(_composition_root_report()) == [
+        "engine/guarded.py"
+    ]
+
+
+def test_the_engine_scan_leaves_the_direction_to_the_composition_root_check(
+    fake_root: Path,
+) -> None:
+    """One problem, one diagnosis.
+
+    `openhouse` is a first-party package, so the engine's third-party scan must
+    not *also* report an engine import of it as "undeclared": the direction is
+    one first-party package refusing another, not a missing `pyproject.toml`
+    entry, and a reader sent to the dependency list would be looking in the
+    wrong file for a fix that is "delete the import".
+    """
+    write(fake_root, "engine/leak.py", "from openhouse import facade\n")
+    assert _composition_root_diagnostics(_composition_root_report()) == [
+        "engine/leak.py"
+    ]
+    assert _diagnostics(_purity_report(), PURITY) == []
+
+
+def test_composition_root_import_of_an_undeclared_dependency_is_rejected(
+    fake_root: Path,
+) -> None:
+    """An MCP server import the `dependencies` array does not name.
+
+    The fixture's `pyproject.toml` declares `pyyaml`; `requests` is the same
+    shape of import and is not declared. The composition root's third-party
+    bound is the declared list, and this is the half of the check that reads it
+    rather than the direction.
+    """
+    write(fake_root, "openhouse/mcp_server.py", "import requests\n")
+    report = _composition_root_report()
+    assert _composition_root_diagnostics(report) == ["openhouse/mcp_server.py"]
+    assert "requests" in report.render()
+
+
+def test_composition_root_import_of_a_declared_dependency_is_allowed(
+    fake_root: Path,
+) -> None:
+    write(fake_root, "openhouse/mcp_server.py", "import yaml\n")
+    assert _composition_root_report().diagnostics == []
+
+
+def test_composition_root_import_of_the_standard_library_is_allowed(
+    fake_root: Path,
+) -> None:
+    write(fake_root, "openhouse/facade.py", "import json\nfrom pathlib import Path\n")
+    assert _composition_root_report().diagnostics == []
+
+
+def test_a_composition_root_without_py_typed_is_reported(fake_root: Path) -> None:
+    """The fifth package is a package: importable and typed, like the four.
+
+    The layout check owns this clause, so a tree that carries `openhouse/` as a
+    directory with no `py.typed` marker is a fault the layout check names --
+    which is what makes `TYPED_PACKAGES` gaining `openhouse` a real constraint
+    rather than a name in a tuple.
+    """
+    write(fake_root, "openhouse/__init__.py", "")
+    report = Report()
+    invariants.check_layout(report)
+    assert any(
+        d.where == "openhouse" and "py.typed" in d.message for d in report.diagnostics
+    )
+
+
+def test_the_composition_root_is_importable_and_typed_on_the_committed_tree(
+    real_root: Path,
+) -> None:
+    """The shipped `openhouse/` loads on its own, which the layout check runs.
+
+    Markers are not importability (the Phase 0 test that says so is above): a
+    package can carry `__init__.py` and `py.typed` and still raise on import.
+    The layout check asserts both for `openhouse/`, and this asserts that the
+    real package raises neither fault, so "the composition root is importable
+    and typed" is a check on the tree that ships rather than on a fixture.
+    """
+    report = Report()
+    invariants.check_layout(report)
+    assert [d for d in report.diagnostics if d.where == "openhouse"] == []

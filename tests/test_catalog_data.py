@@ -44,7 +44,9 @@ CATALOG_CHECK = "catalog-schema"
 #: an extractor, and a golden file is hand-written data that is complete on the
 #: day it lands. They are in the same tuple because the tuple is the set of files
 #: the schema pairing has to hold for, and that set does not care which task
-#: wrote one.
+#: wrote one. `pack-policy` is Phase 2's and is no stub either: it is complete on
+#: the day it lands, like a golden file, and it is here for the same reason -- the
+#: pairing has to hold for it.
 STUBS = (
     "behaviors",
     "edge_cases",
@@ -59,6 +61,7 @@ STUBS = (
     "inventory_exceptions",
     "licenses",
     "overlap_exceptions",
+    "pack-policy",
     "pain_points",
     "raw-behaviors",
     "repos",

@@ -1,0 +1,94 @@
+{
+  "$id": "https://open-house.invalid/schemas/catalog/pack-policy.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pack policy",
+  "description": "What a pack may say and what it may do, as data: the vocabulary terms a pack may not use, the services it may not call, the services it may call with a flag, and the priority a behaviour takes when it declares none. All four are policy rather than fact -- `behavior-vocabulary/1.1.0.json` records the terms the extraction observed, and \"may a pack use this term\" is a judgement about those terms rather than an observation of them -- which is why this is an artifact of its own and why the vocabulary is not amended to carry a policy.",
+  "schema_version": "1.0.0",
+  "type": "object",
+  "required": [
+    "declarative_subset",
+    "banned_services",
+    "flagged_services",
+    "default_priority"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "declarative_subset": {
+      "type": "object",
+      "description": "The terms the published vocabulary carries that a pack may not use, one list per axis. A forbidden term is not an unknown term: the two failures are reported differently, because an author whose term is published needs to be told that the term is published and excluded rather than that the vocabulary lacks it. Every list's entry shape is the vocabulary's own term shape, referenced rather than restated -- a restated name pattern is a second definition free to drift from the published one.",
+      "required": ["forbidden_actions", "forbidden_conditions", "forbidden_triggers"],
+      "additionalProperties": false,
+      "properties": {
+        "forbidden_actions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "../behavior-vocabulary/1.1.0.json#/$defs/terms/items"},
+          "description": "Actions a pack may not use. Every name must resolve against `behavior-vocabulary/1.1.0.json`'s published actions, which is the check that keeps this a list of *excluded* terms rather than a second vocabulary."
+        },
+        "forbidden_conditions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "../behavior-vocabulary/1.1.0.json#/$defs/terms/items"},
+          "description": "Conditions a pack may not use, resolved against the vocabulary's published conditions."
+        },
+        "forbidden_triggers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "../behavior-vocabulary/1.1.0.json#/$defs/terms/items"},
+          "description": "Triggers a pack may not use, resolved against the vocabulary's published triggers."
+        }
+      }
+    },
+    "banned_services": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/banned"},
+      "description": "Services no legitimate pack needs, because they act on the system that hosts the pack rather than on a device in the house. Banning is a data change and never a code change, which is the whole reason this list is a file."
+    },
+    "flagged_services": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/flagged"},
+      "description": "Services that are dangerous and legitimate. A pack calling one installs, and the install result names the flag: a flag is surfaced and never silently converted into a refusal."
+    },
+    "default_priority": {
+      "type": "integer",
+      "description": "The rank a behaviour takes when its own clause declares no `priority`. A clause of the policy rather than of the manifest schema, because it is a decision about arbitration and not a fact about the format; nothing else ranks two behaviours, and install order deliberately does not."
+    }
+  },
+  "$defs": {
+    "banned": {
+      "type": "object",
+      "required": ["service", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "service": {
+          "type": "string",
+          "pattern": "^(?:[a-z][a-z0-9_]*\\.(?:[a-z][a-z0-9_]*|\\*))$",
+          "description": "A service as `domain.service`, or `domain.*` for every service of a domain. There is no pattern syntax beyond those two forms: a wildcard in the middle would be a pattern language nobody asked for, and the two forms cover every ban the rule produces."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Why this service is banned. Required rather than optional, because a list of bans without reasons is a list nobody can safely shorten, and the reason is the argument that the service acts on the host rather than on a device."
+        }
+      }
+    },
+    "flagged": {
+      "type": "object",
+      "required": ["service", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "service": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
+          "description": "A service as `domain.service`. Exact rather than a domain wildcard: a flag names the act that needs saying out loud, and `lock.*` would flag locking along with unlocking."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Why this service is flagged, in the same voice as a ban's reason."
+        }
+      }
+    }
+  }
+}

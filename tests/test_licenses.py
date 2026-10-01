@@ -25,7 +25,8 @@ headed "The two checks that read the clones are local-only", and named again in
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import yaml
@@ -632,3 +633,68 @@ def test_the_committed_tree_has_no_row_findings(real_root: Path) -> None:
     failure should surface here rather than at the first commit that adds one.
     """
     assert _diagnostics() == []
+
+
+# --------------------------------------------------------------------------
+# The published SPDX identifiers -- task 1.5
+# --------------------------------------------------------------------------
+
+#: The five codes, as the artifact has published them since Phase 0. Literals
+#: rather than read from the enum: a test that read its expectation from the file
+#: it checks would agree with any file, including one a code was dropped from.
+PUBLISHED_CODES = ("public_domain", "mit", "apache_2_0", "cc_by_nc_sa", "no_licence")
+
+
+def _licenses_schema() -> dict[str, Any]:
+    """`schemas/catalog/licenses.json` -- the artifact the codes are published in."""
+    loaded: object = json.loads(
+        (paths.SCHEMA_CATALOG / "licenses.json").read_text(encoding="utf-8")
+    )
+    assert isinstance(loaded, dict)
+    return loaded
+
+
+def _published_codes() -> list[str]:
+    definitions = _licenses_schema()["$defs"]
+    codes: list[str] = definitions["licenceValue"]["enum"]
+    return codes
+
+
+def test_the_published_codes_and_their_order_are_unchanged() -> None:
+    """Task 1.5: the enum is the five codes, in the order they were published.
+
+    The order is load-bearing rather than cosmetic: it runs least to most
+    restrictive, and the derivation rows are read against it. A code added,
+    removed or reordered here is a change to what every licence record may say,
+    which is why the expectation is typed out rather than read from the file.
+    """
+    assert _published_codes() == list(PUBLISHED_CODES)
+
+
+def test_the_artifact_records_the_spdx_identifier_for_each_code() -> None:
+    """A consumer reporting a licence reads the identifier from this artifact.
+
+    `pack-manifest`'s requirement is that "the SPDX identifier the artifact
+    records for `mit` is what a consumer reports", so the two codes a pack is
+    most likely to declare are asserted by name, and the map is then held to the
+    enum: an identifier for an unpublished code would be a licence no record
+    could carry, a published code with none would be one no consumer could
+    report, and two codes sharing an identifier would be one licence published
+    twice. The identifiers are read in the order the file declares them, which is
+    the enum's order, because that is the order a reader of the artifact sees.
+
+    Nothing in the repository reads this definition yet -- the licence *check*
+    that consumes it is task 4.3's -- so this test is what holds the mapping to
+    the enum until that check exists.
+    """
+    definitions = _licenses_schema()["$defs"]
+    identifiers: dict[str, str] = {
+        code: row["const"]
+        for code, row in definitions["licenceSpdx"]["properties"].items()
+    }
+    assert identifiers["mit"] == "MIT"
+    assert identifiers["apache_2_0"] == "Apache-2.0"
+    assert tuple(identifiers) == PUBLISHED_CODES
+    assert set(identifiers) == set(_published_codes())
+    assert all(identifier.strip() for identifier in identifiers.values())
+    assert len(set(identifiers.values())) == len(PUBLISHED_CODES)

@@ -1,0 +1,96 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Open House",
+        "description": "Open House turns your areas into rooms and runs their lighting and occupancy for you. This takes a few steps; nothing runs until the end."
+      },
+      "confirm_areas": {
+        "title": "Confirm areas",
+        "description": "These are the areas Home Assistant already knows. Pick the ones you want as rooms -- an area is the source of truth for a room, so a room is always a real area and never an invented one.",
+        "data": {
+          "areas": "Areas to set up"
+        }
+      },
+      "pick_room_types": {
+        "title": "Pick room types",
+        "description": "A room type is what a room is: it decides which devices the room can use. We guessed from the area's name where we could -- {guessed} -- change any you disagree with.",
+        "data": {
+          "room_type": "Room type"
+        }
+      },
+      "guess_bindings": {
+        "title": "Check the bindings",
+        "description": "These are the devices we matched to each room's slots. Anything that says \"nothing yet\" has no device in the area we could match, and you can pick one for it later in the room's settings.\n\n{bindings}"
+      },
+      "choose_people": {
+        "title": "Choose people",
+        "description": "Open House can leave a room's lighting alone while nobody is home. Pick the people it should count -- leave out guests and shared accounts, or the house will think someone is in when only a guest login is.",
+        "data": {
+          "people": "People who count as at home"
+        }
+      },
+      "review": {
+        "title": "Review",
+        "description": "Here is what Open House will do, in plain words.\n\n{review}\n\nAway from home is decided by: {away_people}.\n\nNothing has run yet. Activating creates the rooms and starts the engine."
+      }
+    },
+    "abort": {
+      "already_configured": "Open House is already set up.",
+      "no_areas": "Home Assistant has no areas to turn into rooms. Create an area first, then set up Open House.",
+      "catalog_missing": "Open House cannot find its room and slot catalog, so it cannot suggest room types or bindings. This is an installation problem: the integration was installed without the project's catalog files."
+    }
+  },
+  "config_subentries": {
+    "room": {
+      "entry_type": "Room",
+      "initiate_flow": {
+        "user": "Add a room"
+      },
+      "step": {
+        "user": {
+          "title": "Add a room",
+          "description": "Pick an area and the room type it is. We will match the area's devices to the room's slots, and you can change the matches afterwards.",
+          "data": {
+            "area_id": "Area",
+            "room_type": "Room type"
+          }
+        }
+      },
+      "abort": {
+        "no_areas": "Every area is already a room in Open House. Create a new area first.",
+        "already_added": "That area is already a room in Open House."
+      }
+    }
+  },
+  "entity": {
+    "select": {
+      "mode": {
+        "name": "Mode"
+      },
+      "profile": {
+        "name": "Profile"
+      }
+    },
+    "binary_sensor": {
+      "occupied": {
+        "name": "Occupied"
+      }
+    },
+    "switch": {
+      "auto_lighting": {
+        "name": "Auto lighting"
+      }
+    }
+  },
+  "issues": {
+    "no_occupancy_sensor": {
+      "title": "The room {room} has no motion sensor",
+      "description": "Open House cannot tell whether anyone is in {room}, because no motion sensor is bound to it. The room will report its occupancy as unknown rather than clear, and lighting that depends on occupancy will not run for it. Pick a motion sensor for the room in Open House's settings to fix this."
+    },
+    "occupancy_sensor_unavailable": {
+      "title": "The motion sensor for {room} is not reporting",
+      "description": "{entity_id}, the motion sensor the room {room} reads, is unavailable. Open House treats the room as unknown rather than empty, so lighting that depends on occupancy will not run -- and, importantly, will not switch off either. Check that the device is powered and connected."
+    }
+  }
+}

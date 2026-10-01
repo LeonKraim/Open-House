@@ -18,6 +18,12 @@ decision rather than an oversight:
 - Vocabulary scenarios (`:86,90,95`) -> tasks 7.1 and 7.4.
 - The example house, pack and export (`:155,176,191`) -> tasks 7.3-7.5.
 - "Exit criterion in CI" (`:207`) -> task 7.8.
+
+Phase 2 adds a ninth concept to the same tuple, and the second half of the
+immutability section here covers it: `schemas/engine-api/` exists under
+`schemas/` so that the rule below freezes the engine's published API version
+rather than leaving it editable in place, and a test that amends that file after
+the commit that introduced it is what shows the registration is real.
 """
 
 from __future__ import annotations
@@ -62,7 +68,7 @@ def _for_concept(report: Report, concept: str) -> str:
 def test_every_runtime_concept_has_one_current_version_with_metadata(
     real_root: Path,
 ) -> None:
-    """The shipping tree: eight concepts, each with exactly one current version.
+    """The shipping tree: nine concepts, each with exactly one current version.
 
     The metadata is asserted alongside the count because a version file that is
     unique but unidentifiable is not a contract anyone can resolve.
@@ -219,6 +225,40 @@ def test_editing_a_published_version_is_a_change(fake_root: Path) -> None:
     assert [d.where for d in report.diagnostics] == ["schemas/slot/1.0.0.json"]
 
 
+def test_amending_the_published_api_version_is_a_change(fake_root: Path) -> None:
+    """Task 1.4 on the artifact Phase 2 adds: the promise freezes when published.
+
+    `schemas/engine-api/1.0.0.json` is a version file rather than a field in some
+    other file for exactly one reason -- the immutability rule that governs every
+    published version here is what stops the engine's API version being edited
+    after packs have been written against it. That reasoning only holds if the
+    concept is registered with the chain check, and a registration is a line in a
+    tuple that nothing else observes: a concept dropped from `RUNTIME_CONCEPTS`
+    fails no test, is skipped by three loops at once, and looks exactly like a
+    concept nothing was ever published for. So this test amends the file after the
+    commit that introduced it and requires the diagnostic to name it.
+
+    A falsifying implementation that read the current version without registering
+    the concept -- or a check that treated an uncommitted file as satisfied --
+    would report nothing here and leave the API version editable in place.
+    """
+    seed_concepts(fake_root, paths.RUNTIME_CONCEPTS)
+    commit(fake_root, "add schemas")
+
+    path = fake_root / "schemas/engine-api/1.0.0.json"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '"schema_version": "1.0.0"', '"schema_version": "1.0.1"'
+        ),
+        encoding="utf-8",
+        newline="",
+    )
+
+    report = Report()
+    schemas.check_immutability(report)
+    assert [d.where for d in report.diagnostics] == ["schemas/engine-api/1.0.0.json"]
+
+
 def test_publishing_a_successor_by_editing_the_retired_version_is_a_change(
     fake_root: Path,
 ) -> None:
@@ -331,7 +371,7 @@ def test_the_committed_tree_is_green(real_root: Path) -> None:
     watch this check fail -- and is also why none of them has read the tree the
     project releases. `schema-immutability` is the one check whose subject is
     committed history rather than the working tree, so a tree whose runtime
-    versions were never committed, or a check re-scoped off the eight concepts,
+    versions were never committed, or a check re-scoped off the nine concepts,
     is one a fixture cannot see and is named only here.
 
     The per-version assertion is what keeps the pass from being vacuous. A check

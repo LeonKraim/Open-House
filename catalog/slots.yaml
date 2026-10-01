@@ -339,3 +339,26 @@ slots:
         raw_ids: [johnkoht_dashboards_kohbo_home_vacuum_active_notification_yaml]
         description: >-
           A vacuum named for the floor it cleans, not for a single room.
+
+  - name: fan
+    description: >-
+      An air mover for one space: a ventilator, an extractor, or an air purifier.
+      It runs on its own rather than as part of the heating, so a room binds it
+      separately. The domain is the role.
+    accepts_domains: [fan]
+    required: false
+    source_repos: [fwartner, johnkoht]
+    examples:
+      - repo: fwartner
+        reuse_status_code: ideas_only
+        raw_ids: [fwartner_automations_yaml]
+        description: >-
+          A ventilator whose identifier compounds the German noun for the
+          appliance with the room it serves, so the device and its space are
+          named in one token.
+      - repo: johnkoht
+        reuse_status_code: ideas_only
+        raw_ids: [johnkoht_packages_mudroom_bathroom_fan_mudroom_bathroom_fan_off_yaml]
+        description: >-
+          A bathroom extractor named for the room and the appliance, switched off
+          by an automation of its own rather than by the room's lighting.

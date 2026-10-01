@@ -1,0 +1,8 @@
+{
+  "$id": "https://open-house.invalid/schemas/engine-api/1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Engine API version",
+  "schema_version": "1.0.0",
+  "supersedes": null,
+  "description": "The engine's published API version, which a pack manifest's `engine_api` range is checked against. The filename is the version -- this concept's versions *are* API versions, so the only field the document carries that names a version is `schema_version`, the one every published schema here carries and which must equal the filename, and the current version is read through `current_version` like any other published concept. It is an artifact of its own because nothing else in this repository declares one: `pyproject.toml` says `version = \"0.0.0\"`, which moves for packaging reasons and is a packaging value rather than a promise about what a manifest may declare, so a range checked against it would be a check in name only. Publishing the version under `schemas/<concept>/` rather than as a field in some other file is deliberate: the immutability rule that governs every published version here is what stops the promise being edited after packs have been written against it. The version moves only when what a manifest may *declare* changes incompatibly, and not when the engine's implementation changes; the closure of `kind` to the five kinds in `pack-manifest/1.2.0.json` is the first such change, which is why this version and that one are published together."
+}

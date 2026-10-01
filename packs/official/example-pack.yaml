@@ -18,13 +18,24 @@
 # extraction observed across the four estates and `1.1.0` therefore publishes;
 # a pack using a term outside the vocabulary fails validation, naming the pack
 # and the term.
+#
+# `kind` was `lighting` under `1.1.0` and is `module` under `1.2.0`: `lighting` is
+# a corpus *category*, and `1.2.0` closes `kind` to the five kinds a pack can be.
+# The three clauses `1.2.0` adds and this pack therefore carries -- `engine_api`,
+# `license` and `i18n` -- are the pack's own statements of what engine it is
+# written for, what it may be reused under, and what its names are in a locale
+# that has no override. `license: mit` because this file is the project's own
+# writing and `mit` is the least restrictive code the published vocabulary
+# carries, which is what an example meant to be copied should be under.
 name: example_pack
 version: "1.0.0"
 description: >-
   A motion-triggered lighting pack, the smallest pack that exercises both a
   required and an optional slot and declares a behaviour in the frozen
   vocabulary.
-kind: lighting
+kind: module
+engine_api: ">=1.0.0 <2.0.0"
+license: mit
 requires_slots: [light_group, motion_sensor]
 optional_slots: [lux_sensor]
 provides:
@@ -35,3 +46,14 @@ behaviours:
     trigger: state
     condition: state
     action: service
+    priority: 10
+    services: [light.turn_on]
+    slots: [motion_sensor, light_group]
+i18n:
+  default:
+    pack: Example pack
+    description: A motion-triggered lighting pack.
+    motion_turns_on_light: Motion turns the light on
+  locales:
+    de:
+      motion_turns_on_light: Bewegung schaltet das Licht ein

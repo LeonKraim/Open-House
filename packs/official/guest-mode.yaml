@@ -1,0 +1,39 @@
+# The guest-mode pack -- task 7.4.
+#
+# It is the phase's one `profile-set`, and the kind exists for exactly this: a
+# pack that confers a *state* rather than an act. `provides` is where it says so
+# -- one entry, `class: mode`, pinning the file below -- and the schema's
+# conditional for the kind makes that entry mandatory (`provides` `contains` a
+# `mode`), so a profile-set that confers no mode is refused rather than being a
+# pack that quietly does nothing.
+#
+# The mode it confers is `schemas/mode/1.0.0.json`: a `name`, a `description` and
+# an `exclusive_group`. It carries no behaviours, because entering a mode is not
+# this pack's act -- Phase 1's `engine/modes.py` enforces exclusivity over the
+# modes a house has, and a behaviour is gated on the state. What a `profile-set`
+# adds is the state itself.
+#
+# **What is deliberately absent.** `spec.txt`'s guest mode also bundles profile
+# *selections* -- which room is switched to which profile while a guest is in the
+# house -- and this pack does not declare them. Their shape is a selection schema
+# Phase 3 publishes, and `schemas/profile/1.0.0.json` today carries `name`,
+# `description`, `modes` and `enabled_behaviours` and closes the object, so a
+# clause expressing a room selection has no shape to live in. `1.2.0` adds none:
+# a clause here would be this phase inventing a later phase's format, and the
+# closed schema is what turns that into a refusal with a message rather than a
+# clause every reader silently ignores.
+name: guest_mode
+version: "1.0.0"
+description: >-
+  The guest mode: one house mode, mutually exclusive with the others, that the
+  rest of the pack set is gated on.
+kind: profile-set
+engine_api: ">=1.0.0 <2.0.0"
+license: mit
+provides:
+  - path: packs/official/guest_mode/mode.yaml
+    class: mode
+i18n:
+  default:
+    pack: Guest mode
+    description: One house mode, exclusive with the others.

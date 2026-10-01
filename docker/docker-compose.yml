@@ -28,6 +28,63 @@ services:
     privileged: true
     volumes:
       - ./ha-config:/config
+      # The authored half of the configuration, mounted over the generated
+      # directory's copy so a fresh `up` gets the MQTT integration from the tree
+      # rather than from whatever the last run left in `ha-config/`. Read-only
+      # because Home Assistant never writes this file -- it writes `.storage/` --
+      # so a writable mount would only be a way for a run to diverge from the
+      # repository without anybody noticing.
+      - ./ha/configuration.yaml:/config/configuration.yaml:ro
+      # The integration, and the repository packages it imports. Home Assistant
+      # loads a custom integration from /config/custom_components and puts
+      # nothing else on its import path, so `ha_adapter/` and `engine/` -- which
+      # the simulator, the CLI and the tests also use, and which therefore live
+      # in the repository rather than being copied in here -- are mounted
+      # read-only at /openhouse-src.
+      # `custom_components/open_house/_bootstrap.py` is what puts that directory
+      # on `sys.path`. Read-only throughout: Home Assistant never writes these
+      # files, so a writable mount would only be a way for a run to diverge from
+      # the repository without anybody noticing.
+      #
+      # `tools/` is mounted for the same reason and was the one omission: the
+      # engine reads the frozen vocabulary's format through
+      # `tools.catalog.schemas` (`engine/vocabulary.py`, `engine/profiles.py`),
+      # so without it the engine cannot be imported at all inside the container
+      # and every live view answers as though the checkout had no catalog. It is
+      # the *packages* that are mounted and not just the entry points, because a
+      # copy inside the image would be a second source of truth for the same
+      # code -- which is the failure this file's read-only mounts exist to
+      # prevent, and the one a `docker cp` of `tools/` silently reintroduces.
+      #
+      # `packs/` and `registry/` are the Store tab's data: `views.load_catalog`
+      # reads `registry/index.json` and the pack manifests it points at, and the
+      # paths in the index are relative to the checkout root, which is this same
+      # `/openhouse-src`. Unmounted, the Store is an empty list rather than an
+      # error -- the honest degradation, but not the one a full checkout should
+      # be showing.
+      #
+      # `sim/` is here because of one import, and it is worth naming. Installing
+      # a pack from the Store verifies its SHA-256 first, and the verifier is
+      # `tools.registry.store.Store.resolve_verified` -- reused rather than
+      # restated, so that the bytes a publisher pins and the bytes the panel
+      # checks are compared by one implementation. That module reaches
+      # `openhouse.pack_verbs`, which imports `sim.scenario` at its own top
+      # level. Without the mount the whole websocket API fails to import, and
+      # the panel comes up with every command answering `unknown_command`.
+      - ../custom_components/open_house:/config/custom_components/open_house:ro
+      - ../ha_adapter:/openhouse-src/ha_adapter:ro
+      - ../engine:/openhouse-src/engine:ro
+      - ../schemas:/openhouse-src/schemas:ro
+      - ../catalog:/openhouse-src/catalog:ro
+      - ../openhouse:/openhouse-src/openhouse:ro
+      - ../tools:/openhouse-src/tools:ro
+      - ../packs:/openhouse-src/packs:ro
+      - ../registry:/openhouse-src/registry:ro
+      - ../sim:/openhouse-src/sim:ro
+      # The built sidebar panel. `/config/www/` is the directory Home Assistant
+      # serves at `/local/`, so the bundle the Vite build emits is reachable at
+      # the URL `async_setup` registers the panel with.
+      - ../panel/dist/open-house-panel.js:/config/www/open-house-panel.js:ro
       - /etc/localtime:/etc/localtime:ro
       - /run/dbus:/run/dbus:ro
     environment:
@@ -39,9 +96,17 @@ services:
       retries: 20
       start_period: 90s
 
-  # Deterministic mock device fleet used by the E2E suite (see sim/).
-  # Runs the FakeHouse adapter and exposes it over MQTT so the real HA
-  # container can be bound to the same entities the simulator drives.
+  # The broker the mock device fleet publishes through. `tools/ha/fleet.py`
+  # connects to it from the host and announces a fixture house over MQTT
+  # discovery; Home Assistant, whose `mqtt:` block in `docker/ha/configuration.yaml`
+  # names this service, creates the entities from that announcement. So the two
+  # services are one house: `up` the stack, run the fleet, and the fixture the
+  # scenarios are written against is a house in Home Assistant.
+  #
+  # Anonymous access and no persistence, both from `mosquitto.conf`: this broker
+  # exists for one machine's tests and holds nothing worth keeping between runs,
+  # and a retained discovery config from a previous run would be a device in
+  # Home Assistant that no fixture holds.
   mocks:
     image: eclipse-mosquitto:2
     container_name: open-house-mocks

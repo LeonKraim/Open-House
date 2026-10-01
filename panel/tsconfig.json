@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+
+    // Vite performs the emit; `tsc` is the type checker only, and the panel ships
+    // no `.d.ts`.
+    "noEmit": true,
+    // Imports carry a `.ts` extension because `node --test` runs the sources
+    // through Node's native type stripping, which resolves the specifier as
+    // written. Vite resolves an explicit `.ts` just as happily.
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+
+    // Lit installs reactive properties as accessors on the prototype. A class
+    // field initialised in the constructor would shadow them and silently break
+    // reactivity, so the ES2022 `define` semantics are off and reactive fields
+    // are declared without an initialiser.
+    "useDefineForClassFields": false
+  },
+  "include": ["src", "vite.config.ts"]
+}

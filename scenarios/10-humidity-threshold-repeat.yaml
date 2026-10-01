@@ -1,0 +1,47 @@
+# seed: 10 of catalog/edge_cases.yaml -- a comfort sensor that drifts back and
+# forth across a threshold repeats the same warning until the household stops
+# reading it.
+#
+# The guard this seed records suppresses a repeat inside a fixed window, together
+# with conditions requiring the doors and the windows to have been closed for an
+# hour first. Phase 1 has no comfort warning and no notification channel, so the
+# bound the seed asks for cannot be measured here. What the scenario states is
+# the provocation -- the same threshold crossed three times inside an hour -- and
+# the assertion that nothing acted, which is the claim that starts failing the
+# moment a warning is added without a window.
+name: humidity crosses the same threshold repeatedly
+given:
+  house: large
+  seed: 29
+  started_at: "2026-01-01T10:00:00+00:00"
+when:
+  - set_state:
+      entity_id: sensor.bathroom_02_humidity
+      state: "71"
+  - advance_time:
+      minutes: 10
+  - set_state:
+      entity_id: sensor.bathroom_02_humidity
+      state: "48"
+  - advance_time:
+      minutes: 10
+  - set_state:
+      entity_id: sensor.bathroom_02_humidity
+      state: "72"
+  - advance_time:
+      minutes: 10
+  - set_state:
+      entity_id: sensor.bathroom_02_humidity
+      state: "49"
+  - advance_time:
+      minutes: 10
+  - set_state:
+      entity_id: sensor.bathroom_02_humidity
+      state: "73"
+then:
+  - state:
+      entity_id: sensor.bathroom_02_humidity
+      is: "73"
+  - log:
+      must_not:
+        - outcome: acted

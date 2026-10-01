@@ -1,0 +1,35 @@
+# The house template -- task 7.5, the other half of the pair.
+#
+# A `house-template` is the level `room-template` is not: the slots the whole
+# house offers, which no single room owns. `catalog/room_types.yaml` keeps the two
+# levels in two keys -- a type's `provides_slots` and the `house` entry's `slots`
+# -- and this pair of kinds is that distinction, so a house-scoped behaviour has
+# slots to require without being forced through a room type it has nothing to do
+# with.
+#
+# It is joined to the catalog by **kind and not by name**, and that asymmetry with
+# the room templates is the catalog's rather than this file's: there are six
+# default room types and one house, so a template per type is a set keyed by name
+# and the house template is the single document of its kind.
+# `tools/catalog/templates.py` fails when there is more than one, when its slots
+# and the catalog's `house.slots` disagree in either direction, and when a
+# template is missing either way.
+#
+# It declares no `behaviours`, for the same reason the room templates do not: a
+# template declares what the house *has*.
+name: house
+version: "1.0.0"
+description: >-
+  The house template: the slots the whole house offers, read from the room
+  catalog's `house` entry.
+kind: house-template
+engine_api: ">=1.0.0 <2.0.0"
+license: mit
+requires_slots: [contact_sensor, house_mode, leak_sensor, light_group, lock, media_player, scene_selector, vacuum]
+provides:
+  - path: packs/official/house_template/house.yaml
+    class: other
+i18n:
+  default:
+    pack: House template
+    description: The slots the whole house offers.

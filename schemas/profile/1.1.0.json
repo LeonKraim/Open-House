@@ -1,0 +1,66 @@
+{
+  "$id": "https://open-house.invalid/schemas/profile/1.1.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Profile",
+  "schema_version": "1.1.0",
+  "supersedes": "1.0.0",
+  "description": "A named bundle of settings a house or a room can be put into. 1.0.0 froze a whole-house bundle: a name, the modes it activates and the behaviours it enables. This version makes a profile something a room holds as a *delta over the room's base*, and it makes profiles simultaneous by giving each room profile an axis. Two profiles in one room are allowed exactly when their axes differ, which is how Lighting and Climate are active at once rather than one of them winning. A profile of kind `house` bundles room selections -- the room profiles a house-wide choice such as 'Vacation' or 'Guests over' puts every room into -- and is itself shareable. `additionalProperties` is false because a field no version defines is a field some other reader may believe it has; the `allOf` below carries the per-kind conditionals a flat object cannot express.",
+  "type": "object",
+  "required": ["name", "kind", "description"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+    "kind": {
+      "type": "string",
+      "enum": ["room", "house"],
+      "description": "A `room` profile is selected in a room and applies its deltas there; a `house` profile bundles the room selections the whole house takes at once."
+    },
+    "axis": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "The dimension a room profile governs -- lighting, climate, media. Two active profiles in one room must differ in axis, which is what makes simultaneity a property of the data rather than a rule a caller remembers. Required for `room` and forbidden for `house`."
+    },
+    "description": {"type": "string", "minLength": 1},
+    "deltas": {
+      "type": "object",
+      "description": "The settings this profile changes, as config keys to values. A room profile's deltas apply in the room it is selected in; a house profile's apply at house scope. A delta is over the room's (or house's) base, so a key absent here takes the base's value.",
+      "additionalProperties": true
+    },
+    "enabled_behaviours": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "description": "Behaviour ids this profile enables, resolved through the same enable key the engine gates a unit on."
+    },
+    "modes": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "description": "Mode names this profile activates."
+    },
+    "selections": {
+      "type": "object",
+      "description": "A house profile's room selections: room id to axis to the room profile selected on that axis. Selecting a house profile sets exactly these.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"required": ["kind"], "properties": {"kind": {"const": "room"}}},
+      "then": {
+        "required": ["axis"],
+        "not": {"required": ["selections"]},
+        "description": "A room profile is one axis's delta, and it cannot also bundle other rooms' selections."
+      }
+    },
+    {
+      "if": {"required": ["kind"], "properties": {"kind": {"const": "house"}}},
+      "then": {
+        "required": ["selections"],
+        "not": {"required": ["axis"]},
+        "description": "A house profile is a bundle of room selections and is not itself selected in a room, so it carries no axis."
+      }
+    }
+  ]
+}

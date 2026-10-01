@@ -1,0 +1,15 @@
+{
+  "domain": "open_house",
+  "name": "Open House",
+  "after_dependencies": ["mqtt"],
+  "codeowners": ["@open-house"],
+  "config_flow": true,
+  "dependencies": ["frontend", "panel_custom"],
+  "documentation": "https://github.com/open-house/open-house",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/open-house/open-house/issues",
+  "loggers": ["ha_adapter", "engine", "openhouse"],
+  "requirements": [],
+  "version": "0.1.0"
+}

@@ -1,0 +1,50 @@
+# seed: 19 of catalog/edge_cases.yaml -- a controller or bridge that is
+# unreachable for a second or two is reported as offline, and an outage that is
+# already in progress when Home Assistant starts raises no state change at all,
+# so it is never reported.
+#
+# The guard this seed records requires the offline state to hold for several
+# minutes before it alerts, and adds a startup trigger that waits and re-checks so
+# an outage predating the restart is caught even though no transition fired. Phase
+# 1 has no alerting, so the scenario states both halves of the provocation: a
+# second of unreachability that must not be reported, and an unreachability that
+# is already in progress when the house restarts. What Phase 1 can be held to is
+# that the two are told apart at all -- the brief drop leaves the controller
+# reachable again, and the outage that predates the start is still readable as an
+# outage afterwards rather than being silently normalised.
+name: an unreachable controller before and across a restart
+given:
+  house: minimal
+  seed: 63
+  started_at: "2026-01-01T06:00:00+00:00"
+when:
+  - add_entity:
+      entity_id: binary_sensor.controller_online
+      state: "on"
+  - advance_time:
+      minutes: 1
+  - set_availability:
+      entity_id: binary_sensor.controller_online
+      available: false
+  - advance_time:
+      minutes: 1
+  - set_availability:
+      entity_id: binary_sensor.controller_online
+      available: true
+  - advance_time:
+      minutes: 1
+  - set_availability:
+      entity_id: binary_sensor.controller_online
+      available: false
+  - advance_time:
+      minutes: 1
+  - restart: {}
+  - advance_time:
+      minutes: 1
+then:
+  - availability:
+      entity_id: binary_sensor.controller_online
+      is: false
+  - log:
+      must_not:
+        - outcome: acted

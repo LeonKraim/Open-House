@@ -71,6 +71,7 @@ ROLE_VOCABULARY: tuple[str, ...] = (
     "climate_zone",
     "contact_sensor",
     "cover",
+    "fan",
     "house_mode",
     "humidity_sensor",
     "leak_sensor",
@@ -275,6 +276,18 @@ LEXICON: tuple[LexiconEntry, ...] = (
         ("ccostan", "fwartner", "johnkoht"),
         "a vacuum cleans the floor plan rather than a room, so its role is "
         "house-scoped and the domain is unambiguous",
+    ),
+    _entry(
+        "fan",
+        "fan",
+        r"^[a-z0-9_]+$",
+        ("room",),
+        ("fwartner", "johnkoht"),
+        "as with climate, the domain is the role: every `fan` entity is an air "
+        "mover for the space it stands in -- a ventilator, an extractor, an air "
+        "purifier -- and the corpus spells one of them with nothing but the name "
+        "of the room it serves, so no device token can be required of the "
+        "pattern",
     ),
 )
 

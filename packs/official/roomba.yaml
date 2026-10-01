@@ -1,0 +1,68 @@
+# The Roomba button pack -- task 7.2.
+#
+# A `module`: one button that drives a robot vacuum through the four states
+# `spec.txt:58` names -- idle starts, cleaning sends home, paused resumes, stuck
+# notifies. The four are four behaviours, one per act, so the manifest states the
+# set of things the button may do and the interpreter proposes through the
+# declared slots and services.
+#
+# **What the four states would need and this version cannot carry.** The spec
+# describes a *dispatch*: which act follows depends on the vacuum's current
+# state. `pack-manifest/1.2.0` has no `choose` -- `catalog/pack-policy.yaml` puts
+# it on the declarative subset's forbidden-action list, because a pack expresses
+# intent rather than branching -- and a behaviour's `condition` axis is a block
+# kind with no value beside it, so a behaviour cannot say *which* state it waits
+# for. The four behaviours below therefore declare the four services and the slot
+# they reach, and the dispatch between them (the thing a `choose` would express)
+# is deferred with the clause that would express it. `vacuum.start` covers both
+# "idle starts" and "paused resumes", which is what the vocabulary's two
+# transitions have in common; the two are separate behaviours so a house can
+# enable them apart.
+#
+# The stuck notification reaches no slot: `notify.send_message` is not an act on
+# a device in the house, so the behaviour declares it with an empty `slots`
+# clause. A behaviour whose action is a service and whose slots are empty is
+# admitted by the schema, and the sandbox refuses nothing because there is no
+# entity for it to reach past.
+name: roomba
+version: "1.0.0"
+description: >-
+  The Roomba button: idle starts a clean, cleaning sends the robot home, paused
+  resumes, and a stuck robot notifies.
+kind: module
+engine_api: ">=1.0.0 <2.0.0"
+license: mit
+requires_slots: [vacuum]
+provides:
+  - path: packs/official/roomba/roomba.yaml
+    class: automation
+behaviours:
+  - name: start_cleaning
+    trigger: state
+    action: service
+    priority: 30
+    services: [vacuum.start]
+    slots: [vacuum]
+  - name: send_home
+    condition: state
+    action: service
+    priority: 30
+    services: [vacuum.return_to_base]
+    slots: [vacuum]
+  - name: resume_cleaning
+    action: service
+    priority: 20
+    services: [vacuum.start]
+    slots: [vacuum]
+  - name: notify_stuck
+    action: service
+    priority: 40
+    services: [notify.send_message]
+i18n:
+  default:
+    pack: Roomba
+    description: One button that drives the robot vacuum through its states.
+    start_cleaning: Starts a clean when the robot is idle.
+    send_home: Sends the robot home when it is cleaning.
+    resume_cleaning: Resumes a paused clean.
+    notify_stuck: Notifies when the robot is stuck.

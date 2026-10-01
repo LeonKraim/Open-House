@@ -1,0 +1,7 @@
+name: guest_mode
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/official/guest-mode.yaml
+sha256: sha256:53e42eae260dcbd18017f1c2b8a6ed6f74b8db9120742f7784c25badd2ec8d38
+tier: official

@@ -1,0 +1,7 @@
+name: example_pack
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/official/example-pack.yaml
+sha256: sha256:28fc55df56157494eb9d99ff872104362ac2e7c9d506162b0701d371444c5157
+tier: official

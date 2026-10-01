@@ -1,0 +1,46 @@
+# seed: 13 of catalog/edge_cases.yaml -- a water-leak alert fires before the
+# sensor that reports where the leak is has updated, so the household is told
+# there is a leak but not where it is, which is the one thing that makes the
+# alert actionable.
+#
+# The guard this seed records delays the alert long enough for the location
+# reading to arrive, and omits the location rather than inventing one when there
+# is none. Phase 1 has no alert to delay, so the scenario states the provocation
+# -- the leak tripping while the location sensor still carries its previous value
+# -- and then the update that follows it. The claim Phase 1 can make is that the
+# two readings are separately readable at each instant, which is what makes "the
+# location has not arrived yet" a fact rather than a guess.
+name: a leak trips before its location sensor updates
+given:
+  house: minimal
+  seed: 41
+  started_at: "2026-01-01T04:00:00+00:00"
+when:
+  - add_entity:
+      entity_id: binary_sensor.water_leak
+      state: "off"
+  - add_entity:
+      entity_id: sensor.leak_location
+      state: "utility"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: binary_sensor.water_leak
+      state: "on"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: sensor.leak_location
+      state: "kitchen"
+  - advance_time:
+      minutes: 1
+then:
+  - state:
+      entity_id: binary_sensor.water_leak
+      is: "on"
+  - state:
+      entity_id: sensor.leak_location
+      is: "kitchen"
+  - log:
+      must_not:
+        - outcome: acted

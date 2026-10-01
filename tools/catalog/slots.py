@@ -105,7 +105,7 @@ def load_slots() -> SlotVocabulary:
     Raising rather than returning an empty vocabulary, for the reason
     `rooms.load_rooms` gives: an unreadable file read as an empty one would leave
     every per-slot check passing on nothing, which on the committed tree is the
-    difference between fourteen slots being right and fourteen being gone.
+    difference between the vocabulary being right and it being gone.
     `validate_all` catches `CheckError` and nothing else, so an unguarded
     `yaml.safe_load` would reach the pre-commit hook as a traceback instead of
     naming the file.

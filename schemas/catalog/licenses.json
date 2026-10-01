@@ -18,6 +18,19 @@
       "enum": ["public_domain", "mit", "apache_2_0", "cc_by_nc_sa", "no_licence"],
       "description": "Licence values only, ordered least to most restrictive by the published order. A status is never a value: three of these five share the status `reusable`, so an order over statuses could not rank them."
     },
+    "licenceSpdx": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["public_domain", "mit", "apache_2_0", "cc_by_nc_sa", "no_licence"],
+      "description": "The SPDX identifier each published licence code carries. It is here, beside the enum that publishes the codes, rather than in a second list of identifiers: the corpus already spells a licence as `mit` and `apache_2_0`, so a pack that said `MIT` would be a third spelling of one fact, and a derivation gate comparing an SPDX string against a corpus code would be comparing two vocabularies. The mapping is data about the codes -- one property per code, in the enum's published order -- and adding a code without an identifier, or an identifier to a code that is not published, fails this definition. `NONE` is SPDX's own sentinel for a work whose licence grants nothing, which is what `no_licence` records: 64 of the corpus's 83 rows carry it, and the two values are deliberately opposite ends of the published order.",
+      "properties": {
+        "public_domain": {"const": "CC0-1.0"},
+        "mit": {"const": "MIT"},
+        "apache_2_0": {"const": "Apache-2.0"},
+        "cc_by_nc_sa": {"const": "CC-BY-NC-SA-4.0"},
+        "no_licence": {"const": "NONE"}
+      }
+    },
     "status": {"enum": ["reusable", "ideas_only"]},
     "obligation": {
       "enum": ["attribution", "state_changes", "share_alike", "non_commercial"]

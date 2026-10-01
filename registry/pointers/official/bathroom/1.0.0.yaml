@@ -1,0 +1,7 @@
+name: bathroom
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/official/bathroom.yaml
+sha256: sha256:31277e9e5bedd9e8606857926c5551937d13b3a2b5dc2425a2ceeff1e829a915
+tier: official

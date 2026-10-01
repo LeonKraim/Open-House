@@ -1,0 +1,41 @@
+# seed: 18 of catalog/edge_cases.yaml -- a guest flag is left switched on when
+# Home Assistant restarts, so the house behaves as though visitors are still
+# present after they have gone.
+#
+# The guard this seed records runs at startup and clears the flag whenever the
+# guest group is not home, so a restart settles the flag to match who is actually
+# in the house instead of trusting the value it was holding. Phase 1 has no guest
+# flag and no startup reconciliation beyond the house's defined startup condition,
+# so the scenario leaves the flag on across the restart and asserts the two things
+# that survive: the house is where its startup condition puts it, and no behaviour
+# claimed credit. The negative assertion is the tripwire -- the phase that adds a
+# guest flag must clear it here, and this scenario goes red until it does.
+name: a guest flag left on across a restart
+given:
+  house: minimal
+  seed: 61
+  started_at: "2026-01-01T20:00:00+00:00"
+when:
+  - add_entity:
+      entity_id: input_boolean.guest_mode
+      state: "off"
+  - add_entity:
+      entity_id: group.guests
+      state: "not_home"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: input_boolean.guest_mode
+      state: "on"
+  - advance_time:
+      minutes: 1
+  - restart: {}
+  - advance_time:
+      minutes: 1
+then:
+  - state:
+      entity_id: group.guests
+      is: "not_home"
+  - log:
+      must_not:
+        - outcome: acted

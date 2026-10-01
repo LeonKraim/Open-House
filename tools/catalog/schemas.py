@@ -83,9 +83,17 @@ def _where(path: Path) -> str:
         return path.as_posix()
 
 
-def load_versions(concept: str) -> list[SchemaVersion]:
-    """Every version file present for a concept, ordered oldest first."""
-    directory = paths.SCHEMAS / concept
+def load_versions(concept: str, *, root: Path | None = None) -> list[SchemaVersion]:
+    """Every version file present for a concept, ordered oldest first.
+
+    `root` defaults to the repository root and is a parameter at all because a
+    caller can be handed a tree of artifacts by *its* caller -- the engine's
+    vocabulary gateway is, in every test that points one at a fixture tree --
+    and "which version is current" has one definition. Restating the succession
+    rule over a second tree is how the two trees come to disagree.
+    """
+    schemas = paths.SCHEMAS if root is None else root.joinpath("schemas")
+    directory = schemas / concept
     if not directory.is_dir():
         return []
     found: list[SchemaVersion] = []
@@ -141,7 +149,7 @@ def current_version(versions: list[SchemaVersion]) -> SchemaVersion | None:
 
 
 def check_runtime_schemas(report: Report) -> None:
-    """Validate the eight runtime concepts and their version files."""
+    """Validate the runtime concepts and their version files."""
     for concept in paths.RUNTIME_CONCEPTS:
         versions = load_versions(concept)
 

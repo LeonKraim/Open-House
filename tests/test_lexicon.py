@@ -122,6 +122,7 @@ ROLE_CASES: tuple[tuple[str, str, str], ...] = (
     ("climate_zone", "climate", "main_bedroom"),
     ("contact_sensor", "binary_sensor", "basement_exterior_door"),
     ("cover", "cover", "large_garage_door"),
+    ("fan", "fan", "studio"),
     ("house_mode", "input_select", "presence_mode"),
     ("humidity_sensor", "sensor", "bedroom_humidity"),
     ("leak_sensor", "binary_sensor", "kitchen_leak_sensor"),

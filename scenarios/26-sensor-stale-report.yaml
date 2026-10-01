@@ -1,0 +1,38 @@
+# seed: 26 of catalog/edge_cases.yaml -- a sensor that stops reporting altogether
+# is silent rather than wrong, so a device that has quietly failed looks no
+# different from a device at rest and the house keeps acting on a reading that will
+# never change again.
+#
+# The guard this seed records watches each sensor's last-seen time and reports the
+# device once that has gone stale, so a device that has stopped reporting is
+# noticed even though it never reports an error of its own. Phase 1 has no
+# last-seen watchdog, so the scenario states the failure exactly -- a sensor holds
+# a reading across hours in which nothing updates it -- and asserts the reading
+# the house is left holding, which is the seed's own defect stated as a fact: the
+# stale value still reads as a current one, and the device is still available.
+# The negative assertion is the tripwire for the phase that adds the watchdog.
+name: a sensor holds its last reading for hours
+given:
+  house: minimal
+  seed: 97
+  started_at: "2026-01-01T00:00:00+00:00"
+when:
+  - add_entity:
+      entity_id: sensor.utility_temperature
+      state: "21.5"
+      attributes:
+        unit_of_measurement: "C"
+  - advance_time:
+      minutes: 1
+  - advance_time:
+      minutes: 360
+then:
+  - state:
+      entity_id: sensor.utility_temperature
+      is: "21.5"
+  - availability:
+      entity_id: sensor.utility_temperature
+      is: true
+  - log:
+      must_not:
+        - outcome: acted

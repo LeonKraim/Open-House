@@ -1,0 +1,31 @@
+# seed: 14 of catalog/edge_cases.yaml -- a light that reports no state of its own
+# is left in whatever condition the last command put it, so after a restart the
+# house cannot tell whether it is on and the state it displays is fiction.
+#
+# The guard this seed records forces the light back to a known state derived from
+# the current mode at startup. Phase 1 reaches the same place by a different road
+# and reaches it for every device: the house has a defined startup condition and
+# `restart` returns the house to it, so a light cannot survive a restart in a
+# condition nothing can confirm. The assertion is that state after the restart,
+# and that no behaviour claims credit for it.
+name: a stateless light is settled by the restart
+given:
+  house: no_lux
+  seed: 43
+  started_at: "2026-01-01T07:00:00+00:00"
+when:
+  - user_action:
+      entity_id: light.bedroom
+      state: "on"
+  - advance_time:
+      minutes: 1
+  - restart: {}
+  - advance_time:
+      minutes: 1
+then:
+  - state:
+      entity_id: light.bedroom
+      is: "off"
+  - log:
+      must_not:
+        - outcome: acted

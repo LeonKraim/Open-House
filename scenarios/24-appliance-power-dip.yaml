@@ -1,0 +1,43 @@
+# seed: 24 of catalog/edge_cases.yaml -- an appliance whose power sensor dips to
+# zero for an instant is treated as having finished, ending the run and notifying
+# early.
+#
+# The guard this seed records requires the power reading to stay at zero for two
+# minutes before the run is ended, so a momentary dip is not read as completion.
+# Phase 1 has no appliance run tracking and no notifier, so the scenario states the
+# dip exactly -- the reading falls to zero for a single simulated minute and comes
+# straight back -- and asserts where the appliance ends up, which is mid-run with
+# its power restored, and that nothing claimed credit for ending it. The negative
+# assertion is the tripwire: the phase that adds run tracking must hold the zero
+# for the full window before it ends a run, and this scenario goes red if it ends
+# one on the dip alone.
+name: an appliance power reading dips to zero and returns
+given:
+  house: minimal
+  seed: 83
+  started_at: "2026-01-01T14:00:00+00:00"
+when:
+  - add_entity:
+      entity_id: sensor.appliance_power
+      state: "812"
+      attributes:
+        unit_of_measurement: "W"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: sensor.appliance_power
+      state: "0"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: sensor.appliance_power
+      state: "812"
+  - advance_time:
+      minutes: 1
+then:
+  - state:
+      entity_id: sensor.appliance_power
+      is: "812"
+  - log:
+      must_not:
+        - outcome: acted

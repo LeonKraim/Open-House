@@ -1,0 +1,6 @@
+{
+  "include": ["engine", "sim", "openhouse", "tools", "tests"],
+  "exclude": ["**/__pycache__"],
+  "typeCheckingMode": "strict",
+  "pythonVersion": "3.12"
+}

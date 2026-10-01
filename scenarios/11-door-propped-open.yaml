@@ -1,0 +1,38 @@
+# seed: 11 of catalog/edge_cases.yaml -- a door is propped open while the house
+# moves things in or out, and the warning that it is still open repeats until the
+# household stops reading it.
+#
+# The guard this seed records draws down a finite counter that is reset once
+# every door has been shut for a couple of seconds, so the reminders are finite
+# and start over the next time a door is left open. Phase 1 has no door reminder,
+# so the scenario states the provocation -- the entry contact held open for an
+# hour, then closed and reopened -- and asserts that nothing acted. The reset
+# half is expressible the same way: closing the contact and reopening it later is
+# a state the house holds, and the run's bounded log is where a later phase's
+# reminder would have to appear.
+name: an entry door is held open for an hour
+given:
+  house: minimal
+  seed: 31
+  started_at: "2026-01-01T10:00:00+00:00"
+when:
+  - set_state:
+      entity_id: binary_sensor.front_door
+      state: "on"
+  - advance_time:
+      minutes: 60
+  - set_state:
+      entity_id: binary_sensor.front_door
+      state: "off"
+  - advance_time:
+      minutes: 5
+  - set_state:
+      entity_id: binary_sensor.front_door
+      state: "on"
+then:
+  - state:
+      entity_id: binary_sensor.front_door
+      is: "on"
+  - log:
+      must_not:
+        - outcome: acted

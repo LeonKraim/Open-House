@@ -11,6 +11,38 @@
 # (`example-pack.yaml`, task 7.4) declares its behaviours in vocabulary 1.1.0,
 # which task 7.1 published, and validates against the current `pack-manifest`
 # schema, which references that vocabulary rather than restating its terms.
+#
+# The shipped set task 7.5 and 7.4 add is listed below them: the six default
+# room templates, the house template and the guest-mode pack. Every one is a
+# person's writing -- the room templates are the room catalog's `default: true`
+# types transcribed by hand, which is what makes the drift check in
+# `tools/catalog/templates.py` a check about two files and not about a generator
+# -- so every one belongs here.
+#
+# A template is named for the room type it reproduces, so the six read as the six
+# `default: true` types in `catalog/room_types.yaml` and the house template is
+# `house`, the catalog's own key for the other level. That is the join
+# `tools/catalog/templates.py` makes.
+#
+# A template's pinned artefact (`bathroom/room.yaml` and its siblings) is not
+# listed, and cannot be: this allowlist is over the pack files in this directory,
+# which is what `_pack_files` returns, and a name here that is not one of them is
+# its own finding. The same is true of `example_pack/motion_light.yaml` above.
+#
+# The three module packs task 7.1-7.3 add -- the Bedtime button, the Roomba
+# button and the bathroom fan -- are listed with them. Each is a person's
+# writing, and each is a `module`, the kind the shipped set was three short of.
 example-house.yaml
 example-export.yaml
 example-pack.yaml
+guest-mode.yaml
+house.yaml
+bathroom.yaml
+bedroom.yaml
+driveway.yaml
+garage.yaml
+kitchen.yaml
+living_room.yaml
+bedtime.yaml
+roomba.yaml
+bathroom_fan.yaml

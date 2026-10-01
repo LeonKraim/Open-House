@@ -6,7 +6,8 @@
 # redistribute, and a pipeline pinned to four third-party repositories fails
 # when those repositories change rather than when this one does. The clones are
 # an input to a one-time local generation step whose outputs are committed, so
-# every job below reads only committed files and needs no network.
+# no job below reads either directory. Each job does install its dependencies
+# over the network (`uv sync`), because this repository commits no lock.
 #
 # `tools/catalog/ci.py` checks this file in turn: no job may reach for either
 # directory, and a job that does fails the build naming the job. That check reads
@@ -25,7 +26,7 @@ jobs:
   # The validator: `oh-catalog validate` runs every check registered in
   # `tools/catalog/validate.py`'s `_CHECKS`, in one command. Each of those reads
   # only this repository -- the clone-reading checks are local-only and their
-  # outputs are committed -- so the job needs no network and no `ressources/`.
+  # outputs are committed -- so the job needs no `ressources/`.
   validate:
     name: oh-catalog validate
     runs-on: ubuntu-latest
@@ -43,6 +44,41 @@ jobs:
 
       - name: Validate the catalog, the schemas and the invariants
         run: uv run python -m tools.catalog.cli validate
+
+  # The suite. `control-surface`'s exit criterion is stated as a requirement
+  # that *runs*: "an AI agent can build a house, run scenarios, read the log, and
+  # iterate with no HA installed", proven in CI rather than demonstrated by hand,
+  # "because an unasserted property of an environment is a hope". That loop is a
+  # test module -- `tests/test_acceptance_loop.py` opens a session through the
+  # facade, drives it, reads the decision log and runs a scenario; the CLI's JSON
+  # report for a failing run is covered beside it, by `tests/test_cli.py` -- so a
+  # pipeline with no job that runs pytest proves it nowhere. The mutation gate
+  # task 9.5 requires is not here yet, and that is recorded as a gap rather than
+  # quietly omitted.
+  #
+  # No Home Assistant: `homeassistant` is in neither `[project.dependencies]`
+  # nor the `dev` group of `pyproject.toml`, so `uv sync` installs no HA and
+  # "with no HA installed" is a property of this job's environment rather than
+  # something the job asserts about itself. That reasoning needs no lock, and
+  # there is none: the dependency set is whatever PyPI resolves on the day,
+  # installed over the network, so the job is not reproducible in that sense.
+  suite:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install uv and pin Python
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the dependencies
+        run: uv sync --all-groups
+
+      - name: Run the engine, the simulator, the scenarios and the control surface
+        run: uv run python -m pytest -q
 
   # The hooks, run as a developer runs them, so that the configuration in
   # `.pre-commit-config.yaml` is exercised in CI rather than assumed to work: the

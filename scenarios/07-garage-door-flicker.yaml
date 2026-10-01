@@ -1,0 +1,37 @@
+# seed: 7 of catalog/edge_cases.yaml -- a garage door controller reports its
+# closed state for an instant while the door is in fact still travelling open, so
+# a passing flicker is counted as a close and the arrival and departure timeline
+# is corrupted by a door that never actually shut.
+#
+# The guard this seed records requires the edge to hold before it is believed.
+# Phase 1 has no door-timeline automation, and its cover write is vetoed for
+# anything but a person (`set_state` on a cover is refused by the engine's veto
+# and `user_action` is admitted), so the flicker this scenario produces is the
+# provocation the seed describes and nothing downstream consumes it. The
+# assertion is that nothing acted on it.
+name: a garage door flickers closed mid-travel
+given:
+  house: no_lux
+  seed: 17
+  started_at: "2026-01-01T09:00:00+00:00"
+when:
+  - user_action:
+      entity_id: cover.garage_door
+      state: "opening"
+  - advance_time:
+      minutes: 1
+  - user_action:
+      entity_id: cover.garage_door
+      state: "closed"
+  - advance_time:
+      minutes: 1
+  - user_action:
+      entity_id: cover.garage_door
+      state: "opening"
+then:
+  - state:
+      entity_id: cover.garage_door
+      is: "opening"
+  - log:
+      must_not:
+        - outcome: acted

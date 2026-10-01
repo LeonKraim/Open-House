@@ -1,0 +1,42 @@
+# seed: 5 of catalog/edge_cases.yaml -- a light is left on past the watchdog
+# window and the scenario asserts it is switched off; a reload inside the window
+# asserts it is left alone. (This file is the second half: the reload inside the
+# window; `05b-hallway-light-watchdog-fires.yaml` is the first.)
+#
+# The seed's guard is a state trigger that holds for twenty minutes and then
+# switches the light it watched off. Phase 1's `lighting.motion_light_off` is the
+# same claim with the window as a tunable (`quiet_timeout_seconds`, five minutes
+# by default), so this is one of the seeds Phase 1 *decides* rather than merely
+# expresses.
+#
+# The assertion is on the record and not on the light, because "lit because the
+# timeout has not fired yet" and "lit because the timeout declined" read the same
+# off the device (`design.md` D2). Four minutes is inside the five-minute window,
+# so no acted record may exist -- and must not, or the watchdog would be
+# switching lights off that somebody is still standing under.
+name: hallway light watchdog -- inside the window
+given:
+  house: minimal
+  seed: 11
+  started_at: "2026-01-01T23:00:00+00:00"
+  enable_flags:
+    behaviour.motion_lighting.enabled: true
+when:
+  - set_state:
+      entity_id: binary_sensor.living_room_motion
+      state: "on"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: binary_sensor.living_room_motion
+      state: "off"
+  - advance_time:
+      minutes: 4
+then:
+  - state:
+      entity_id: light.living_room
+      is: "on"
+  - log:
+      must_not:
+        - rule: lighting.motion_light_off
+          outcome: acted

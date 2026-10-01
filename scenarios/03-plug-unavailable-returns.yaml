@@ -1,0 +1,34 @@
+# seed: 3 of catalog/edge_cases.yaml -- a device that briefly drops off the
+# network is reported as having been switched off, so the household is alerted
+# about a plug that is merely reconnecting.
+#
+# This is the seed the scenario-runner requirement names by hand, and the
+# acceptance it gives is that the scenario loads and runs. The guard it records
+# distinguishes a dropout from a switch-off by the entity's previous state, and
+# Phase 1 keeps availability a field of its own, so the two facts are separately
+# readable here -- which is what makes the false alert preventable rather than
+# merely unlikely. Phase 1 has no alert to raise, so the assertion is that
+# nothing acted on the plug at all and that its availability came back.
+name: a plug goes unavailable and returns
+given:
+  house: minimal
+  seed: 7
+  started_at: "2026-01-01T23:00:00+00:00"
+when:
+  - set_availability:
+      entity_id: light.foyer
+      available: false
+  - advance_time:
+      minutes: 1
+  - set_availability:
+      entity_id: light.foyer
+      available: true
+  - advance_time:
+      minutes: 1
+then:
+  - availability:
+      entity_id: light.foyer
+      is: true
+  - log:
+      must_not:
+        - outcome: acted

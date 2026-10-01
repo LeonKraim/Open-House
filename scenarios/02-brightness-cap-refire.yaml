@@ -1,0 +1,34 @@
+# seed: 2 of catalog/edge_cases.yaml -- a brightness cap re-fires on a light
+# change it caused itself, so it fights the automation or scene that made the
+# change.
+#
+# The guard this seed records separates a manual turn-on from a change an
+# automation or a scene produced by reading the changed entity's context. Phase 1
+# carries that distinction in the change's *origin* rather than in a template: a
+# `user_action` and a `set_state` are different origins, and arbitration gives
+# the user the higher rank. Phase 1 has no brightness cap to re-fire, so the
+# claim this scenario makes is the one underneath it: the person's change stands,
+# and no record reports it as overridden.
+name: brightness cap does not refire on its own change
+given:
+  house: minimal
+  seed: 5
+  started_at: "2026-01-01T23:00:00+00:00"
+when:
+  - user_action:
+      entity_id: light.living_room
+      state: "on"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: light.living_room
+      state: "on"
+  - advance_time:
+      minutes: 1
+then:
+  - state:
+      entity_id: light.living_room
+      is: "on"
+  - log:
+      must_not:
+        - outcome: overridden

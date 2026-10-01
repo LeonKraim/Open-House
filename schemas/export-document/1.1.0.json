@@ -1,0 +1,145 @@
+{
+  "$id": "https://open-house.invalid/schemas/export-document/1.1.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Export document",
+  "schema_version": "1.1.0",
+  "supersedes": "1.0.0",
+  "description": "The shape of a house exported to a file. 1.0.0 froze a flat list of bindings: a room, a slot, a registry id and an entity id. That is enough to re-link after a re-pair and no more -- it cannot carry a room's name or type, the profiles a house holds, or which profile each room is in. This version carries the whole configuration, because Phase 3's exit is that export then import is the identity: rooms, their bindings, the profiles, and the active selections all round-trip. The flat 1.0.0 `bindings` list is kept as an accepted form rather than removed, so a document written by the earlier version -- including the one committed as an example -- is still a document, and the migration in `engine/migrations.py` lifts it into `rooms`. The schema is deliberately self-contained: every `$ref` is a same-document `#/$defs/...`, because a validator pointed at this file alone resolves no other, and the corpus checks validate the example against the current version with no registry.",
+  "type": "object",
+  "required": ["format_version", "house"],
+  "additionalProperties": false,
+  "properties": {
+    "format_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "house": {"type": "string", "minLength": 1},
+    "exported_at": {"type": "string", "minLength": 1},
+    "bindings": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/binding"},
+      "description": "1.0.0's flat binding list. Accepted for the migration and for the committed example; a full backup writes `rooms` instead."
+    },
+    "rooms": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/room"},
+      "description": "The house's rooms, each with its name, type and bindings. This is what a full backup writes and what the migration producing a current document fills."
+    },
+    "house_scope": {
+      "type": "object",
+      "required": ["slots"],
+      "additionalProperties": false,
+      "properties": {
+        "slots": {"type": "array", "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}}
+      }
+    },
+    "profiles": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/profile"},
+      "description": "Every profile the house holds, room and house kinds alike. Defined inline rather than referenced, because a validator pointed at this file alone resolves no other file."
+    },
+    "modes": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/mode"},
+      "description": "The modes the house declares. Carried so a backup restores the mode definitions a profile activates, not only the profile."
+    },
+    "active": {
+      "$ref": "#/$defs/active",
+      "description": "The selections in force: which room profile each room is on per axis, and the house profile if one is active."
+    }
+  },
+  "$defs": {
+    "binding": {
+      "type": "object",
+      "required": ["room", "slot", "registry_id", "entity_id"],
+      "additionalProperties": false,
+      "properties": {
+        "room": {"type": "string", "minLength": 1},
+        "slot": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "registry_id": {"type": "string", "minLength": 1},
+        "entity_id": {"type": "string", "pattern": "^[a-z_]+\\.[a-z0-9_]+$"}
+      }
+    },
+    "roomBinding": {
+      "type": "object",
+      "required": ["registry_id", "entity_id"],
+      "additionalProperties": false,
+      "properties": {
+        "registry_id": {"type": "string", "minLength": 1},
+        "entity_id": {"type": "string", "pattern": "^[a-z_]+\\.[a-z0-9_]+$"}
+      }
+    },
+    "room": {
+      "type": "object",
+      "required": ["id", "name", "type", "bindings"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "name": {"type": "string", "minLength": 1},
+        "type": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "bindings": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/roomBinding"}
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "required": ["name", "kind", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "kind": {"type": "string", "enum": ["room", "house"]},
+        "axis": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "description": {"type": "string", "minLength": 1},
+        "deltas": {"type": "object", "additionalProperties": true},
+        "enabled_behaviours": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+        },
+        "modes": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+        },
+        "selections": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {"required": ["kind"], "properties": {"kind": {"const": "room"}}},
+          "then": {"required": ["axis"], "not": {"required": ["selections"]}}
+        },
+        {
+          "if": {"required": ["kind"], "properties": {"kind": {"const": "house"}}},
+          "then": {"required": ["selections"], "not": {"required": ["axis"]}}
+        }
+      ]
+    },
+    "mode": {
+      "type": "object",
+      "required": ["name", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "description": {"type": "string", "minLength": 1},
+        "exclusive_group": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+      }
+    },
+    "active": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rooms": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+          }
+        },
+        "house_profile": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

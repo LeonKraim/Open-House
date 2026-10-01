@@ -27,11 +27,14 @@ valid. That is the floor this section is about, not the ceiling.
 - **Task 3.6 is PARTIAL and the task text cannot be satisfied.** The task asks
   for `catalog/hardcoded_refs.yaml` to carry every ref *and* for every entry to
   resolve to one of five constants. The extraction found 3,384 distinct
-  `(repo, entity_ref)` pairs; the file carries 635. The other 2,749 (~81%) are
-  refs to entities the 14-slot vocabulary cannot express, so they resolve to
-  none of the five. Both clauses cannot hold at once. Left as a deliberate
-  subset on the user's instruction; the file records no note of its own, which
-  makes this paragraph the only place the subset is written down.
+  `(repo, entity_ref)` pairs; the file carried 635 when Phase 0 closed, and
+  carries 647 since Phase 2's `fan` slot brought twelve more refs into the
+  vocabulary — the store is re-run rather than edited, so the file follows the
+  vocabulary (see [`docs/reference/fan-role-and-slot.md`](fan-role-and-slot.md)).
+  The remaining ~81% are refs to entities the vocabulary holds no slot for, so
+  they resolve to none of the five. Both clauses cannot hold at once. Left as a
+  deliberate subset on the user's instruction; the file records no note of its
+  own, which makes this paragraph the only place the subset is written down.
 - **Task 2.1 is PARTIAL.** `catalog/licenses.yaml` *types* `reuse_status_code`
   and `reuse_status_prose`, where the task says the two are derived and should
   not be stored. The enforcement is real — `licenses.derive` recomputes both and
@@ -55,9 +58,13 @@ this document have been overtaken by the tasks that landed after them:
   already happened and been resolved.
 - **§ "A consequence of `enum_ref`"** — "while `catalog/slots.yaml` is still the
   empty stub, the generated `slots` field is `{"enum": []}`, which admits
-  nothing". `catalog/slots.yaml` carries 14 slots; the generated `slots` field
-  enumerates exactly those 14. The paragraph describes a state that ended with
-  task 5.3.
+  nothing". `catalog/slots.yaml` carried 14 slots when task 5.3 landed and the
+  generated `slots` field enumerated exactly those 14; Phase 2 has since amended
+  the vocabulary with a fifteenth, so the field enumerates 15 today. The
+  paragraph describes a state that ended with task 5.3, and the count this note
+  was written with has itself been overtaken, which is why the amendment is
+  recorded in [`docs/reference/fan-role-and-slot.md`](fan-role-and-slot.md)
+  rather than by editing the count here.
 - **§ "Deferred scenarios, and where they land"** — the rows for "Vocabulary is
   closed, and gains terms", "Vocabulary terms become an enumeration in `1.1.0`",
   "Example house, pack and export", "Boundary checks run in CI", "Exit criterion

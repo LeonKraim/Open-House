@@ -1,0 +1,40 @@
+# seed: 12 of catalog/edge_cases.yaml -- a television is left running when the
+# household goes out, so it plays on to an empty room until somebody happens to
+# come back.
+#
+# The guard this seed records fires only once both the presence group and the
+# motion group have been away for two hours, and repeats both checks as
+# conditions before it acts. Phase 1 has no presence group and no away-from-home
+# television rule, so the scenario states the provocation -- the house empties
+# with the media player on and stays empty past any plausible dwell -- and
+# asserts the claim Phase 1 can make: the player is still on, and no record
+# claims a behaviour switched it off.
+name: the television plays on to an empty room
+given:
+  house: minimal
+  seed: 37
+  started_at: "2026-01-01T20:00:00+00:00"
+when:
+  - set_state:
+      entity_id: media_player.living_room
+      state: "playing"
+  - set_state:
+      entity_id: binary_sensor.living_room_motion
+      state: "on"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: binary_sensor.living_room_motion
+      state: "off"
+  - set_state:
+      entity_id: binary_sensor.foyer_motion
+      state: "off"
+  - advance_time:
+      minutes: 180
+then:
+  - state:
+      entity_id: media_player.living_room
+      is: "playing"
+  - log:
+      must_not:
+        - outcome: acted

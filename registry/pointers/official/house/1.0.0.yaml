@@ -1,0 +1,7 @@
+name: house
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/official/house.yaml
+sha256: sha256:1eb86a10dc3e0239200d75cb8c7db70e94d523fde775f28ace3322583989a35d
+tier: official

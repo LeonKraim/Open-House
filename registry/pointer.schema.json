@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://open-house.invalid/registry/pointer.json",
+  "title": "Registry pointer",
+  "description": "One published pack version: where its source is, which revision of it, the digest that pins it, and the tier it was published under.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "version", "repo", "commit", "path", "sha256", "tier"],
+  "properties": {
+    "name": {
+      "description": "The pack's own name, as its manifest declares it.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+    },
+    "version": {
+      "description": "The pack's own version, as its manifest declares it.",
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+"
+    },
+    "repo": {
+      "description": "Where the pack's source lives. The one reserved value `.` names the repository that hosts this registry.",
+      "type": "string",
+      "minLength": 1
+    },
+    "commit": {
+      "description": "The revision of `repo` the pointer was published against.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,64}$"
+    },
+    "path": {
+      "description": "The manifest's path within `repo`, relative and using forward slashes.",
+      "type": "string",
+      "minLength": 1
+    },
+    "sha256": {
+      "description": "The digest of the manifest document, in the form `engine.install.digest` produces.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "tier": {
+      "description": "The trust tier the pack was published under.",
+      "enum": ["official", "verified", "community", "local"]
+    },
+    "abandoned": {
+      "description": "Set when the author has stopped maintaining the pack. The store flags it rather than refusing it.",
+      "type": "boolean"
+    }
+  }
+}

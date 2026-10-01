@@ -1,0 +1,48 @@
+# seed: 25 of catalog/edge_cases.yaml -- a device that reports a low battery keeps
+# being announced, so one warning piles up in the notification list every time the
+# level is re-read.
+#
+# The guard this seed records writes the alert under a key derived from the device,
+# so a second warning about the same device replaces the first instead of joining
+# it, and withdraws it once the battery is reported as replaced. Phase 1 has no
+# notification store, so the scenario states the repetition -- three low readings
+# in a row for one device -- and then the replacement, and asserts the readings
+# the house is left holding. The claim Phase 1 can make is that the readings are
+# one device's successive values rather than three facts, which is the identity
+# the guard's key is derived from. The negative assertion is the tripwire for the
+# phase that adds the standing alert.
+name: one device reports a low battery three times
+given:
+  house: minimal
+  seed: 89
+  started_at: "2026-01-01T08:00:00+00:00"
+when:
+  - add_entity:
+      entity_id: sensor.hallway_sensor_battery
+      state: "12"
+      attributes:
+        unit_of_measurement: "%"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: sensor.hallway_sensor_battery
+      state: "9"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: sensor.hallway_sensor_battery
+      state: "7"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: sensor.hallway_sensor_battery
+      state: "100"
+  - advance_time:
+      minutes: 1
+then:
+  - state:
+      entity_id: sensor.hallway_sensor_battery
+      is: "100"
+  - log:
+      must_not:
+        - outcome: acted

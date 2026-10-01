@@ -273,3 +273,29 @@ def test_the_committed_workflow_runs_the_validator_and_the_hooks(
     commands = _run_commands()
     assert any("tools.catalog.cli validate" in c for c in commands), commands
     assert any(re.search(r"pre-commit run --all-files", c) for c in commands), commands
+
+
+def test_the_committed_workflow_runs_the_suite(real_root: Path) -> None:
+    """Task 12.0, and with it `control-surface`'s exit criterion.
+
+    The criterion is stated as something that *runs*: "an AI agent can build a
+    house, run scenarios, read the log, and iterate with no HA installed". The
+    requirement asks that it be checked in CI and not demonstrated by hand,
+    "because an unasserted property of an environment is a hope". The loop is a
+    pytest module, so a pipeline whose only jobs are the validator and the hooks
+    proves it in a developer's checkout and nowhere else -- which is exactly what
+    the acceptance mapping recorded as a gap against this requirement before this
+    job existed.
+
+    Pinned by name and not by count, for the same reason the test above pins its
+    two commands: a job can be renamed, reordered or rewritten and this stays
+    true, while a step *deleted* fails here rather than in a green build that
+    quietly stopped running the suite. The pattern is the invocation and not the
+    word, so a step that runs the pinned interpreter's pytest satisfies it and a
+    bare `pytest` no longer does. It is not a proof that the step runs anything:
+    the pattern is unanchored, so a step whose command merely *names* the
+    invocation -- an `echo`, or a collection with `--collect-only` -- matches it
+    too, and this test does not tell those apart from a real run.
+    """
+    commands = _run_commands()
+    assert any(re.search(r"python -m pytest\b", c) for c in commands), commands

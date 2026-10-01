@@ -1,0 +1,64 @@
+# The four trust tiers, and what each of them permits.
+#
+# A tier is a statement about how a pack arrived and what it was allowed to say
+# when it did, and every field below is read by a check rather than by a
+# person: `signed` and `reviewed` say what evidence backs the pack, and
+# `permits_flagged` is the one that decides whether a dangerous permission is a
+# validation failure or an accepted fact.
+#
+# The banned list is *not* tierable. A service on `catalog/pack-policy.yaml`'s
+# banned list is refused whatever tier a pack claims, because the ban is about
+# what acts on the host rather than on a device in the house; a tier can permit
+# a *flagged* service and cannot unban a banned one.
+tiers:
+  - name: official
+    description: >-
+      Published by the project itself and signed at release. The signature is
+      the evidence, so a human review step is not a second gate on top of it.
+    signed: true
+    reviewed: true
+    # A first-party thermostat or lock module may carry a flagged service; the
+    # signature is what a household trusts instead of reading the permission
+    # list.
+    permits_flagged: true
+    publishes: true
+    install_flow: store
+    banner: null
+
+  - name: verified
+    description: >-
+      Published by a third party and merged only after a human read the
+      manifest and its permission list. Not signed, so the merge is the whole
+      of the evidence.
+    signed: false
+    reviewed: true
+    permits_flagged: true
+    publishes: true
+    install_flow: store
+    banner: null
+
+  - name: community
+    description: >-
+      Published by a third party with no review. A community pack carries no
+      dangerous permission, which is the property that lets it be accepted
+      without anyone reading it.
+    signed: false
+    reviewed: false
+    permits_flagged: false
+    publishes: true
+    install_flow: store
+    banner: null
+
+  - name: local
+    description: >-
+      Sideloaded from the user's own `/config` directory. Nothing reviews it
+      and nothing publishes it, and it is not in the index; the install flow is
+      the user's own, and the banner is the warning the store shows for it.
+    signed: false
+    reviewed: false
+    permits_flagged: true
+    publishes: false
+    install_flow: config
+    banner: >-
+      This pack was installed from your own configuration. It has not been
+      reviewed by anyone, and it is not published to the registry.

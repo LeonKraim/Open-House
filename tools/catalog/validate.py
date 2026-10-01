@@ -46,6 +46,8 @@ from . import (
     scope,
     seeds,
     slots,
+    substrate,
+    templates,
 )
 from .errors import CheckError, Report
 from .narrow import as_mapping, as_sequence
@@ -619,6 +621,8 @@ _CHECKS: tuple[Callable[[Report], None], ...] = (
     invariants.check_version_control,
     invariants.check_layout,
     invariants.check_engine_purity,
+    invariants.check_composition_root_purity,
+    invariants.check_engine_layering,
     invariants.check_registry_boundary,
     invariants.check_declared_dependency_names,
     schemas.check_runtime_schemas,
@@ -634,6 +638,7 @@ _CHECKS: tuple[Callable[[Report], None], ...] = (
     facts.check_fact_allowlist,
     normalise.check_hardcoded_refs,
     room_types.check_room_types,
+    templates.check_templates,
     rooms.check_rooms,
     slots.check_slots,
     integrations.check_integrations,
@@ -647,6 +652,10 @@ _CHECKS: tuple[Callable[[Report], None], ...] = (
     attribution.check_attribution,
     examples.check_examples,
     ci.check_ci_configuration,
+    substrate.check_hermeticity,
+    substrate.check_wall_clock,
+    substrate.check_random_stream,
+    substrate.check_environment,
 )
 
 

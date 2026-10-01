@@ -25,9 +25,8 @@ secrets.yaml
 # it is authored, and it is ignored wholesale so a container run can never
 # commit a token or a device registry. Our own configuration lives in this
 # repository (`custom_components/`, `packs/`, `engine/`) and is never written
-# here. It is not mounted yet either: the compose file currently mounts only
-# this directory, localtime and dbus, and the mount arrives with the integration
-# in a later phase.
+# here; the compose file mounts that directory as `/config` and mounts the
+# repository's packages read-only beside it at `/openhouse-src`.
 docker/ha-config/
 
 # Python

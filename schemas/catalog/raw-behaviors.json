@@ -1878,6 +1878,7 @@
               "climate_zone",
               "contact_sensor",
               "cover",
+              "fan",
               "house_mode",
               "humidity_sensor",
               "leak_sensor",

@@ -1,0 +1,24 @@
+# What `packs/official/guest-mode.yaml` confers, and the file its `provides` entry
+# pins. The entry declares the class `mode`; this file is the mode.
+#
+# It is the whole of `schemas/mode/1.0.0.json` and nothing else, which is what
+# makes the class readable off the file at all: the sandbox classifies a document
+# as a mode when its keys are a closed subset of `name`, `description` and
+# `exclusive_group`, and as something else the moment one more key appears. A
+# `mode:` key here would read as an automation.
+#
+# `name` is a slug and not a display name -- `schemas/mode/1.0.0.json` patterns
+# it `^[a-z][a-z0-9_]*$`, the same alphabet the manifest's own `name` uses -- so
+# the words a person reads are the description's and the identifier is this one.
+# `engine/modes.py`'s `DEFAULT_MODES` spells its own the same way (`home`).
+#
+# `exclusive_group` is the name of the set this mode may not be active beside.
+# `house_mode` is the group the household's other modes are in, so a house in
+# guest mode is not also in sleep mode or away: `engine/modes.py`'s `activate`
+# deactivates the group's other members and returns their names, so the two are
+# never active together. The group is named as data and the rule is the engine's.
+name: guest
+description: >-
+  A visitor is in the house: the modes that assume an empty or a sleeping house
+  are the ones this mode may not be active beside.
+exclusive_group: house_mode

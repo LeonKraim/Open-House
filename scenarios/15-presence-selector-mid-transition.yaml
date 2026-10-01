@@ -1,0 +1,31 @@
+# seed: 15 of catalog/edge_cases.yaml -- a person's presence selector is left
+# mid-transition when automations are reloaded or Home Assistant restarts, so the
+# house still believes someone is arriving.
+#
+# The guard this seed records listens for the reload and start events and
+# rewrites a status still set to the in-transition value back to its settled one.
+# Phase 1 has no presence selector, but it has the selector the house does carry
+# and the restart that settles it: whatever an interrupted sequence left behind,
+# the startup condition is where the house wakes up. The scenario leaves the
+# selector mid-transition and asserts where the restart puts it.
+name: a selector is left mid-transition across a restart
+given:
+  house: minimal
+  seed: 47
+  started_at: "2026-01-01T17:00:00+00:00"
+when:
+  - set_state:
+      entity_id: input_select.house_mode
+      state: "arriving"
+  - advance_time:
+      minutes: 1
+  - restart: {}
+  - advance_time:
+      minutes: 1
+then:
+  - state:
+      entity_id: input_select.house_mode
+      is: "home"
+  - log:
+      must_not:
+        - outcome: acted

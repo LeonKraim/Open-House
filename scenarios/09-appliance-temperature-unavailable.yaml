@@ -1,0 +1,39 @@
+# seed: 9 of catalog/edge_cases.yaml -- a cloud integration stops reporting and an
+# appliance temperature reads unknown, which a plain threshold comparison treats
+# as a dangerous reading and raises as an alarm on an empty house.
+#
+# The guard this seed records leaves an unknown appliance temperature out of the
+# safety comparison rather than reading it as a value, and reports the loss once
+# per absence. Phase 1's availability field is what makes the first half possible
+# at all: an unavailable sensor keeps its state and reports `available: false`,
+# so "cannot answer" is a fact of its own and not a reading of zero or of
+# anything else. The scenario provokes exactly that and asserts nothing acted.
+name: an appliance temperature sensor goes unavailable
+given:
+  house: minimal
+  seed: 23
+  started_at: "2026-01-01T23:00:00+00:00"
+when:
+  - add_entity:
+      entity_id: sensor.oven_temperature
+      state: "180"
+      attributes:
+        unit_of_measurement: "C"
+  - advance_time:
+      minutes: 1
+  - set_availability:
+      entity_id: sensor.oven_temperature
+      available: false
+  - advance_time:
+      minutes: 1
+then:
+  - availability:
+      entity_id: sensor.oven_temperature
+      is: false
+  - attribute:
+      entity_id: sensor.oven_temperature
+      name: unit_of_measurement
+      is: "C"
+  - log:
+      must_not:
+        - outcome: acted

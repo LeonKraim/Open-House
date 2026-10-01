@@ -1,0 +1,7 @@
+name: bedroom
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/official/bedroom.yaml
+sha256: sha256:dfef918295c84a55f5943d3ce399ab7a7f1c074329b27abaca8a22f8d873774a
+tier: official

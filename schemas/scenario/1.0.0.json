@@ -1,0 +1,308 @@
+{
+  "$id": "https://open-house.invalid/schemas/scenario/1.0.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Scenario",
+  "schema_version": "1.0.0",
+  "supersedes": null,
+  "description": "A scenario: the house to build and the run's fixed inputs, an ordered list of steps, and an ordered list of assertions. The steps are the control surface's own verbs -- the ten operations plus the house-control facility -- so a scenario is what an agent did rather than a second vocabulary resembling it, and the assertions read the house and the decision log rather than re-deriving what the engine should have decided.",
+  "type": "object",
+  "required": ["given", "when", "then"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What the run is called in a failure report. Optional: the scenario's path is the name when this is absent, and a corpus file rarely needs both."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What the scenario is for, in the author's words. Read by a human and carried nowhere else."
+    },
+    "given": {"$ref": "#/$defs/given"},
+    "when": {
+      "type": "array",
+      "description": "The steps, in order. Empty is permitted and meaningful: a scenario that only asserts the house it just built is how the OFF-by-default rule is checked.",
+      "items": {"$ref": "#/$defs/step"}
+    },
+    "then": {
+      "type": "array",
+      "minItems": 1,
+      "description": "The assertions, in order. At least one, because a scenario that asserts nothing is a green run that proves nothing.",
+      "items": {"$ref": "#/$defs/assertion"}
+    }
+  },
+  "$defs": {
+    "given": {
+      "type": "object",
+      "required": ["house"],
+      "additionalProperties": false,
+      "description": "The house to build and the run's fixed inputs. Everything a replay needs is here, because a scenario that omitted them would be reproducible only by luck.",
+      "properties": {
+        "house": {
+          "description": "A fixture's name -- minimal, messy, large or no_lux -- or an inline house document validating against schemas/house/1.0.0.json. Either way the house is built through the fake adapter's own operations and is never loaded as a baked snapshot.",
+          "oneOf": [
+            {"enum": ["minimal", "messy", "large", "no_lux"]},
+            {"$ref": "https://open-house.invalid/schemas/house/1.0.0.json"}
+          ]
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The random stream's seed. Defaults to the fixture's own when absent."
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "The virtual instant the session opens at, as an ISO 8601 timestamp with an offset. Defaults to the fixture's own when absent. The engine never reads the wall clock, so this is the only 'when' a run has."
+        },
+        "enable_flags": {
+          "type": "object",
+          "description": "Settings set before the first step, keyed as the resolver keys them -- behaviour.<id>.enabled. The house layer, so a scenario can turn a behaviour on without a control-surface operation that enables one.",
+          "additionalProperties": true
+        }
+      }
+    },
+    "step": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "additionalProperties": false,
+      "description": "One step: a single key naming the verb, whose value is that operation's parameters. Exactly one key, so a step cannot silently carry a second verb nothing calls.",
+      "properties": {
+        "advance_time": {
+          "type": "object",
+          "required": ["minutes"],
+          "additionalProperties": false,
+          "properties": {"minutes": {"type": "number"}}
+        },
+        "set_state": {
+          "type": "object",
+          "required": ["entity_id", "state"],
+          "additionalProperties": false,
+          "properties": {
+            "entity_id": {"type": "string"},
+            "state": {"type": "string"}
+          }
+        },
+        "user_action": {
+          "type": "object",
+          "required": ["entity_id", "state"],
+          "additionalProperties": false,
+          "properties": {
+            "entity_id": {"type": "string"},
+            "state": {"type": "string"}
+          }
+        },
+        "inject_fault": {
+          "type": "object",
+          "required": ["entity_id", "fault"],
+          "additionalProperties": false,
+          "properties": {
+            "entity_id": {"type": "string"},
+            "fault": {"type": "string"}
+          }
+        },
+        "add_entity": {
+          "type": "object",
+          "required": ["entity_id", "state"],
+          "additionalProperties": false,
+          "properties": {
+            "entity_id": {"type": "string"},
+            "state": {"type": "string"},
+            "attributes": {"type": "object", "additionalProperties": true}
+          }
+        },
+        "remove_entity": {
+          "type": "object",
+          "required": ["entity_id"],
+          "additionalProperties": false,
+          "properties": {"entity_id": {"type": "string"}}
+        },
+        "set_availability": {
+          "type": "object",
+          "required": ["entity_id", "available"],
+          "additionalProperties": false,
+          "properties": {
+            "entity_id": {"type": "string"},
+            "available": {"type": "boolean"}
+          }
+        },
+        "restart": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        },
+        "snapshot": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The snapshot operation, which takes no parameters, plus the runner's own bookkeeping: `save` names the returned document so a later step can restore it. The name is where the runner keeps the result, not an argument the operation receives.",
+          "properties": {"save": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}}
+        },
+        "export_config": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The export_config operation, plus `save` naming the document for a later import_config.",
+          "properties": {"save": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}}
+        },
+        "restore": {
+          "type": "object",
+          "required": ["document"],
+          "additionalProperties": false,
+          "properties": {"document": {"$ref": "#/$defs/documentRef"}}
+        },
+        "import_config": {
+          "type": "object",
+          "required": ["document"],
+          "additionalProperties": false,
+          "properties": {"document": {"$ref": "#/$defs/documentRef"}}
+        },
+        "get_decision_log": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"window": {"type": "integer", "minimum": 0}}
+        },
+        "install_pack": {
+          "type": "object",
+          "required": ["manifest"],
+          "additionalProperties": false,
+          "properties": {"manifest": {"type": "string", "minLength": 1}}
+        }
+      }
+    },
+    "documentRef": {
+      "description": "A document an operation needs: either written inline, or named -- `{from: <name>}` -- where <name> is a `save` an earlier snapshot or export_config step recorded, or the automatic `step_<index>` name every snapshot and export_config step is also stored under. The two forms are disjoint, so a document is never both: the reference form is exactly one `from` key, and an inline document carrying one is refused rather than silently read as a reference.",
+      "oneOf": [
+        {"type": "object", "required": ["from"], "additionalProperties": false,
+         "properties": {"from": {"type": "string", "minLength": 1}}},
+        {"type": "object", "additionalProperties": true, "not": {"required": ["from"]}}
+      ]
+    },
+    "assertion": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "additionalProperties": false,
+      "description": "One assertion: a single key naming which of the two kinds it is. A `state`, `availability` or `attribute` assertion reads the house; a `log` assertion reads the records the engine wrote.",
+      "properties": {
+        "state": {"$ref": "#/$defs/stateAssertion"},
+        "availability": {"$ref": "#/$defs/availabilityAssertion"},
+        "attribute": {"$ref": "#/$defs/attributeAssertion"},
+        "log": {"$ref": "#/$defs/logAssertion"}
+      }
+    },
+    "stateAssertion": {
+      "type": "object",
+      "required": ["entity_id", "is"],
+      "additionalProperties": false,
+      "properties": {
+        "entity_id": {"type": "string"},
+        "is": {"type": "string", "description": "The state the entity is expected to read."}
+      }
+    },
+    "availabilityAssertion": {
+      "type": "object",
+      "required": ["entity_id", "is"],
+      "additionalProperties": false,
+      "description": "Availability is its own field (house-adapter), so it is asserted apart from state: an unavailable device is assertable as unavailable without its state being read as off.",
+      "properties": {
+        "entity_id": {"type": "string"},
+        "is": {"type": "boolean", "description": "Whether the device is expected to answer."}
+      }
+    },
+    "attributeAssertion": {
+      "type": "object",
+      "required": ["entity_id", "name", "is"],
+      "additionalProperties": false,
+      "properties": {
+        "entity_id": {"type": "string"},
+        "name": {"type": "string", "minLength": 1},
+        "is": {"description": "The value the attribute is expected to hold."}
+      }
+    },
+    "logAssertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "An assertion over the decision records. `must` and `must_not` take any subset of a record's normative fields; `because` is the named form that requires both a rule and an outcome, so a citation of a behaviour cannot be vacuous.",
+      "properties": {
+        "must": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/record"}},
+        "must_not": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/record"}},
+        "because": {"$ref": "#/$defs/record"}
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "A partial decision record: every field named must equal the record's, and a record matches only when all of them do. Fields absent from the matcher are not constrained. This is the record's normative field set (engine-core), and the outcome values are the engine's own vocabulary.",
+      "properties": {
+        "actor": {"type": "string"},
+        "rule": {"type": ["string", "null"]},
+        "outcome": {
+          "enum": [
+            "acted",
+            "declined",
+            "lost arbitration",
+            "overridden",
+            "rate-limited",
+            "skipped: unbound slot",
+            "skipped: disabled",
+            "refused: unsafe"
+          ]
+        },
+        "inputs": {
+          "type": "array",
+          "description": "Inputs the record must carry. Each matcher must match one of the record's inputs, and the order is not constrained.",
+          "items": {"$ref": "#/$defs/input"}
+        },
+        "commands": {"type": "array", "items": {"$ref": "#/$defs/command"}},
+        "state_delta": {"type": "array", "items": {"$ref": "#/$defs/stateChange"}}
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "A partial consulted input, tagged by kind as the record's own document form is. A kind-specific field -- a read's reduction, a setting's layer -- is matched only on the kind that carries it.",
+      "properties": {
+        "kind": {"enum": ["read", "setting", "dark_source", "mode", "presence", "override"]},
+        "slot": {"type": "string"},
+        "entities": {"type": "array", "items": {"type": "string"}},
+        "reduction": {"enum": ["any", "all"]},
+        "key": {"type": "string"},
+        "value": {},
+        "layer": {"enum": ["builtin", "house", "room", "profile", "override"]},
+        "source": {"enum": ["lux", "sun"]},
+        "mode": {"type": "string"},
+        "active": {"type": "boolean"},
+        "empty": {"type": "boolean"},
+        "quiet_rooms": {"type": "array", "items": {"type": "string"}},
+        "entity_id": {"type": "string"},
+        "released": {"type": ["string", "null"]},
+        "awaited": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "slot": {"type": "string"},
+        "entities": {"type": "array", "items": {"type": "string"}},
+        "action": {"type": "string"},
+        "origin": {"enum": ["user", "engine", "world", "fault"]}
+      }
+    },
+    "stateChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "entity_id": {"type": "string"},
+        "before": {"type": "string"},
+        "after": {"type": "string"}
+      }
+    }
+  }
+}

@@ -1,0 +1,41 @@
+# seed: 16 of catalog/edge_cases.yaml -- several people arrive at once and a burst
+# of arrival announcements fights over the same speaker, or one arrival is
+# announced twice.
+#
+# The guard this seed records queues the announcements and requires the home to
+# have held an occupied state for several minutes before anything is announced.
+# Phase 1 has no announcer, so the scenario states the provocation -- two
+# arrivals inside a minute -- and asserts the claim that survives it: both
+# arrivals are visible to the house at once and nothing acted.
+name: two arrivals inside a minute
+given:
+  house: minimal
+  seed: 53
+  started_at: "2026-01-01T18:30:00+00:00"
+when:
+  - add_entity:
+      entity_id: person.one
+      state: "not_home"
+  - add_entity:
+      entity_id: person.two
+      state: "not_home"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: person.one
+      state: "home"
+  - set_state:
+      entity_id: person.two
+      state: "home"
+  - advance_time:
+      minutes: 1
+then:
+  - state:
+      entity_id: person.one
+      is: "home"
+  - state:
+      entity_id: person.two
+      is: "home"
+  - log:
+      must_not:
+        - outcome: acted

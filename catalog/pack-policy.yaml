@@ -1,0 +1,111 @@
+# The pack policy: what a pack may say and what it may do, as data rather than as
+# code. Schema: `schemas/catalog/pack-policy.json`; read by the engine through
+# `engine/vocabulary.py`, so banning a service or flagging one is an edit to this
+# file and not a release of the engine.
+#
+# Four sections, one per concern. Nothing here restates a vocabulary: a term is
+# named and the artifact that publishes it stays the one place it is defined, so
+# a term renamed in `behavior-vocabulary/1.1.0.json` is a term this file must be
+# edited to follow rather than a second list that silently goes stale. The check
+# that holds that property is the one that resolves every term named below
+# against the vocabulary it belongs to.
+#
+# Nothing here is a preference. Each entry carries the reason it is here, because
+# a list without reasons is a list nobody can safely shorten.
+
+# Terms `behavior-vocabulary/1.1.0.json` publishes that a pack may not use.
+#
+# A term that is *published* and forbidden is not an *unknown* term, and the two
+# are reported as different failures so a pack author can tell which one they
+# have hit. These are the terms the extraction observed across the four estates
+# that express control flow, iteration, ordering or an expression language --
+# published because they were observed, excluded because a pack is a description
+# of intent rather than a program the engine runs.
+declarative_subset:
+  forbidden_actions:
+    # Branching.
+    - if
+    - choose
+    # Iteration.
+    - repeat
+    - parallel
+    # Variable assignment, and the `stop` that only means something once a pack
+    # can branch.
+    - variables
+    - stop
+    # Ordering: a wait suspends until the house reaches some state, which is a
+    # branch written as a delay.
+    - wait_template
+    - wait_for_trigger
+  forbidden_conditions:
+    # A Jinja template evaluates an expression over the house, which is the one
+    # evaluation surface the interpreter does not have and must not acquire. A
+    # condition that reads state is declarative; a condition that computes is
+    # not.
+    - template
+  forbidden_triggers:
+    # The same judgement as the condition above: a template trigger fires on a
+    # computed value rather than on an observed one.
+    - template
+
+# Services a pack may not call at all. Every entry here acts on the system that
+# hosts the pack rather than on a device in the house, which is what makes it a
+# ban: a service a pack might plausibly want for a legitimate home behaviour is a
+# flag below and not a ban.
+#
+# An entry is either `domain.service` or `domain.*`, and `domain.*` covers every
+# service of the domain -- there is no pattern syntax beyond the two forms.
+banned_services:
+  - service: homeassistant.restart
+    reason: >-
+      Restarts the Home Assistant instance that hosts the pack. A pack restarts
+      the system it runs on, which is not an act in a house.
+  - service: homeassistant.stop
+    reason: >-
+      Stops the host instance, leaving every house with this pack installed
+      without the thing that runs it.
+  - service: hassio.host_reboot
+    reason: Reboots the host machine, which is the operating system and not a device.
+  - service: hassio.host_shutdown
+    reason: Powers the host machine off, the same act one step further.
+  - service: hassio.addon_stdin
+    reason: >-
+      Writes to an add-on's standard input, which is a command channel into the
+      host rather than a service call on a device.
+  - service: shell_command.*
+    reason: >-
+      Runs an arbitrary command on the host. Nothing about the command can be
+      judged from the pack, which is why the whole domain is banned rather than
+      the entries someone thought of.
+  - service: python_script.*
+    reason: >-
+      Runs arbitrary Python in the host process, which is the code execution a
+      declarative-only pack exists to not have.
+  - service: update.install
+    reason: >-
+      Installs an update on the host, changing the system a house runs on rather
+      than acting in it.
+
+# Services that are dangerous and legitimate: a pack calling one installs, and the
+# install result names the flag. A flag is never a refusal, and the check that
+# reads this list is not the check that reads the one above, so a flag cannot
+# become a ban through a code path that treats the two alike.
+flagged_services:
+  - service: lock.unlock
+    reason: >-
+      Unlocks a lock. Locking a door on a schedule is an ordinary pack and
+      unlocking is the one that needs saying out loud, which is why the pair is
+      judged by what a pack *can* do rather than by the domain it touches.
+  - service: lock.open
+    reason: Opens a lock, which is an unlock that says so.
+  - service: alarm_control_panel.alarm_disarm
+    reason: Disarms an alarm, the one alarm service that removes a protection.
+
+# The priority a behaviour takes when its own clause declares none.
+#
+# A clause of the policy rather than of the schema because it is a project
+# decision about arbitration and not a fact about the manifest format. A pack that
+# says nothing competes at this rank, and a pack that wants to outrank another has
+# to say a higher number -- nothing else ranks two behaviours, and install order
+# is deliberately not a tie-break.
+default_priority: 0

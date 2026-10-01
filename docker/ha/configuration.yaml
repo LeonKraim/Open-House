@@ -1,0 +1,36 @@
+# Open House — the Home Assistant configuration this repository owns.
+#
+# `docker/ha-config/` is the container's `/config` and is gitignored wholesale:
+# it holds the database, the logs, the registries and everything onboarding
+# writes, all of it generated and none of it authored. This file is the part that
+# *is* authored, so it lives in the repository and is mounted over the generated
+# directory's copy. The split is `specs/simulation`'s rule reaching the
+# container: a fresh `up` reproduces the configuration from the tree rather than
+# from whatever the last run left behind.
+#
+# The MQTT integration is NOT declared here, and that is a fact about Home
+# Assistant rather than an omission. The integration was a YAML block once; a
+# current instance loads it as a *config entry*, and a `mqtt:` mapping is not a
+# deprecated spelling of that -- it is parsed as a sequence and refused, which
+# the container's log recorded the first time this file carried one:
+#
+#   Invalid config for 'mqtt' at configuration.yaml, line 37:
+#   'broker' is an invalid option for 'mqtt', check: mqtt->0->broker
+#   Setup failed for 'mqtt': Invalid config.
+#
+# `tools/ha/broker.py` is what creates the entry, driving the same config flow
+# the frontend does. So a fresh container needs two commands and not one:
+# `tools/ha/onboard.py` for the owner account and the token, then
+# `tools/ha/broker.py` for the broker. This file stays because the rest of the
+# configuration is authored rather than generated, and a fresh `up` should get
+# it from the tree.
+
+# Loads the default set of integrations. Do not remove.
+default_config:
+
+frontend:
+  themes: !include_dir_merge_named themes
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml

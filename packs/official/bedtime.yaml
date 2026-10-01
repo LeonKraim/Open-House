@@ -1,0 +1,68 @@
+# The Bedtime button pack -- task 7.1.
+#
+# A `module`: the kind that does something in a room, plugged into the room's
+# placeholders and carrying the behaviours that act through them. It is the pack
+# a person installs and then binds a dashboard button or a physical button to.
+#
+# **What is deliberately absent, and why.** `spec.txt:58` describes the bedtime
+# button as "lights off, Sleep mode, optional thermostat, locks off by default".
+# Three of those four are here as behaviours. The fourth -- *entering* Sleep mode
+# -- is not, and cannot be, against `pack-manifest/1.2.0`. A behaviour's clause
+# is `name, trigger, condition, action, priority, services, slots`, and the
+# `action` axis is a block *kind* (`service`, `delay`, `scene`, ...) with no
+# value beside it, so a manifest can say a behaviour ends in a service call and
+# cannot say *which state it sets* or *that it enters a named mode*. Entering a
+# mode is a later phase's clause (`schemas/mode/1.0.0.json` fixes the mode; the
+# manifest clause that would name one is not in this version), so this pack does
+# not invent it. The thermostat behaviour below is the optional clause the spec
+# asks for, and it is inert in a room with no `climate_zone` bound -- the
+# `optional_slots` contract, not a branch.
+#
+# The lock clause is off by default by construction and not by a flag: every
+# behaviour a pack declares installs disabled (`pack-install`, "installation is
+# not activation"), so a house that never enables `lock_up` never locks a door.
+# The spec's "locks off by default" is that property, stated here rather than
+# re-implemented.
+#
+# `light.turn_off` is the only service the lights behaviour calls; the lock
+# behaviour calls `lock.lock`, which is *not* on `catalog/pack-policy.yaml`'s
+# flagged list -- `lock.unlock` is, and this pack does not unlock anything.
+name: bedtime
+version: "1.0.0"
+description: >-
+  The bedtime button: a press turns the room's lights off, drops the thermostat
+  for the night, and locks up.
+kind: module
+engine_api: ">=1.0.0 <2.0.0"
+license: mit
+requires_slots: [light_group]
+optional_slots: [climate_zone, lock]
+provides:
+  - path: packs/official/bedtime/bedtime.yaml
+    class: automation
+behaviours:
+  - name: lights_off
+    trigger: state
+    condition: state
+    action: service
+    priority: 50
+    services: [light.turn_off]
+    slots: [light_group]
+  - name: thermostat_down
+    action: service
+    priority: 10
+    services: [climate.set_temperature]
+    slots: [climate_zone]
+  - name: lock_up
+    action: service
+    priority: 10
+    services: [lock.lock]
+    slots: [lock]
+i18n:
+  default:
+    pack: Bedtime
+    description: >-
+      One press turns the lights off and settles the house for the night.
+    lights_off: Turns the room's lights off.
+    thermostat_down: Drops the thermostat for the night.
+    lock_up: Locks the doors for the night.

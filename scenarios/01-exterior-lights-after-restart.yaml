@@ -1,0 +1,38 @@
+# seed: 1 of catalog/edge_cases.yaml -- exterior lights are left switched on when
+# a restart, a reload or a missed sunset step interrupts the sequence that would
+# have switched them off.
+#
+# The guard this seed records is a startup automation that switches a fixed set
+# of exterior lights off. Phase 1 has no startup automation, but it does have the
+# house's own defined startup condition: `restart` returns every device to it,
+# which is the same guarantee reached by the other route. So the assertion is
+# that the lights are off after the restart, and that no behaviour record claims
+# to have switched them off -- because crediting an automation that never ran is
+# exactly the false record the log exists to make impossible (`design.md` D2).
+name: exterior lights after a restart
+given:
+  house: minimal
+  seed: 3
+  started_at: "2026-01-01T23:30:00+00:00"
+when:
+  - set_state:
+      entity_id: light.foyer
+      state: "on"
+  - set_state:
+      entity_id: light.living_room
+      state: "on"
+  - advance_time:
+      minutes: 1
+  - restart: {}
+  - advance_time:
+      minutes: 1
+then:
+  - state:
+      entity_id: light.foyer
+      is: "off"
+  - state:
+      entity_id: light.living_room
+      is: "off"
+  - log:
+      must_not:
+        - outcome: acted

@@ -1,0 +1,53 @@
+# seed: 22 of catalog/edge_cases.yaml -- a camera treats a household member coming
+# home as an intrusion and pushes a person-detected alert, and it keeps alarming
+# about people who are already inside in the minutes after a door has been used.
+#
+# The guard this seed records suppresses person detection while somebody has just
+# arrived and while an exterior door has been used within the last few minutes.
+# Phase 1 has no camera and no detection alerting, so the scenario states the
+# provocation exactly -- a known tracker arrives, an exterior door is used, and
+# the camera reports a person inside the window that follows -- and asserts what
+# Phase 1 can be held to: the arrival, the door and the detection are each
+# separately readable at that instant, so "somebody has just arrived" is a fact
+# available to suppress on rather than an inference. The negative assertion is the
+# tripwire for the phase that adds the detection alert.
+name: a person is detected just after an arrival
+given:
+  house: no_lux
+  seed: 73
+  started_at: "2026-01-01T18:45:00+00:00"
+when:
+  - add_entity:
+      entity_id: device_tracker.resident_phone
+      state: "not_home"
+  - add_entity:
+      entity_id: binary_sensor.front_door
+      state: "off"
+  - add_entity:
+      entity_id: binary_sensor.hallway_camera_person
+      state: "off"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: device_tracker.resident_phone
+      state: "home"
+  - set_state:
+      entity_id: binary_sensor.front_door
+      state: "on"
+  - advance_time:
+      minutes: 1
+  - set_state:
+      entity_id: binary_sensor.hallway_camera_person
+      state: "on"
+  - advance_time:
+      minutes: 1
+then:
+  - state:
+      entity_id: device_tracker.resident_phone
+      is: "home"
+  - state:
+      entity_id: binary_sensor.hallway_camera_person
+      is: "on"
+  - log:
+      must_not:
+        - outcome: acted
