@@ -24,14 +24,21 @@ First boot takes a minute; the healthcheck gates on `/manifest.json`.
 ## Onboard headlessly
 
 A fresh container serves only the onboarding API. `tools/ha/onboard.py` walks
-the documented flow (owner account, core config, analytics opt-out) and prints a
-long-lived access token:
+the documented flow (owner account, core config, analytics opt-out) and then
+mints a long-lived access token, writing it to `.env.local`:
 
 ```bash
 python tools/ha/onboard.py
 ```
 
-The token is written to `.env.local` as `HA_TOKEN` (gitignored). Verify:
+It is safe to re-run: a token the instance already accepts is left alone, and
+only when the stored one no longer authenticates does it log in and mint
+another. Long-lived tokens are uniquely named, so a replacement gets a
+timestamped name rather than colliding with the one it replaces — the old token
+stays valid until it is revoked from the profile page.
+
+The token lands in `.env.local` as `HA_TOKEN` (gitignored); pass `--stdout` if
+you want it echoed as well. Verify:
 
 ```bash
 curl -s -H "Authorization: Bearer $HA_TOKEN" http://localhost:8123/api/config
