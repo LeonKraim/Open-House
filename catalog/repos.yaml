@@ -1,0 +1,6 @@
+# Repository identification records -- one per reference repo.
+#
+# Schema: schemas/catalog/repos.json. Validate with `oh-catalog validate`.
+#
+# Empty until task 4.1.
+repos: []

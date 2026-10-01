@@ -1,0 +1,8 @@
+# The integration, add-on and bridge dependency ledger.
+#
+# Schema: schemas/catalog/integrations.json. Validate with `oh-catalog validate`.
+#
+# Empty until task 5.4. Each entry carries the repos that use it and a
+# disposition of require, replace or avoid; an integration used by three or more
+# repos is required, and a replace or avoid names its successor.
+integrations: []

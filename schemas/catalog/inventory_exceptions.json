@@ -1,0 +1,40 @@
+{
+  "$id": "https://open-house.invalid/schemas/catalog/inventory_exceptions.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Justified `other` classifications",
+  "description": "Every selected file that received the residual class `other`, with a reason. The class exists so that a file nobody could classify is still counted rather than dropped, and this file is what stops it becoming a dumping ground: an unjustified `other` fails the build, so the residual is a place a file waits with a stated reason rather than a place it disappears. Exclude rules take precedence over this route entirely -- a path the ordered rule list excludes receives no class and needs no entry here, so a file cannot travel both.",
+  "schema_version": "1.0.0",
+  "type": "object",
+  "required": ["exceptions"],
+  "additionalProperties": false,
+  "properties": {
+    "exceptions": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/entry"}
+    }
+  },
+  "$defs": {
+    "reason": {
+      "enum": ["unknown_artifact", "generated_file"],
+      "description": "The closed set. Deliberately small: each value is a claim about why the class could not be decided, `unknown_artifact` being \"we could not tell\" and `generated_file` being \"it was written by a tool rather than a person\", and a third value invented at the point of use would be an excuse rather than a reason."
+    },
+    "entry": {
+      "type": "object",
+      "required": ["repo", "path", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Named alongside the path because a path is repo-relative, and the same path can exist in two repos."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The repo-relative path that landed in `other`."
+        },
+        "reason": {"$ref": "#/$defs/reason"}
+      }
+    }
+  }
+}

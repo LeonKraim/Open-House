@@ -21,8 +21,8 @@
       "properties": {
         "slots": {
           "type": "array",
-          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
-          "description": "Resolved against `catalog/slots.yaml`; the membership rule is the validator's, because a JSON Schema reference cannot reach into a YAML document's contents."
+          "items": {"$ref": "../slot/1.0.0.json#/properties/name"},
+          "description": "Resolved against `catalog/slots.yaml`; the membership rule is the validator's, because a JSON Schema reference cannot reach into a YAML document's contents. The entry shape is the runtime `slot` schema's own `name` property, referenced rather than restated."
         }
       }
     }

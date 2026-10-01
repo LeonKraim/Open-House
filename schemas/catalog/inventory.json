@@ -1,0 +1,127 @@
+{
+  "$id": "https://open-house.invalid/schemas/catalog/inventory.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "File inventory",
+  "description": "The result of applying the committed rule list to each reference repo's `git ls-files` output: every tracked path, whether it was selected, the class and parse outcome it received, and the rule that decided it. Committed rather than regenerated in CI, because it is derived from four repositories that are not present in CI. Two properties are load-bearing and are checked by the validator rather than stated here, since JSON Schema cannot express either: the files array's length equals the repo's tracked count with selected plus excluded closing over it, and the sum of the class counts equals the selected count. The `path` values are also what the `selected_path` fact-shape admits against -- membership in this set is how the committed raw record holds a path without holding a pattern loose enough to hold prose.",
+  "schema_version": "1.0.0",
+  "type": "object",
+  "required": ["repos", "totals"],
+  "additionalProperties": false,
+  "properties": {
+    "repos": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/repo"},
+      "description": "One entry per reference repo, in a stable order so that a re-run is byte-identical."
+    },
+    "totals": {
+      "$ref": "#/$defs/counts",
+      "description": "The four repos summed, so the closure over the whole corpus is readable without adding up the per-repo blocks."
+    }
+  },
+  "$defs": {
+    "artifactClass": {
+      "enum": [
+        "package",
+        "automation",
+        "script",
+        "scene",
+        "helper",
+        "template",
+        "blueprint",
+        "dashboard",
+        "custom_integration",
+        "other"
+      ],
+      "description": "The closed set, repeated from the `reference-catalog` spec. `other` is the residual and is the one class that additionally needs an entry in `catalog/inventory_exceptions.yaml`."
+    },
+    "counts": {
+      "type": "object",
+      "required": ["tracked", "selected", "excluded"],
+      "additionalProperties": false,
+      "properties": {
+        "tracked": {"type": "integer", "minimum": 0},
+        "selected": {"type": "integer", "minimum": 0},
+        "excluded": {"type": "integer", "minimum": 0}
+      }
+    },
+    "file": {
+      "type": "object",
+      "required": ["path", "selected", "class", "parse", "rule"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repo-relative, exactly as `git ls-files` reports it."
+        },
+        "selected": {
+          "type": "boolean",
+          "description": "True when the deciding rule selected the file."
+        },
+        "class": {
+          "oneOf": [
+            {"$ref": "#/$defs/artifactClass"},
+            {"type": "null"}
+          ],
+          "description": "The class of the deciding rule when it selected, and null when it excluded. Recorded per file rather than derived at read time, because the deciding rule's class is the file's class and nothing infers it from the file's content."
+        },
+        "parse": {
+          "enum": ["parsed", "unparsed", "not_applicable"],
+          "description": "A separate field from the class so that class counts still sum to the selected count when a file will not parse."
+        },
+        "rule": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The `order` of the deciding rule, so the per-rule counts close over the same list they were produced from."
+        },
+        "error": {
+          "type": ["string", "null"],
+          "description": "The parse error, when `parse` is `unparsed`. Non-null exactly there: an unparsed file keeps its class, is recorded with the error that stopped it, and still counts in the class total."
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"selected": {"const": true}}},
+          "then": {"properties": {"class": {"type": "string"}}}
+        },
+        {
+          "if": {"properties": {"selected": {"const": false}}},
+          "then": {"properties": {"class": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"parse": {"const": "unparsed"}}},
+          "then": {"properties": {"error": {"type": "string", "minLength": 1}}}
+        }
+      ]
+    },
+    "repo": {
+      "type": "object",
+      "required": ["repo", "counts", "files", "by_class", "by_rule", "by_parse"],
+      "additionalProperties": false,
+      "properties": {
+        "repo": {"type": "string", "minLength": 1},
+        "counts": {"$ref": "#/$defs/counts"},
+        "files": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/file"},
+          "description": "Every tracked path, selected and excluded alike. The excluded ones are kept rather than counted and dropped, because the requirement's closure is over the whole `git ls-files` output and a list of only the survivors could not demonstrate it."
+        },
+        "by_class": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0},
+          "description": "Class name to count. Keys are class names rather than a fixed shape, because a class with no files is absent rather than zero and the check that reconciles the sum is what makes the omission visible."
+        },
+        "by_rule": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0},
+          "description": "Rule `order` as a string to count, so that a rule which decided nothing is detectable by its absence from a list of every rule."
+        },
+        "by_parse": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0},
+          "description": "Parse outcome to count."
+        }
+      }
+    }
+  }
+}

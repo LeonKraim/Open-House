@@ -1,0 +1,10 @@
+# Room types derived from the real rooms, plus the `house` scope.
+#
+# Schema: schemas/catalog/room_types.json. Validate with `oh-catalog validate`.
+#
+# Empty until task 5.2. `house` is present because the schema requires it and
+# because a behaviour scoped to the house must not be forced through a room type
+# it has nothing to do with.
+room_types: []
+house:
+  slots: []

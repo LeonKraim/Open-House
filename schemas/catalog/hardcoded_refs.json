@@ -1,0 +1,77 @@
+{
+  "$id": "https://open-house.invalid/schemas/catalog/hardcoded_refs.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hardcoding audit",
+  "description": "Every distinct `entity_ref` the extraction found, with its source repo, its inferred scope and its repo's naming-convention label. This is the second committed facts store, and it carries identifiers from all four repos including the two that grant nothing: an entry holds a `domain.object_id`, a scope and a naming-convention label, and none of those is authored text, which is what a licence withholds. The entry field set is closed, so a field that could hold an alias, a display name, a comment or a YAML fragment cannot be added without editing this file and the allowlist together. The two patterns below are the ones `schemas/catalog/fact-shapes.yaml` declares for `entity_ref` and `slug`; task 3.6 routes this entry schema through `fact-fields.yaml` and `fact-shapes.yaml` exactly as task 3.5 does for `raw-behaviors.json`, and until then a test asserts the inlined patterns equal the declared shapes so the two cannot drift apart in the meantime.",
+  "schema_version": "1.0.0",
+  "type": "object",
+  "required": ["refs"],
+  "additionalProperties": false,
+  "properties": {
+    "refs": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/entry"}
+    }
+  },
+  "$defs": {
+    "constant": {
+      "enum": ["device_id", "device_tracker", "person", "sun", "time"],
+      "description": "The fixed things a reference may target instead of a slot. Deliberately heterogeneous -- `device_id` is a targeting key while the others are entity domains -- because the property the justification needs is a single one, and each entry records which kind it is."
+    },
+    "entry": {
+      "type": "object",
+      "required": ["entity_ref", "repo", "scope", "naming_convention", "slot", "constant"],
+      "additionalProperties": false,
+      "properties": {
+        "entity_ref": {
+          "type": "string",
+          "pattern": "^[a-z_]+\\.[a-z0-9_]+$",
+          "description": "The literal as the source spells it. A fact about someone's naming scheme, and the only place a raw identifier of this kind is committed outside `raw-behaviors.json`."
+        },
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The repo the reference was found in. Resolved against `catalog/repos.yaml` by the validator, which can join the two files; a JSON Schema reference cannot reach into a YAML document's contents."
+        },
+        "scope": {
+          "enum": ["room", "house"],
+          "description": "Inferred from where the reference sits, so the same concept can be compared across repos."
+        },
+        "naming_convention": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$",
+          "description": "The repo's naming-convention label, as a slug. A slug rather than an enum because the label set is fixed when task 3.6 sees the data; what is fixed now, and what matters for the licence position, is that the field cannot hold a sentence."
+        },
+        "slot": {
+          "oneOf": [
+            {"$ref": "../slot/1.0.0.json#/properties/name"},
+            {"type": "null"}
+          ],
+          "description": "The slot this reference maps to, or null when it maps to a constant. A reference to the runtime `slot` schema's own name property rather than a copy of its pattern: a restated pattern is a second definition of a slot name, free to drift from the published one, and it is the thing the conformance check in task 7.6 exists to catch. Resolved against `catalog/slots.yaml` in task 5.3."
+        },
+        "constant": {
+          "oneOf": [
+            {"$ref": "#/$defs/constant"},
+            {"type": "null"}
+          ],
+          "description": "The justification, when the reference is one of the fixed things rather than a slot."
+        }
+      },
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "properties": {"slot": {"not": {"type": "null"}}},
+              "required": ["slot"]
+            },
+            {
+              "properties": {"constant": {"not": {"type": "null"}}},
+              "required": ["constant"]
+            }
+          ],
+          "description": "A reference that resolves to neither a slot nor a constant fails the build, so every entry either feeds the slot vocabulary or says why it cannot."
+        }
+      ]
+    }
+  }
+}

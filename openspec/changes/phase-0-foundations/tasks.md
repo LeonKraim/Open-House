@@ -343,7 +343,12 @@ committed, because CI must not depend on four third-party repositories that are
 
 - [ ] 7.1 Publish `schemas/behavior-vocabulary/1.1.0.json` carrying the trigger,
   condition and action terms the extraction derived and declaring
-  `supersedes: 1.0.0`, **writing nothing into `1.0.0.json`**. Verify with a test
+  `supersedes: 1.0.0`, **writing nothing into `1.0.0.json`**. **Regenerate
+  `schemas/catalog/raw-behaviors.json` in the same task**: the generated schema
+  takes its trigger, condition and action fields from the current vocabulary's
+  element schema, which until now carries a pattern and after this task carries
+  the terms, so a test asserting the committed copy equals a fresh generation
+  fails until the regeneration is committed. Verify with a test
   that the new version is current, the old one is present and byte-identical to
   its state after 1.5, and the successor names it; and a test that a pack using
   an out-of-vocabulary action fails naming the pack and the term.

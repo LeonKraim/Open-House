@@ -1,0 +1,45 @@
+{
+  "$id": "https://open-house.invalid/schemas/catalog/pain_points.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pain points",
+  "description": "The friction that makes each reference setup hard for a newcomer to replicate, and what Open House does instead. This file is the negative half of the corpus: the other files record what the four setups do, and this one records what they make people do. `our_answer` is required to name a downstream phase, which is what keeps an observation from being filed as a wish.",
+  "schema_version": "1.0.0",
+  "type": "object",
+  "required": ["pain_points"],
+  "additionalProperties": false,
+  "properties": {
+    "pain_points": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/entry"}
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": ["repo", "friction", "why_hard", "our_answer"],
+      "additionalProperties": false,
+      "properties": {
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The repo the friction was observed in. Every one of the four contributes at least one entry: a pain point only one setup has is still a pain point, and a register that drew only on the best-documented repo would answer the wrong question."
+        },
+        "friction": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What the setup makes hard, in our own words."
+        },
+        "why_hard": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Why it is hard, which is the part that decides whether our answer addresses the cause or only the symptom."
+        },
+        "our_answer": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What Open House does instead, naming the downstream phase that will do it. Required and non-empty: an unanswered pain point is a complaint, and the phase name is what makes it assignable."
+        }
+      }
+    }
+  }
+}

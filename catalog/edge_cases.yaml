@@ -1,0 +1,8 @@
+# Solved edge cases, recorded as seeds rather than as documentation.
+#
+# Schema: schemas/catalog/edge_cases.json. Validate with `oh-catalog validate`.
+#
+# Empty until task 6.1. Each entry names the guard a repo uses, the repo it came
+# from, and the Phase 1 placeholder it becomes -- the placeholder is what makes
+# this a work item rather than a reading list, and it is required.
+edge_cases: []

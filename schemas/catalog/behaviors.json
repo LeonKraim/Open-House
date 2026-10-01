@@ -64,12 +64,12 @@
         },
         "required_slots": {
           "type": "array",
-          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
-          "description": "Every entry must be available to the row's scope -- a slot some room type provides for `room`, or one the `house` scope provides for `house`. Checked by the validator, which can read `room_types.yaml` and this file together."
+          "items": {"$ref": "../slot/1.0.0.json#/properties/name"},
+          "description": "Every entry must be available to the row's scope -- a slot some room type provides for `room`, or one the `house` scope provides for `house`. Checked by the validator, which can read `room_types.yaml` and this file together. The entry shape is the runtime `slot` schema's own `name` property, referenced rather than restated: a restated slot pattern is a second definition free to drift from the published one, and named-slot shapes are what task 7.6's conformance check exists to catch."
         },
         "optional_slots": {
           "type": "array",
-          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+          "items": {"$ref": "../slot/1.0.0.json#/properties/name"}
         },
         "concept": {
           "type": "string",

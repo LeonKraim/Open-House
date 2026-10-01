@@ -1,0 +1,45 @@
+{
+  "$id": "https://open-house.invalid/schemas/catalog/edge_cases.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Solved edge cases",
+  "description": "The edge cases a reference repo already handles, recorded as scenario seeds rather than as documentation. This is the phase where the corpus stops being a description of four houses and starts being a specification of what Open House has to survive: a flaky device, a restart, a false trigger, notification spam and an unavailable sensor are all handled in at least one of the four setups, and each solution is a guard the product has to have or an argument for not having it.",
+  "schema_version": "1.0.0",
+  "type": "object",
+  "required": ["edge_cases"],
+  "additionalProperties": false,
+  "properties": {
+    "edge_cases": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/seed"}
+    }
+  },
+  "$defs": {
+    "seed": {
+      "type": "object",
+      "required": ["scenario", "guard", "repo", "phase_1"],
+      "additionalProperties": false,
+      "properties": {
+        "scenario": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What goes wrong, in our own words. Never a quotation from a source repo: the guard below is read from the config, but the description of what it protects against is ours, and two of the four repos grant no reuse of their prose."
+        },
+        "guard": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What the repo does about it, in our own words. The requirement asks for the guard used; recording it as a description rather than as the YAML that implements it is what keeps this file out of the prose gate's way."
+        },
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The repo the guard was found in."
+        },
+        "phase_1": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The Phase 1 placeholder this seed becomes. Required and non-empty: a seed with no placeholder is a note nobody will act on, and it is the one field that makes this file a work item rather than a reading list."
+        }
+      }
+    }
+  }
+}

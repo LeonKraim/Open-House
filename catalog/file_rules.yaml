@@ -1,0 +1,15 @@
+# The ordered file-selection rule list, and the authored-path overrides.
+#
+# Schema: schemas/catalog/file_rules.json. Validate with `oh-catalog validate`.
+#
+# Empty until task 3.1. Every rule carries a unique integer `order`, a pattern, a
+# select-or-exclude kind, a reason, and -- on a select rule -- the artifact class
+# it confers. First match wins, so the list is ordered rather than a map: the
+# class a selected file receives is its deciding rule's class and is never
+# inferred from the file's content, because inference would need the file and the
+# file lives only in a clone.
+#
+# `authored_paths` holds rules that are also in `rules`, at a low `order`, so an
+# authored path overrides an exclusion and still has a deciding rule to record.
+rules: []
+authored_paths: []

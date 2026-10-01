@@ -1,0 +1,13 @@
+# Per-repo licence records.
+#
+# Schema: schemas/catalog/licenses.json. Validate with `oh-catalog validate`.
+#
+# Empty until task 2.1. The file exists now because task 1.6 requires every data
+# file under `catalog/` to have a schema beside it and every schema to be
+# exercised by a file, and because an empty, valid stub is what makes the
+# validator's pairing rule testable before the data arrives.
+#
+# `reuse_status_code` and `reuse_status_prose` are derived by
+# `tools/catalog/licenses.py` and are not to be typed by hand: the check in that
+# module fails a hand-written status that contradicts the derivation table.
+repos: []

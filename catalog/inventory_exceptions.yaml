@@ -1,0 +1,11 @@
+# Every selected file that received the residual class `other`, with a reason.
+#
+# Schema: schemas/catalog/inventory_exceptions.json. Validate with
+# `oh-catalog validate`.
+#
+# Empty until task 3.4. An `other` classification without an entry here fails the
+# build, which is what keeps the residual a place a file waits with a stated
+# reason rather than a place it disappears. Exclude rules take precedence: a
+# path the rule list excludes receives no class and needs no entry, so a file
+# cannot travel both routes.
+exceptions: []

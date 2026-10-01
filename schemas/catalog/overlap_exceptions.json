@@ -1,0 +1,35 @@
+{
+  "$id": "https://open-house.invalid/schemas/catalog/overlap_exceptions.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Justified single-source defaults",
+  "description": "The one way a behaviour with a single source repo may be classified `generic`. The corroboration rule is that one repo's opinion is not corroboration, so a single-source row defaults only when somebody has written down why it should -- and this file is that writing. Listing a row here is a deliberate act with a stated reason, and the justification is reproduced in the overlap report rather than left in this file for a reader to find.",
+  "schema_version": "1.0.0",
+  "type": "object",
+  "required": ["exceptions"],
+  "additionalProperties": false,
+  "properties": {
+    "exceptions": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/entry"}
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": ["id", "justification"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+(?:\\.[a-z0-9_]+)*$",
+          "description": "The behaviour row's id, spelled exactly as `catalog/behaviors.yaml` spells it. The join is by id rather than by position so that reordering the corpus cannot silently move an exception onto a different row."
+        },
+        "justification": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Why this one repo's treatment is enough. Required and non-empty: an exception with no reason is indistinguishable from the rule not being applied."
+        }
+      }
+    }
+  }
+}

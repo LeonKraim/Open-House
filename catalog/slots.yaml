@@ -1,0 +1,9 @@
+# The slot vocabulary, derived from cross-repo usage rather than invented.
+#
+# Schema: schemas/catalog/slots.json. Validate with `oh-catalog validate`.
+#
+# Empty until task 5.3. Each slot is validated by the runtime `slot` schema,
+# which also carries the example rule: an example names its source repo and that
+# repo's reuse status, and an example with no `raw_ids` must carry a description
+# in our own words instead.
+slots: []

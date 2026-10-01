@@ -1,0 +1,56 @@
+{
+  "$id": "https://open-house.invalid/schemas/catalog/integrations.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Integration dependency ledger",
+  "description": "Every integration, add-on or bridge the reference setups rely on, with the repos that use it and a disposition. The ledger exists because a dependency list that only records what is used cannot tell a later phase what it is allowed to build on: `require` means the product may assume it, `replace` means there is something better and it is named, and `avoid` means it is abandoned upstream and the successor is named. A disposition with no successor would be an opinion.",
+  "schema_version": "1.0.0",
+  "type": "object",
+  "required": ["integrations"],
+  "additionalProperties": false,
+  "properties": {
+    "integrations": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/entry"}
+    }
+  },
+  "$defs": {
+    "disposition": {"enum": ["require", "replace", "avoid"]},
+    "entry": {
+      "type": "object",
+      "required": ["name", "repos", "disposition", "replacement"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The integration, add-on or bridge as Home Assistant spells it."
+        },
+        "repos": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1},
+          "description": "The repos that use it. The count is what decides `require`: three or more repos using an integration is the corroboration that makes it safe to assume."
+        },
+        "disposition": {
+          "$ref": "#/$defs/disposition",
+          "description": "Required on every entry. An entry with no disposition records a dependency without saying whether the product may take it, which is the question the ledger exists to answer."
+        },
+        "replacement": {
+          "type": ["string", "null"],
+          "description": "The successor. Required on a `replace` or `avoid` entry, and null on a `require` one -- a dependency the product may simply use has nothing it is being replaced by, and a non-null value there would be a second, contradictory answer to the same question."
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"disposition": {"enum": ["replace", "avoid"]}}},
+          "then": {"properties": {"replacement": {"type": "string", "minLength": 1}}}
+        },
+        {
+          "if": {"properties": {"disposition": {"const": "require"}}},
+          "then": {"properties": {"replacement": {"type": "null"}}}
+        }
+      ]
+    }
+  }
+}

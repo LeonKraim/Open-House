@@ -1,0 +1,129 @@
+{
+  "$defs": {
+    "raw_record": {
+      "additionalProperties": false,
+      "description": "A fact record. Its key set equals the allowlist exactly, enforced from both sides: this schema is generated from the allowlist, and `additionalProperties: false` closes it in the other direction.",
+      "properties": {
+        "actions": {
+          "description": "The action terms this artifact uses.",
+          "items": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "class": {
+          "description": "The artifact class the file received from its deciding rule. Committed as a fact: it is our classification, not anyone's authored text.",
+          "enum": [
+            "package",
+            "automation",
+            "script",
+            "scene",
+            "helper",
+            "template",
+            "blueprint",
+            "dashboard",
+            "custom_integration",
+            "other"
+          ]
+        },
+        "conditions": {
+          "description": "The condition terms this artifact uses.",
+          "items": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "entity_refs": {
+          "description": "The `domain.object_id` strings this artifact references. The only place a raw Home Assistant identifier appears in the committed store, and it is admitted deliberately: an identifier is a fact about a naming scheme, and `spec.txt`'s hardcoding audit cannot be complete without one.",
+          "items": {
+            "pattern": "^[a-z_]+\\.[a-z0-9_]+$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9_]+(?:\\.[a-z0-9_]+)+$",
+              "type": "string"
+            },
+            {
+              "pattern": "^[a-z0-9_]+$",
+              "type": "string"
+            }
+          ],
+          "description": "Two shapes rather than one because an artifact's id is either taken from Home Assistant's own dotted object id or normalised into a slug. Both are closed character classes, so naming two cannot smuggle in a third."
+        },
+        "path": {
+          "description": "Where the record came from. Admitted by membership in the committed selected-path set rather than by a pattern, because a pattern that excluded authored text would also exclude real filenames.",
+          "enum": []
+        },
+        "slots": {
+          "description": "The slots this artifact binds. The closed set is the slot vocabulary itself, which is why the reference is to `catalog/slots.yaml` rather than to the raw entity ids: the slot a hardcoded reference maps to is the product's own vocabulary, derived in §5.",
+          "items": {
+            "enum": []
+          },
+          "type": "array"
+        },
+        "triggers": {
+          "description": "The trigger terms this artifact uses, drawn from the behaviour vocabulary.",
+          "items": {
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "unclaimed": {
+          "description": "The unclaimed register, carried as a field on each record rather than as a file of its own: the marker exists only in relation to a raw record, and a second file would be a second copy of the raw id set that could drift from the first. Null means a shipped row claims this record.",
+          "enum": [
+            "non_behavior_file",
+            "duplicate_of",
+            "vendor_config",
+            "malformed",
+            null
+          ]
+        }
+      },
+      "required": [
+        "actions",
+        "class",
+        "conditions",
+        "entity_refs",
+        "id",
+        "path",
+        "slots",
+        "triggers",
+        "unclaimed"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://open-house.invalid/schemas/catalog/raw-behaviors.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Generated from schemas/catalog/fact-fields.yaml by tools/catalog/facts.py; edit the allowlist and regenerate rather than editing this file. One record per selected file in every reference repo, including the two that grant no reuse, carrying facts only: a path, an id, an artifact class, vocabulary terms, slot bindings, an `unclaimed` marker and the `domain.object_id` strings the file references. No field here can hold authored text, which is what makes the licence position structural rather than declarative. This schema is also the schema for the unclaimed register, because the marker lives as a field on each record.",
+  "properties": {
+    "change_notice": {
+      "description": "Non-null when the extraction itself is an adaptation a `state_changes` source obliges us to describe; null otherwise, since the notice is an obligation attached to specific sources rather than a blanket disclaimer.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "records": {
+      "description": "One entry per selected file. A record no shipped row claims carries a non-null `unclaimed` reason; the count of those is reported on every validator run.",
+      "items": {
+        "$ref": "#/$defs/raw_record"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "records"
+  ],
+  "schema_version": "1.0.0",
+  "title": "Committed raw behaviour records",
+  "type": "object"
+}

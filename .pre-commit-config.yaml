@@ -47,7 +47,11 @@ repos:
           Every Phase 0 invariant: layout, engine purity, registry boundary,
           version control, schema succession and immutability, the catalog's
           own data files, and the licence records.
-        entry: python -m tools.catalog.cli validate
+        # `-q` is the form `catalog/README.md` documents the hook as using: the
+        # command prints nothing on success, because a hook that prints on every
+        # passing commit is a hook people learn to ignore. Failures still print,
+        # to stderr, because `--quiet` suppresses the success line and nothing else.
+        entry: python -m tools.catalog.cli validate -q
         language: system
         pass_filenames: false
         always_run: true

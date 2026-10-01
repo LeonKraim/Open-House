@@ -1,0 +1,8 @@
+# Every room that exists in any of the four setups, with its source repo and path.
+#
+# Schema: schemas/catalog/rooms.json. Validate with `oh-catalog validate`.
+#
+# Empty until task 5.1. Room names are kept as their repo spells them, including
+# non-English ones: this file is the evidence base the room-type map is derived
+# from, and normalising a name here would destroy the evidence.
+rooms: []

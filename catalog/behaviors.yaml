@@ -1,0 +1,13 @@
+# The shipped corpus: one row per behaviour, merged across the repos that had it.
+#
+# Schema: schemas/catalog/behaviors.json. Validate with `oh-catalog validate`.
+#
+# Empty until tasks 4.3 and 4.4.
+#
+# A row separates what the behaviour *is* -- `concept`, always populated and
+# always in our own words -- from how a particular repo *spelled* it, which is
+# `expression` and is populated only when every source repo's code grant permits
+# reuse. Every row cites the raw ids it was derived from, so a row with no
+# provenance cannot be shipped.
+behaviors: []
+change_notice: null

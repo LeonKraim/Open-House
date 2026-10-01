@@ -1,0 +1,10 @@
+# The hardcoding audit: every distinct entity reference the extraction found.
+#
+# Schema: schemas/catalog/hardcoded_refs.json. Validate with `oh-catalog validate`.
+#
+# Empty until task 3.6, which emits it from the same pass that writes
+# `raw-behaviors.json`. Facts only, for all four repos: a `domain.object_id`, a
+# source repo, an inferred scope and a naming-convention label. No entry may
+# carry an alias, a display name, a comment or a YAML fragment from its source,
+# and the entry field set is closed so that none can be added informally.
+refs: []

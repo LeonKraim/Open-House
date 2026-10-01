@@ -1,0 +1,8 @@
+# Friction that makes a reference setup hard for a newcomer to replicate.
+#
+# Schema: schemas/catalog/pain_points.json. Validate with `oh-catalog validate`.
+#
+# Empty until task 6.2. Every entry carries `our_answer`, non-empty and naming
+# the downstream phase that will answer it, so an observation cannot be filed as
+# a wish.
+pain_points: []

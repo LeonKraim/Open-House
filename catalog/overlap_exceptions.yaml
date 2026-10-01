@@ -1,0 +1,9 @@
+# The one way a single-source behaviour may be classified `generic`.
+#
+# Schema: schemas/catalog/overlap_exceptions.json. Validate with
+# `oh-catalog validate`.
+#
+# Empty until task 4.7. One repo's opinion is not corroboration, so a row with a
+# single source defaults only when somebody has written down why -- and the
+# justification is reproduced in `overlap.md` rather than left here to be found.
+exceptions: []
