@@ -20,10 +20,14 @@ the check failing, and the gate fails when the test does not pass. Reading
 "the test" as the check is the only reading under which the clause says what the
 phase needs it to say.
 
-Two requirements have no check that enforces them, and the mapping records that
-with a `gap:` rather than inventing a test to paper over it: an unenforced clause
-is the one thing this gate exists to surface, so it is a finding here and not a
-silence. See the mapping section of `docs/reference/phase-0-verification.md`.
+A requirement no check enforces can be recorded in the mapping with a `gap:`
+instead of a test, and the gate reports it rather than inventing a test to paper
+over it: an unenforced clause is the one thing this gate exists to surface, so it
+is a finding here and not a silence. No row uses `gap:` today -- the one that did,
+`State-change notices are honoured`, closed when task 6.5 landed
+`notices.check_notices` -- but the arm is kept, because the next gap should be
+reportable without this module being edited first. See the mapping section of
+`docs/reference/phase-0-verification.md`.
 
 This module is deliberately *not* under `tools/catalog/`: it runs pytest, which
 neither the pre-commit hook nor CI can do recursively, so it is not a check that

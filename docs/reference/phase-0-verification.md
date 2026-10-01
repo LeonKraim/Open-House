@@ -9,6 +9,90 @@ is a deferral nobody could have disagreed with.
 The change package is `openspec/changes/phase-0-foundations/`. Where an entry
 says "task N", it means the numbered task in that change's `tasks.md`.
 
+## Phase 0 was **not** approved
+
+Two harsh critics ran on the finished phase on 2026-10-01 and both rejected: one
+walking the task list and the exit criteria, one adversarial (checks registered
+but toothless, tests that assert nothing, prose claiming more than the code
+does). The phase is over the round cap the user set — **three rounds per phase,
+counted across the whole phase** — so it is closed unapproved rather than gated
+again, and the user's instruction was to leave it red and say so.
+
+**A green suite is not a verdict.** 616 tests pass, `ruff check`, `ruff format
+--check` and `pyright` are clean, and `oh-catalog validate` reports the catalog
+valid. That is the floor this section is about, not the ceiling.
+
+### Open by decision, not by oversight
+
+- **Task 3.6 is PARTIAL and the task text cannot be satisfied.** The task asks
+  for `catalog/hardcoded_refs.yaml` to carry every ref *and* for every entry to
+  resolve to one of five constants. The extraction found 3,384 distinct
+  `(repo, entity_ref)` pairs; the file carries 635. The other 2,749 (~81%) are
+  refs to entities the 14-slot vocabulary cannot express, so they resolve to
+  none of the five. Both clauses cannot hold at once. Left as a deliberate
+  subset on the user's instruction; the file records no note of its own, which
+  makes this paragraph the only place the subset is written down.
+- **Task 2.1 is PARTIAL.** `catalog/licenses.yaml` *types* `reuse_status_code`
+  and `reuse_status_prose`, where the task says the two are derived and should
+  not be stored. The enforcement is real — `licenses.derive` recomputes both and
+  the check fails when a hand-written value disagrees — but
+  `schemas/catalog/licenses.json` requires fields the task says to derive. Left
+  as-is.
+
+### Found by the honesty critic, left uncorrected on instruction
+
+These statements are false in the present tense. They are quoted rather than
+quietly rewritten, so that a reader of the sections below knows which parts of
+this document have been overtaken by the tasks that landed after them:
+
+- **§ "The vocabulary field resolves to a shape, not to a list of terms"** —
+  both the title and the body. Task 7.1 landed
+  `schemas/behavior-vocabulary/1.1.0.json` (`supersedes: 1.0.0`), which
+  *enumerates* its axes: triggers 15 terms, conditions 11, actions 14. The
+  committed `schemas/catalog/raw-behaviors.json` was regenerated and carries
+  those `enum`s, so the section's "today it says 'a pattern'" no longer holds
+  and its prediction that the suite "goes red until the file is rewritten" has
+  already happened and been resolved.
+- **§ "A consequence of `enum_ref`"** — "while `catalog/slots.yaml` is still the
+  empty stub, the generated `slots` field is `{"enum": []}`, which admits
+  nothing". `catalog/slots.yaml` carries 14 slots; the generated `slots` field
+  enumerates exactly those 14. The paragraph describes a state that ended with
+  task 5.3.
+- **§ "Deferred scenarios, and where they land"** — the rows for "Vocabulary is
+  closed, and gains terms", "Vocabulary terms become an enumeration in `1.1.0`",
+  "Example house, pack and export", "Boundary checks run in CI", "Exit criterion
+  in CI", "An entry in `hardcoded_refs.yaml` resolving to neither a slot nor a
+  constant", and "A raw record carrying `slots`, against a still-empty
+  `slots.yaml`" all describe work that has since landed or artefacts that now
+  exist. One row is still a genuine hole and should be read as open: **two
+  catalog schemas declaring the same `$id`, with nothing comparing them** —
+  marked `unassigned` in that table, and still unassigned.
+- **§ "The two checks that read the clones are local-only"** — its first bullet,
+  "the `git ls-files` closure check over each clone", is not a registered check.
+  `tests/test_check_registry.py::LOCAL_ONLY` is
+  `{repos.check_ha_versions, prose_gate.check_prose_gate}`. `repos.check_ha_versions`
+  compares a repo's recorded `ha_version` against its clone's `.HA_VERSION`. The
+  `git ls-files` closure is `inventory.build()`, exercised by a clone-skipped
+  test and by the generation step — not by a registered local-only check.
+
+### Potentially wrong, not verified
+
+Recorded because they were noticed and not chased, which is not the same as
+their being fine:
+
+- `catalog/README.md:263` says no record failed to parse, while
+  `catalog/raw-behaviors.json` carries an `unclaimed: malformed` record
+  (`johnkoht_automation_seasons_season_is_spring_yaml`). One of the two is wrong.
+- Task 1.5 calls the vocabulary "the one runtime schema expected to have two
+  versions". `schemas/pack-manifest/1.1.0.json` also exists, so the claim of
+  uniqueness is stale or the pack-manifest version is unexplained.
+- `tools/acceptance.py::_judge` compares a mapping row's test id against the
+  collected set by exact membership, and `collect()` records only fully
+  parametrized ids. A row naming the bare id of a parametrized test is therefore
+  reported as "not carried" even though the test exists and passes. The three
+  rows in this document were corrected to the parametrized form, but the gate
+  itself still cannot tell that case from a genuinely missing test.
+
 ## `spec.txt` clause status
 
 `spec.txt` is the input specification, not a checklist, so "ticked off" is
@@ -558,7 +642,7 @@ than papered over with a test that covers only part of it.
   fixture: "an `engine/` file importing `homeassistant` inside a `try`"
 - spec: architecture-invariants
   requirement: Registry stays out of this repository
-  test: tests/test_registry_boundary.py::test_a_committed_artifact_carrying_a_pointer_key_is_rejected
+  test: tests/test_registry_boundary.py::test_a_committed_artifact_carrying_a_pointer_key_is_rejected[registry_url]
   fixture: "a committed artifact carrying a `registry_url` key"
 - spec: architecture-invariants
   requirement: The project is under version control
@@ -566,8 +650,8 @@ than papered over with a test that covers only part of it.
   fixture: "a fixture tree with no git history"
 - spec: architecture-invariants
   requirement: Boundary checks run in CI
-  test: tests/test_golden.py::test_the_registered_suite_passes_in_a_checkout_without_the_clones
-  fixture: "a checkout with `ressources/` and `.local/` both absent"
+  test: tests/test_ci.py::test_a_job_that_reads_the_clones_is_named
+  fixture: "a workflow whose `build` job reads `ressources/`"
 - spec: attribution
   requirement: Per-repo licence record split by artifact kind
   test: tests/test_licenses.py::test_a_readme_claim_without_a_recorded_discrepancy_is_reported
@@ -590,9 +674,8 @@ than papered over with a test that covers only part of it.
   fixture: "a shipped document quoting a verbatim passage from a prose-withholding repo"
 - spec: attribution
   requirement: State-change notices are honoured
-  test: tests/test_attribution.py::test_a_state_changes_repo_states_the_change_notice
-  fixture: "the attribution notice for the `state_changes` source"
-  gap: "only the attribution-notice half is enforced: no check in tools/catalog reads a row's or a file's `change_notice`, which is task 6.5"
+  test: tests/test_notices.py::test_an_adapted_row_without_a_change_notice_is_named
+  fixture: "an adapted row carrying no `change_notice`"
 - spec: attribution
   requirement: Author contact is attempted and recorded
   test: tests/test_licenses.py::test_an_unlicensed_repo_without_a_contact_block_is_reported
@@ -699,11 +782,15 @@ than papered over with a test that covers only part of it.
   fixture: "a `.yaml` file under `catalog/` with no schema under `schemas/catalog/`"
 ```
 
-One row carries a `gap`. It is not an omission in this mapping; it is the
-finding the gate was built to make. `State-change notices are honoured` has only
-its attribution-notice half enforced — no check in `tools/catalog/` reads a
-row's or a file's `change_notice`, which is task 6.5. It is reported by the gate
-as an `is unenforced:` diagnostic rather than passed silently.
+No row carries a `gap`. The mechanism is still there and still reported the same
+way -- `tools/acceptance.py` turns a `gap:` into an `is unenforced:` diagnostic
+rather than passing the requirement on a test that covers only part of it -- but
+the one row that used it has closed. `State-change notices are honoured` was
+recorded as half-enforced: the attribution notice was checked, and nothing in
+`tools/catalog/` read a row's or a file's `change_notice`. Task 6.5 landed
+`notices.check_notices`, which does exactly that, so the row now names
+`tests/test_notices.py::test_an_adapted_row_without_a_change_notice_is_named` and
+the gap is gone. Every row above names a test the collected suite carries.
 
 ## `spec.txt` Phase 0 exit criterion (task 8.2)
 
