@@ -260,6 +260,18 @@ its docstring says plainly that its guard is the dependency's rather than this
 package's — the guarantee is real and this check depends on it, but nothing here
 mutates to prove it.
 
+A third path in the same shape was open and has since been closed. `load_licences`
+loaded `catalog/licenses.yaml` with a bare `yaml.safe_load`, so a file whose
+values nested past the parser's ceiling raised a `RecursionError`, and a stray
+bracket raised a `YAMLError` — and neither is a `CheckError`, so either escaped
+the ninth check, escaped `validate_all`, and took the whole report with it,
+including the diagnostics the earlier eight checks had already collected. It now
+raises a `CheckError` naming the file, for both arms, which `validate_all`
+collects as a diagnostic. It is tested through `validate_all` on a malformed
+fixture rather than by catching the exception directly, because "the command
+returns a report" is the property that matters, not "the exception has the right
+type" — a test of the second would pass while the first stayed false.
+
 Two paths remain open, and they are the deep end rather than the near end:
 `load_catalog_schema`'s own `json.loads` and the static reference walk both
 recurse per level with a much higher ceiling than the meta-validator's. A schema
@@ -388,3 +400,60 @@ are committed:
 Everything in `oh-catalog validate` is a pure function of this repository, which
 task 7.7 verifies by running the suite in a checkout with `ressources/` and
 `.local/` removed.
+
+## Which repos may donate expression, and the count that says so
+
+Task 2.5 asks for the donation set to be confirmed from the derived statuses
+rather than asserted, and this section is where it lands. It is confirmed twice:
+by the table below, and by the check, which recomputes `reuse_status_code` from
+`license_code` on every run and fails a record whose hand-written status
+disagrees.
+
+| repo | `license_code` | `reuse_status_code` | may donate expression |
+| --- | --- | --- | --- |
+| `ccostan` | `mit` | `reusable` | yes |
+| `renemarc` | `apache_2_0` | `reusable` | yes, with a change notice |
+| `fwartner` | `no_licence` | `ideas_only` | no |
+| `johnkoht` | `no_licence` | `ideas_only` | no |
+
+**Two of four.** The count is not a summary of the table — it is read out of it,
+and the property that makes it true is that a repo grants expression exactly
+when its code licence derives `reusable`. A fifth repo added to
+`catalog/licenses.yaml` as `mit` moves the count to three without any other file
+changing, which is the point of deriving it.
+
+What the two granting repos may donate is not the same size. `ccostan` carries
+no `state_changes` obligation, so material taken from it ships with attribution
+and nothing else. `renemarc` is the corpus's only `state_changes` source, and it
+is why the corpus has a change-notice rule at all: every adapted row derived
+from it carries a row-level `change_notice`, and any file containing such a row
+carries a file-level notice too.
+
+`renemarc` is also the only repo whose two halves differ — `apache_2_0` code,
+`cc_by_nc_sa` prose. It donates on the code side and not on the prose side, so
+its patterns and YAML arrangements are available while nothing written in its
+documentation may be quoted anywhere. Collapsing the record to either half would
+be wrong in a different direction in each case, which is why the record carries
+both.
+
+This agrees with `design.md`'s statement of the same consequence ("two of four
+repos contribute concepts only") and with `proposal.md`. Both are prose claims
+about a derived fact, and neither is checked. The check recomputes each record's
+statuses and obligations and fails one that contradicts the table, so a record
+edited to disagree is caught -- but nothing anywhere compares the *count* "two of
+four", or reads those two sentences. A record whose `license_code` changed would
+see the check red, since a hand-written status beside it would now contradict the
+table; a record whose statuses were changed *consistently with* the new licence
+would pass every check and leave both prose claims stale and unnoticed. That is
+the gap, stated as a gap rather than as a reassurance, which is why this section
+is the one place the three are reconciled by a reader rather than by a rule.
+
+### The contact ask is what could change the count
+
+Both non-granting repos are `not_attempted`, with `attempted_on: null` and a
+reason, because making contact is an outward-facing action that needs the user's
+explicit authorisation. `fwartner` is the one where a reply is most likely to
+change something: its README declares MIT and only the file is missing, so a
+confirmation would move it to `reusable` and the count to three. `johnkoht` has
+no stated intent to confirm, so its ask is a cold one. Neither has been sent;
+[`author-contact.md`](author-contact.md) carries the exact ask for each.

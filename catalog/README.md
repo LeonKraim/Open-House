@@ -80,9 +80,22 @@ schema is written first, so the data cannot be written into an unchecked gap.
 `reuse_status_code`, `reuse_status_prose`, `obligations`,
 `readme_licence_claim`, `licence_claim_discrepancy`, `author_contact`.
 
-The two `reuse_status_*` fields are **derived**, not typed: a hand-written status
-that contradicts the derivation table fails naming the record. `author_contact`
-is `channel`, `attempted_on`, `outcome`, `reason`.
+The three derived fields are **derived**, not typed. `reuse_status_code` comes
+from `license_code` and `reuse_status_prose` from `license_prose`; `obligations`
+comes from `license_code`, since an obligation attaches to the code grant rather
+than to the documentation. The check recomputes all three and fails any that
+disagrees, naming the record, and rejects an obligation outside the four the spec
+names. `author_contact` is `channel`, `attempted_on`, `outcome`, `reason`.
+
+`repo` is the repository's owner handle, lowercased -- `ccostan`, `renemarc`,
+`fwartner`, `johnkoht`. It is the token `docs/reference/<repo>.md` is named for
+and the name `repos.yaml` carries; the full URL lives there, in `repo_url`.
+
+The same check also reads `behaviors.yaml`, because a row's `license`,
+`reuse_status` and `obligations` are derived from the code licences of the repos
+it cites. Its findings carry the `row-license` category rather than `licenses`,
+since the file to open is `behaviors.yaml`. The file is empty until section 4,
+and the rule is silent on an empty one rather than reporting every absence.
 
 **`repos.yaml`** -- `repos[]`:
 
