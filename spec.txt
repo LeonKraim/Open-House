@@ -56,7 +56,7 @@ Declarative-only interpreter with a capability sandbox: only bound entities, onl
 Dependencies, conflicts, engine_api ranges, semver, SPDX license, i18n strings.
 Pack kinds: module, room-template, behavior, profile-set, house-template.
 Official packs: Bedtime button (lights off, Sleep mode, optional thermostat, locks off by default), Roomba button (idle starts, cleaning sends home, paused resumes, stuck notifies), bathroom fan, guest mode, default room templates, plus packs derived from the merged catalog.
-Triggers from a dashboard button, a physical button, or an Apple Home switch.
+Triggers from a dashboard button or a physical button.
 Pack CLI: validate, test, diff-permissions.
 Exit: official packs pass validation and scenarios, and two modules cannot fight over one light.
 Phase 3: Profiles, export, migrations
@@ -81,10 +81,10 @@ Per-room settings page lists every bound device with status and rebind/replace a
 "Add module to room" shows only packs the room can satisfy, with a conflict check before install.
 Limited view for non-admin household members, plus a generated dashboard.
 Exit: the whole journey runs with no YAML.
-Phase 6: Apple Home and eject
-Managed HomeKit bridge exposing module buttons and profile selects only, handling the accessory limit and renames.
-In-app notes on Apple room assignment and the home-hub requirement.
-"Eject room to plain automations" and clean uninstall.
+Phase 6: removed
+Apple Home and the HomeKit bridge are out of this project's scope. The phase number is kept rather than reused, so existing references to phases 7 and 8 keep their meaning.
+Eject -- "eject room to plain automations" plus clean uninstall -- is deferred, not cancelled.
+It is in no phase, and is a candidate to add after phase 8 only if the user approves it first.
 Phase 7: Registry and community store
 Pointer files (repo, commit SHA, SHA-256, tier), generated index, revocation list.
 CI: schema, permission lint, permission diff versus the previous version, scenario tests on the fake house, typosquat checks.
@@ -93,7 +93,7 @@ Store tab: browse, install by hash, update gating on permission changes, cached 
 Publish button: export as a template, then open a prefilled PR.
 Exit: a third party publishes and installs a pack end to end.
 Phase 8: Polish and hardening
-Simulated user journey as automated e2e acceptance tests: setup, first-day override, bed button, Roomba, sensor death and replace, update with opt-in behaviors, eject.
+Simulated user journey as automated e2e acceptance tests: setup, first-day override, bed button, Roomba, sensor death and replace, update with opt-in behaviors.
 Messy-house fixtures, fault and fuzz passes, Docker e2e and Playwright on a schedule, and a real-home beta.
 Safety audit: smoke/CO and leak alerts bypass all modes, nothing auto-unlocks or opens garages, sensor-death fallbacks.
 UX: empty states, plain-language errors, decision log as "why did this happen," onboarding, What's new (opt-in), accessibility, mobile, localization.

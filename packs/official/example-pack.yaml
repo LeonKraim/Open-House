@@ -1,0 +1,37 @@
+# The hand-written example pack -- task 7.4.
+#
+# It exists for the same reason the example house does: a generated example
+# proves only that the generator and the schema agree with each other, not that a
+# person can write to the schema at all. So this file is written to the current
+# `pack-manifest` schema by hand and is the one pack the project ships.
+#
+# A pack is portable because it names placeholders, never a house, a room or an
+# entity: `requires_slots` is what it must be plugged into, `optional_slots` what
+# it can use if the house has it. Both are slots `catalog/slots.yaml` declares,
+# so a house that binds them satisfies the pack wherever it is a real room type's
+# slots.
+#
+# `behaviours` is the clause task 7.1 unblocked. Each behaviour names a trigger, a
+# condition and an action, and those terms are not restated here -- the manifest
+# schema references `behavior-vocabulary/1.1.0.json`, so the set of behaviours a
+# pack may declare is the vocabulary's published set. `service` is an action the
+# extraction observed across the four estates and `1.1.0` therefore publishes;
+# a pack using a term outside the vocabulary fails validation, naming the pack
+# and the term.
+name: example_pack
+version: "1.0.0"
+description: >-
+  A motion-triggered lighting pack, the smallest pack that exercises both a
+  required and an optional slot and declares a behaviour in the frozen
+  vocabulary.
+kind: lighting
+requires_slots: [light_group, motion_sensor]
+optional_slots: [lux_sensor]
+provides:
+  - path: packs/official/example_pack/motion_light.yaml
+    class: automation
+behaviours:
+  - name: motion_turns_on_light
+    trigger: state
+    condition: state
+    action: service

@@ -65,6 +65,16 @@ PINNABLE_CLASSES: tuple[str, ...] = tuple(c for c in ARTIFACT_CLASSES if c != "o
 #: Parse outcomes, tracked separately from class so class counts still sum.
 PARSE_OUTCOMES: tuple[str, ...] = ("parsed", "unparsed", "not_applicable")
 
+#: Why a selected file received the residual class `other`.
+#:
+#: The closed set `reference-catalog` names, repeated from the schema for the
+#: file that carries it. Deliberately small, and each value is a claim about why
+#: the class could not be decided: `unknown_artifact` is "we could not tell" and
+#: `generated_file` is "a tool wrote it rather than a person". A third value
+#: invented at the point of use would be an excuse rather than a reason, which
+#: is why the check reads this tuple rather than any string the file supplies.
+OTHER_REASONS: tuple[str, ...] = ("unknown_artifact", "generated_file")
+
 
 def catalog_data_files() -> list[Path]:
     """Every committed data file under `catalog/`, excluding prose.

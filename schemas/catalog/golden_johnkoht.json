@@ -1,0 +1,62 @@
+{
+  "$id": "https://open-house.invalid/schemas/catalog/golden_johnkoht.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Golden selection for johnkoht",
+  "description": "Hand-picked paths from John Koht's configuration, each carrying the artifact class it is expected to receive. The class is what makes an entry a check rather than a line of a list: a path alone says only that something was selected, while a path with its class fails both when the path stops being selected and when it is selected as the wrong thing. It is not exhaustive over the corpus -- the inventory is that -- and deliberately so: a file listing every selected path would be a copy of the inventory that nobody reads, where these entries are chosen so that an exclude rule broad enough to swallow a directory takes one of them with it.\n",
+  "schema_version": "1.0.0",
+  "type": "object",
+  "required": [
+    "repo",
+    "entries"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "repo": {
+      "const": "johnkoht",
+      "description": "The repository's owner handle, repeated here from the filename so that the two can be checked against each other: a file whose entries describe one repo while sitting under another's name is the kind of copy-paste error nothing else in the project would catch."
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "description": "At least one pinned path, because a golden file with no entries guards nothing.",
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    }
+  },
+  "$defs": {
+    "artifactClass": {
+      "enum": [
+        "package",
+        "automation",
+        "script",
+        "scene",
+        "helper",
+        "template",
+        "blueprint",
+        "dashboard",
+        "custom_integration",
+        "other"
+      ],
+      "description": "The closed set, repeated from the `reference-catalog` spec. `other` is admitted as a value but is not admissible as a pin: the class-pinning requirement excludes it, because it is defined as the residual a file falls into when no other class fits, and pinning it would commit the corpus to keeping a file whose only justification is that we could not classify it."
+    },
+    "entry": {
+      "type": "object",
+      "required": [
+        "path",
+        "class"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repo-relative, exactly as `git ls-files` reports it."
+        },
+        "class": {
+          "$ref": "#/$defs/artifactClass"
+        }
+      }
+    }
+  }
+}

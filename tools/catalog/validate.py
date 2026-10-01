@@ -20,7 +20,33 @@ from referencing import Registry, Resource
 from referencing.exceptions import NoSuchResource, Unresolvable
 from referencing.jsonschema import DRAFT202012, Schema
 
-from . import invariants, licenses, paths, schemas
+from . import (
+    attribution,
+    behaviors,
+    ci,
+    conformance,
+    examples,
+    exceptions,
+    facts,
+    golden,
+    identifier_gate,
+    integrations,
+    invariants,
+    inventory,
+    lexicon,
+    licenses,
+    normalise,
+    notices,
+    paths,
+    repos,
+    room_types,
+    rooms,
+    rules,
+    schemas,
+    scope,
+    seeds,
+    slots,
+)
 from .errors import CheckError, Report
 from .narrow import as_mapping, as_sequence
 
@@ -587,7 +613,7 @@ def load_catalog_schema(stem: str) -> dict[str, object]:
 
 #: Every check that reads only this repository, in the order they run. A list
 #: rather than a sequence of calls so that `validate_all` can wrap each one in
-#: the same `CheckError` handling without repeating it nine times, and so that
+#: the same `CheckError` handling without repeating it at every site, and so that
 #: adding a check is one line rather than two.
 _CHECKS: tuple[Callable[[Report], None], ...] = (
     invariants.check_version_control,
@@ -599,6 +625,28 @@ _CHECKS: tuple[Callable[[Report], None], ...] = (
     schemas.check_immutability,
     check_catalog_data_files,
     licenses.check_licenses,
+    repos.check_repos,
+    rules.check_rules,
+    golden.check_golden,
+    inventory.check_inventory,
+    exceptions.check_exceptions,
+    conformance.check_conformance,
+    facts.check_fact_allowlist,
+    normalise.check_hardcoded_refs,
+    room_types.check_room_types,
+    rooms.check_rooms,
+    slots.check_slots,
+    integrations.check_integrations,
+    seeds.check_seeds,
+    lexicon.check_lexicon,
+    behaviors.check_behaviors,
+    behaviors.check_overlap,
+    identifier_gate.check_identifier_gate,
+    scope.check_scope,
+    notices.check_notices,
+    attribution.check_attribution,
+    examples.check_examples,
+    ci.check_ci_configuration,
 )
 
 
@@ -617,11 +665,27 @@ def validate_all() -> Report:
     something already known to be broken, and letting it escape would mean the
     command that is the pre-commit hook and the CI gate could fail with a
     traceback instead of naming the file at fault.
+
+    A `CheckError` is collected once, however many checks it reaches. Several
+    checks read the same file and raise the same error from it -- a
+    `catalog/licenses.yaml` that will not parse is raised by
+    `licenses.load_licences`, which the licences check and every other check that
+    needs a repo's status all call -- and rendered once per caller it is one
+    line repeated with the same check, the same file and the same words. That
+    reads as several defects and buries the diagnostics that are different, so a
+    fact several checks each found is collapsed to the single diagnostic it is.
+    The key is the whole rendered triple, so two genuinely different findings --
+    which cannot share a check, a location and a message -- are never merged.
     """
     report = Report()
+    seen: set[tuple[str, str, str]] = set()
     for check in _CHECKS:
         try:
             check(report)
         except CheckError as exc:
+            key = (exc.check, exc.where, exc.message)
+            if key in seen:
+                continue
+            seen.add(key)
             report.add(exc.check, exc.where, exc.message)
     return report

@@ -35,19 +35,32 @@ if TYPE_CHECKING:
 
 CATALOG_CHECK = "catalog-schema"
 
-#: The data files task 1.6 creates, by stem. Named rather than discovered,
-#: because a test that reads the answer out of the directory it is checking
-#: agrees with any directory, including one where a stub was never written.
+#: The catalog data files, by stem. Named rather than discovered, because a test
+#: that reads the answer out of the directory it is checking agrees with any
+#: directory, including one where a stub was never written.
+#:
+#: Tasks 1.6 and 2.x wrote all but the four `golden_*` ones, which are section 3's
+#: and the first here that are not stubs: a stub is an empty document waiting for
+#: an extractor, and a golden file is hand-written data that is complete on the
+#: day it lands. They are in the same tuple because the tuple is the set of files
+#: the schema pairing has to hold for, and that set does not care which task
+#: wrote one.
 STUBS = (
     "behaviors",
     "edge_cases",
     "file_rules",
+    "golden_ccostan",
+    "golden_fwartner",
+    "golden_johnkoht",
+    "golden_renemarc",
     "hardcoded_refs",
     "integrations",
+    "inventory",
     "inventory_exceptions",
     "licenses",
     "overlap_exceptions",
     "pain_points",
+    "raw-behaviors",
     "repos",
     "room_types",
     "rooms",
@@ -58,7 +71,13 @@ STUBS = (
 #: there is an extraction to emit. They are listed because their presence ahead
 #: of their data is the ordering task 1.6 asks for -- the schema exists before
 #: the file it describes, so the file cannot be written into an unchecked gap.
-DEFERRED_DATA = ("inventory", "raw-behaviors")
+#:
+#: `inventory` left this list when task 3.3 generated it and `raw-behaviors` when
+#: task 3.5 wrote it, which is the list working as intended: the entry is removed
+#: by the task that fills the gap, and until then it is the record that the gap
+#: was deliberate. It is empty now, and kept -- a tuple nobody has to re-invent
+#: the next time a schema lands ahead of its data.
+DEFERRED_DATA: tuple[str, ...] = ()
 
 _DRAFT = '"$schema": "https://json-schema.org/draft/2020-12/schema"'
 

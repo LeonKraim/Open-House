@@ -281,8 +281,9 @@ def test_a_licences_file_that_will_not_parse_is_a_diagnostic_not_a_traceback(
     matters is that the command which *is* the pre-commit hook returns a report.
     `validate_all` catches `CheckError` and nothing else, and a `YAMLError` is
     not one, so an unguarded read here escapes the check, escapes `validate_all`,
-    and reaches the hook as a traceback -- losing the findings of all nine
-    checks, its own included.
+    and reaches the hook as a traceback -- losing every other check's findings,
+    its own included. (A count does not belong in this sentence: it had one, and
+    the count was wrong by the time the check registry grew.)
     """
     write(fake_root, "catalog/licenses.yaml", "repos: [\n")
 

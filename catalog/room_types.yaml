@@ -1,10 +1,220 @@
-# Room types derived from the real rooms, plus the `house` scope.
+# The room types derived from the real rooms, plus the `house` scope.
 #
-# Schema: schemas/catalog/room_types.json. Validate with `oh-catalog validate`.
+# Schema: schemas/catalog/room_types.json, whose `room_types[]` items validate
+# against the runtime `room-type` schema. Validate with `oh-catalog validate`.
 #
-# Empty until task 5.2. `house` is present because the schema requires it and
-# because a behaviour scoped to the house must not be forced through a room type
-# it has nothing to do with.
-room_types: []
+# Each type names the concrete source rooms that produced it, by `(repo, room)`,
+# and those names join into `catalog/rooms.yaml` -- which is where the paths
+# live, so none are repeated here. `tools/catalog/room_types.py` re-derives the
+# join and fails a source that names no recorded room, a room no type covers,
+# and a room two types both claim, so the map partitions the real rooms.
+#
+# The derivation runs one way and is not truncated. A kind that exists in one
+# repo is recorded, because the map has to be able to express every real room.
+# `default: true` claims something narrower -- that Phase 1 may pre-populate the
+# kind for a stranger -- so it requires the source rooms to come from at least
+# two repos, and a kind one repo has stays `default: false`. A type name is our
+# generic word for the kind; each repo's own spelling stays in `rooms.yaml`,
+# which is why `living_room` lists ccostan's `living_room` beside renemarc's
+# `lounge` and fwartner's `wohnzimmer`.
+#
+# `provides_slots` names the slots a room of this kind offers, drawn from the
+# controlled vocabulary of roles `tools/catalog/lexicon.py` fixes (task 4.2) --
+# the same vocabulary `catalog/slots.yaml` will record in task 5.3. The
+# membership check between the two files is task 6.3's scope-aware check; it is
+# not restated here, because this file lands before the slot records exist.
+room_types:
+  - name: basement
+    description: >-
+      A lower-floor room, with occupancy, modes and lighting in the one
+      instance.
+    default: false
+    source_rooms:
+      - {repo: johnkoht, room: basement}
+    provides_slots: [light_group, motion_sensor]
+
+  - name: bathroom
+    description: >-
+      A room with a bath, basin or shower. A half-bath is one of these: the kind
+      is the water room, not the fixture count.
+    default: true
+    source_rooms:
+      - {repo: ccostan, room: master_bath}
+      - {repo: renemarc, room: washroom}
+      - {repo: johnkoht, room: main_bathroom}
+      - {repo: johnkoht, room: mudroom_bathroom}
+      - {repo: johnkoht, room: powder_room}
+    provides_slots: [humidity_sensor, light_group, motion_sensor]
+
+  - name: bedroom
+    description: >-
+      A sleeping room, including the children's rooms and a suite that is one.
+    default: true
+    source_rooms:
+      - {repo: ccostan, room: bedroom}
+      - {repo: renemarc, room: bedroom}
+      - {repo: johnkoht, room: main_bedroom}
+      - {repo: johnkoht, room: ninos_room}
+      - {repo: johnkoht, room: gianluca_room}
+      - {repo: johnkoht, room: jr_suite}
+    provides_slots: [climate_zone, light_group, lux_sensor, media_player, motion_sensor, scene_selector, temperature_sensor]
+
+  - name: dining_room
+    description: >-
+      A room for eating, with its own lighting and a speaker.
+    default: false
+    source_rooms:
+      - {repo: johnkoht, room: dining_room}
+    provides_slots: [light_group, media_player, motion_sensor]
+
+  - name: driveway
+    description: >-
+      The vehicle approach to the property. ccostan has one; johnkoht's carries
+      camera detection, which is what corroborates the kind.
+    default: true
+    source_rooms:
+      - {repo: ccostan, room: driveway}
+      - {repo: johnkoht, room: driveway}
+    provides_slots: [motion_sensor]
+
+  - name: family_room
+    description: >-
+      A shared sitting room, kept distinct from the formal living room.
+    default: false
+    source_rooms:
+      - {repo: johnkoht, room: family_room}
+    provides_slots: [light_group, media_player, motion_sensor]
+
+  - name: foyer
+    description: >-
+      The entry room inside the front door, where the door lock lives.
+    default: false
+    source_rooms:
+      - {repo: johnkoht, room: foyer}
+    provides_slots: [contact_sensor, light_group, lock, motion_sensor]
+
+  - name: garage
+    description: >-
+      A room for vehicles, with a door. johnkoht's carries door, lighting and
+      occupancy behaviour; ccostan's gives the kind its second repo.
+    default: true
+    source_rooms:
+      - {repo: ccostan, room: garage}
+      - {repo: johnkoht, room: garage}
+    provides_slots: [cover, light_group, motion_sensor]
+
+  - name: gazebo
+    description: >-
+      A covered outdoor structure, with presence in the one instance so far.
+    default: false
+    source_rooms:
+      - {repo: johnkoht, room: gazebo}
+    provides_slots: [motion_sensor]
+
+  - name: hallway
+    description: >-
+      A circulation space on a floor.
+    default: false
+    source_rooms:
+      - {repo: johnkoht, room: upstairs_hallway}
+    provides_slots: [light_group, motion_sensor]
+
+  - name: kitchen
+    description: >-
+      A room for cooking. Every one of the four repos has one, with lighting,
+      occupancy and an ambient-light reading.
+    default: true
+    source_rooms:
+      - {repo: ccostan, room: kitchen}
+      - {repo: renemarc, room: kitchen}
+      - {repo: fwartner, room: kitchen}
+      - {repo: johnkoht, room: kitchen}
+    provides_slots: [climate_zone, contact_sensor, light_group, lux_sensor, media_player, motion_sensor, temperature_sensor]
+
+  - name: laundry
+    description: >-
+      A room where washing is done or stored. johnkoht has a main-level one and
+      an upstairs one, the same kind in two places.
+    default: false
+    source_rooms:
+      - {repo: johnkoht, room: laundry}
+      - {repo: johnkoht, room: upstairs_laundry}
+    provides_slots: [light_group, motion_sensor]
+
+  - name: living_room
+    description: >-
+      The main sitting room. ccostan calls it `living_room`, renemarc `lounge`
+      and fwartner `wohnzimmer`; the type name is ours, the spellings are theirs.
+    default: true
+    source_rooms:
+      - {repo: ccostan, room: living_room}
+      - {repo: renemarc, room: lounge}
+      - {repo: fwartner, room: wohnzimmer}
+    provides_slots: [light_group, lux_sensor, media_player, motion_sensor, temperature_sensor]
+
+  - name: mudroom
+    description: >-
+      A utility entry room that takes outdoor traffic, with the garage-entry
+      door and its lock.
+    default: false
+    source_rooms:
+      - {repo: johnkoht, room: mudroom}
+    provides_slots: [contact_sensor, light_group, lock, motion_sensor]
+
+  - name: office
+    description: >-
+      A room used for work, with lighting, a speaker, a display and a
+      temperature reading.
+    default: false
+    source_rooms:
+      - {repo: johnkoht, room: office}
+    provides_slots: [climate_zone, contact_sensor, light_group, lux_sensor, media_player, motion_sensor, scene_selector, temperature_sensor]
+
+  - name: playroom
+    description: >-
+      A room set aside for children to play.
+    default: false
+    source_rooms:
+      - {repo: johnkoht, room: playroom}
+    provides_slots: [climate_zone, light_group, media_player, motion_sensor]
+
+  - name: pool
+    description: >-
+      An outdoor swimming pool area, with occupancy and a camera.
+    default: false
+    source_rooms:
+      - {repo: johnkoht, room: pool}
+    provides_slots: [motion_sensor]
+
+  - name: porch
+    description: >-
+      A covered outdoor entry area, with a camera.
+    default: false
+    source_rooms:
+      - {repo: johnkoht, room: porch}
+    provides_slots: [motion_sensor]
+
+  - name: stairs
+    description: >-
+      A stairwell between floors, with motion lighting.
+    default: false
+    source_rooms:
+      - {repo: johnkoht, room: stairs}
+    provides_slots: [light_group, motion_sensor]
+
+  - name: sunroom
+    description: >-
+      A glazed room for daylight, with occupancy.
+    default: false
+    source_rooms:
+      - {repo: johnkoht, room: sunroom}
+    provides_slots: [light_group, motion_sensor]
+
+# The house scope: slots that belong to the whole house rather than to a room.
+# A house-scoped behaviour may require only these, a room-scoped one only what
+# some room type above provides. They are the house-scoped roles of the lexicon
+# -- the mode selector, the house's own light group, its locks, its scenes and
+# its vacuum -- so an away shutdown has the slots it needs without being pushed
+# through a room type.
 house:
-  slots: []
+  slots: [contact_sensor, house_mode, leak_sensor, light_group, lock, media_player, scene_selector, vacuum]

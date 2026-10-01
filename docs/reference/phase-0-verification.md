@@ -287,8 +287,8 @@ the data path. The static walk has no equivalent single site — it recurses
 through `_references`, and an arm there would have to decide what a
 partially-walked document means. The one fix that covers both, and everything
 else a check might raise, is a catch at the outermost boundary in `validate_all`
-turning any exception from any check into a diagnostic — which changes all nine
-checks' contract rather than this one's. All three are left as decisions rather
+turning any exception from any check into a diagnostic — which changes the
+contract of every check rather than this one's. All three are left as decisions rather
 than taken as a side effect of section 1; the honest summary is that the
 remaining window has more than one door, not that it has only one.
 
@@ -401,6 +401,33 @@ Everything in `oh-catalog validate` is a pure function of this repository, which
 task 7.7 verifies by running the suite in a checkout with `ressources/` and
 `.local/` removed.
 
+## CI runs the suite on this repository alone (task 7.8)
+
+`.github/workflows/ci.yml` runs two jobs, and neither reads a clone because
+neither has one: `oh-catalog validate`, and `pre-commit run --all-files`. The
+validator job is a single command because every check whose boundary is drawn
+here is a check in `tools/catalog/validate.py`, so the invariants, the schema
+succession and immutability, the catalog data, the examples, the attribution
+drift and the identifier gate all run in CI by being registered there and
+nowhere else. The hooks job runs the same configuration a developer runs, on
+`ubuntu-latest`, so a hook that does not work fails the pipeline rather than the
+one checkout that happened to try it.
+
+The guard is `tools/catalog/ci.py::check_ci_configuration`: it reads the
+committed workflows and reports any job that names `ressources/` or `.local/`,
+naming the job. It is the spec's "a CI job needs the reference clones" scenario,
+and it is checked against the configuration rather than against a runner, because
+a job that reads a clone fails the same way whether the directory was never
+checked out or was there and wrong -- and only the first is the state this
+repository commits to.
+
+`packs/official/example-pack.yaml` is validated by the same examples check, which
+names all three examples in `examples.VALIDATED`. Task 7.4 has landed: the pack is
+hand-written, listed in `HANDWRITTEN`, and validated against the current
+`pack-manifest` schema, whose behaviour terms reference `behavior-vocabulary` --
+so a pack that declares a behaviour term the vocabulary does not carry fails the
+job, naming the pack and the term.
+
 ## Which repos may donate expression, and the count that says so
 
 Task 2.5 asks for the donation set to be confirmed from the derived statuses
@@ -457,3 +484,239 @@ change something: its README declares MIT and only the file is missing, so a
 confirmation would move it to `reusable` and the count to three. `johnkoht` has
 no stated intent to confirm, so its ask is a cold one. Neither has been sent;
 [`author-contact.md`](author-contact.md) carries the exact ask for each.
+
+## The export round-trip is deferred to Phase 3
+
+Task 7.5's second half, recorded here because the deferral is a decision rather
+than an omission and the requirement it defers is easy to mistake for something
+Phase 0 shipped.
+
+`packs/official/example-export.yaml` is a static, hand-written export document
+that validates against `schemas/export-document/1.0.0.json`. What Phase 0
+freezes is the document's **shape** and nothing more. The round-trip the export
+exists to serve -- serialise a bound house to this document, read it back, diff
+the reconstruction against the live house as a dry run, and re-link bindings to
+new devices after a re-pair -- is Phase 3's, which `spec.txt` assigns it and
+`design.md` records as a non-goal ("**Not** the export round-trip. Phase 0
+freezes the export document schema and ships a static example that validates;
+serialise/re-import is Phase 3").
+
+The one property Phase 0 does enforce, because it is a shape rule and not a
+behaviour, is that a binding carries a `registry_id` as well as an `entity_id`
+and the schema refuses a binding that carries only `entity_id`. An entity id
+alone is not stable across a re-pair -- the id a user sees can be reassigned --
+so a binding naming only that id could not be re-imported, which is the one
+thing an export is for. The failing scenario in the requirement is checked
+against the committed schema rather than restated, so the rule cannot drift from
+the schema that publishes it.
+
+The example pack (`example-pack.yaml`, task 7.4) has landed. It declares its kind,
+its required and optional slots, and its behaviours, and the current
+`pack-manifest` schema references `behavior-vocabulary` `1.1.0` for the behaviour
+terms rather than restating them -- so the pack validates against both the
+manifest and the vocabulary at once, and a pack using a term the vocabulary does
+not carry fails, naming the pack and the term. The `pack-manifest` schema gained
+the version that carries `kind`, `optional_slots` and `behaviours` this way: by
+adding `1.1.0.json` and naming `1.0.0` in its `supersedes`, never by editing the
+published `1.0.0`, which is the one route a runtime schema is allowed to take.
+
+## Requirement-to-check mapping (task 8.1)
+
+The mapping from each requirement in the four delta specs to a check that has
+been *seen to fail* on a violating fixture. It is machine-readable — the block
+below is what `tools/acceptance.py` reads — and the requirement set is rebuilt
+by parsing `### Requirement:` out of the specs, never by trusting a count
+written here or in the script.
+
+The gate runs as `python -m tools.acceptance`. For every requirement it resolves
+the named node id in `pytest --collect-only`, runs it, and fails when a
+requirement is unmapped, when its test is not collected, or when the test does
+not pass. The last clause is the whole point of the gate: the named test is a
+`fake_root` fixture built to violate the requirement, and the check firing on it
+is what makes the test pass — so a test that does *not* pass is a check that did
+not fire, which is an unenforced clause. Reading this against `tasks.md`'s
+"fail if the test is missing or passes": "the test" there is the check under
+test, whose passing on a violating fixture is the failure. `tests/test_slots.py`
+states the same intent in the package's own words — the acceptance stage wants
+"exactly that observation", a check seen to fail, one violating fixture per
+requirement.
+
+`spec` is the spec directory under
+`openspec/changes/phase-0-foundations/specs/`; `requirement` is the heading text
+verbatim. `fixture` names the violating input the test builds. `gap`, where
+present, records a requirement no check enforces — reported as a finding rather
+than papered over with a test that covers only part of it.
+
+```yaml acceptance-mapping
+- spec: architecture-invariants
+  requirement: Fixed repository module layout
+  test: tests/test_layout_and_purity.py::test_missing_panel_directory_is_reported
+  fixture: "a fixture tree with the `panel/` module absent"
+- spec: architecture-invariants
+  requirement: Engine core is free of Home Assistant imports
+  test: tests/test_layout_and_purity.py::test_engine_import_of_homeassistant_inside_try_is_rejected
+  fixture: "an `engine/` file importing `homeassistant` inside a `try`"
+- spec: architecture-invariants
+  requirement: Registry stays out of this repository
+  test: tests/test_registry_boundary.py::test_a_committed_artifact_carrying_a_pointer_key_is_rejected
+  fixture: "a committed artifact carrying a `registry_url` key"
+- spec: architecture-invariants
+  requirement: The project is under version control
+  test: tests/test_registry_boundary.py::test_a_root_with_no_history_fails_naming_the_root
+  fixture: "a fixture tree with no git history"
+- spec: architecture-invariants
+  requirement: Boundary checks run in CI
+  test: tests/test_golden.py::test_the_registered_suite_passes_in_a_checkout_without_the_clones
+  fixture: "a checkout with `ressources/` and `.local/` both absent"
+- spec: attribution
+  requirement: Per-repo licence record split by artifact kind
+  test: tests/test_licenses.py::test_a_readme_claim_without_a_recorded_discrepancy_is_reported
+  fixture: "a README claiming a licence with no licence file, and the discrepancy unrecorded"
+- spec: attribution
+  requirement: Statuses are derived from the licence, not asserted
+  test: tests/test_licenses.py::test_a_hand_written_status_contradicting_the_table_is_reported
+  fixture: "a record whose `reuse_status_code` contradicts the derivation table"
+- spec: attribution
+  requirement: Published permissiveness order
+  test: tests/test_licenses.py::test_a_licence_value_outside_the_order_is_reported
+  fixture: "a record using a licence value outside the published order"
+- spec: attribution
+  requirement: Reuse gate is provenance-resolved and scoped
+  test: tests/test_identifier_gate.py::test_an_identifier_in_concept_fails_naming_it
+  fixture: "a row citing an `ideas_only` repo with an `entity_ref` in `concept`"
+- spec: attribution
+  requirement: Non-permissive prose is never quoted
+  test: tests/test_prose_gate.py::test_a_quoted_passage_fails_naming_the_artifact_and_the_repo
+  fixture: "a shipped document quoting a verbatim passage from a prose-withholding repo"
+- spec: attribution
+  requirement: State-change notices are honoured
+  test: tests/test_attribution.py::test_a_state_changes_repo_states_the_change_notice
+  fixture: "the attribution notice for the `state_changes` source"
+  gap: "only the attribution-notice half is enforced: no check in tools/catalog reads a row's or a file's `change_notice`, which is task 6.5"
+- spec: attribution
+  requirement: Author contact is attempted and recorded
+  test: tests/test_licenses.py::test_an_unlicensed_repo_without_a_contact_block_is_reported
+  fixture: "an unlicensed repo with no `author_contact` block"
+- spec: attribution
+  requirement: Attribution is surfaced and regenerated
+  test: tests/test_attribution.py::test_a_divergent_repo_entry_is_named
+  fixture: "a committed `docs/attribution.md` diverging from a fresh regeneration"
+- spec: configuration-schemas
+  requirement: One schema home, and a schema for every concept
+  test: tests/test_schema_versioning.py::test_a_concept_with_no_schema_fails_naming_the_concept
+  fixture: "a tree with one of the eight runtime concepts absent from `schemas/`"
+- spec: configuration-schemas
+  requirement: Behaviour vocabulary is defined, not inferred
+  test: tests/test_vocabulary.py::test_a_pack_using_an_out_of_vocabulary_action_fails_naming_the_pack
+  fixture: "a pack using an action the vocabulary does not carry"
+- spec: configuration-schemas
+  requirement: Published schema versions are immutable
+  test: tests/test_schema_versioning.py::test_editing_a_published_version_is_a_change
+  fixture: "a version file edited after the commit that first introduced it"
+- spec: configuration-schemas
+  requirement: Hand-written example house validates
+  test: tests/test_examples.py::test_the_example_house_absent_from_handwritten_fails
+  fixture: "`example-house.yaml` present but absent from `packs/official/HANDWRITTEN`"
+- spec: configuration-schemas
+  requirement: Hand-written example pack validates
+  test: tests/test_examples.py::test_the_example_pack_declares_a_behaviour_outside_the_vocabulary_fails
+  fixture: "`example-pack.yaml` declaring an action term not in `behavior-vocabulary`"
+- spec: configuration-schemas
+  requirement: Export document is schema-frozen with a static example
+  test: tests/test_examples.py::test_an_export_binding_with_only_entity_id_fails_naming_the_binding
+  fixture: "an export binding carrying only `entity_id` and no `registry_id`"
+- spec: configuration-schemas
+  requirement: Exit criterion is enforced in CI
+  test: tests/test_examples.py::test_a_missing_example_is_reported_naming_the_file
+  fixture: "one of the hand-written examples absent from `packs/official/`"
+- spec: reference-catalog
+  requirement: Repository identification record
+  test: tests/test_repos.py::test_an_empty_ha_style_list_is_named
+  fixture: "a repo record with an empty `ha_style` list"
+- spec: reference-catalog
+  requirement: Every file is either selected or excluded by a named rule
+  test: tests/test_file_rules.py::test_a_file_no_rule_matches_is_reported_by_name
+  fixture: "a tracked path matched by neither a select nor an exclude rule"
+- spec: reference-catalog
+  requirement: Golden files pin each repo's selection
+  test: tests/test_golden.py::test_a_class_pinned_by_no_repo_is_named
+  fixture: "a golden-file set that pins no path of one class"
+- spec: reference-catalog
+  requirement: Complete inventory with justified residuals
+  test: tests/test_exceptions.py::test_an_other_file_with_no_entry_is_named
+  fixture: "an `other`-classed file with no `inventory_exceptions.yaml` entry"
+- spec: reference-catalog
+  requirement: References are classified as entity or service
+  test: tests/test_normalise.py::test_a_service_key_yields_a_service_call_and_enters_no_entity_set
+  fixture: "`service: light.turn_on`, which must not enter an entity identifier set"
+- spec: reference-catalog
+  requirement: Extraction commits facts and withholds expression
+  test: tests/test_normalise.py::test_a_record_with_an_extra_key_fails_validation_naming_the_key
+  fixture: "a raw record carrying a key outside the fact allowlist"
+- spec: reference-catalog
+  requirement: Behaviour records separate concept from expression
+  test: tests/test_behaviors.py::test_a_row_whose_source_withholds_reuse_may_not_carry_expression
+  fixture: "a row whose source is `ideas_only` and whose `expression` is populated"
+- spec: reference-catalog
+  requirement: Reuse classification per behaviour
+  test: tests/test_licenses.py::test_a_row_omitting_a_sources_obligation_is_reported
+  fixture: "a row whose `obligations` omit an obligation one of its source licences carries"
+- spec: reference-catalog
+  requirement: Single-source behaviours are not promoted by default
+  test: tests/test_behaviors.py::test_a_single_source_generic_row_without_an_exception_is_named
+  fixture: "a single-source row classified `generic` and absent from `overlap_exceptions.yaml`"
+- spec: reference-catalog
+  requirement: Cross-repo overlap is reported
+  test: tests/test_behaviors.py::test_an_overlap_entry_naming_one_repo_is_named
+  fixture: "an overlap entry naming a single source repo"
+- spec: reference-catalog
+  requirement: Hardcoding audit maps every reference to a slot
+  test: tests/test_hardcoded_refs.py::test_an_audit_entry_naming_a_service_call_fails
+  fixture: "an audit entry naming a `service_call` rather than an `entity_ref`"
+- spec: reference-catalog
+  requirement: Slot vocabulary derived from cross-repo usage
+  test: tests/test_slots.py::test_a_multi_source_slot_with_single_source_examples_is_named
+  fixture: "a multi-source slot whose examples all come from one repo"
+- spec: reference-catalog
+  requirement: Room-type map covers room and house scope
+  test: tests/test_room_types.py::test_a_default_type_tracing_to_one_repo_is_named
+  fixture: "a `default: true` room type whose source rooms come from one repo"
+- spec: reference-catalog
+  requirement: Solved edge cases become scenario seeds
+  test: tests/test_seeds.py::test_an_edge_case_with_no_phase_1_placeholder_is_named
+  fixture: "an edge case with no Phase 1 placeholder recorded"
+- spec: reference-catalog
+  requirement: Pain points are recorded
+  test: tests/test_seeds.py::test_a_pain_point_with_an_empty_our_answer_is_named
+  fixture: "a pain-point entry with an empty `our_answer`"
+- spec: reference-catalog
+  requirement: Integration dependency ledger
+  test: tests/test_integrations.py::test_a_widely_used_dependency_that_is_not_required_names_it_and_its_repos
+  fixture: "a dependency used by three or more repos disposed as anything but `require`"
+- spec: reference-catalog
+  requirement: Corpus data files are machine-readable and validated
+  test: tests/test_validator.py::test_a_catalog_data_file_with_no_schema_fails_naming_the_file
+  fixture: "a `.yaml` file under `catalog/` with no schema under `schemas/catalog/`"
+```
+
+One row carries a `gap`. It is not an omission in this mapping; it is the
+finding the gate was built to make. `State-change notices are honoured` has only
+its attribution-notice half enforced — no check in `tools/catalog/` reads a
+row's or a file's `change_notice`, which is task 6.5. It is reported by the gate
+as an `is unenforced:` diagnostic rather than passed silently.
+
+## `spec.txt` Phase 0 exit criterion (task 8.2)
+
+`spec.txt` line 44: "every piece of all four repos is classified, the slot
+vocabulary comes from real usage across them, and a hand-written example house
+and pack validate against the schemas." Each clause, with its evidence:
+
+| Clause | Status | Evidence |
+| --- | --- | --- |
+| All four repos classified | Met | `catalog/inventory.json` partitions each repo's `git ls-files` into selected and excluded, closing over the tracked count per repo, with per-class, per-deciding-rule and parse-outcome counts. The closure is a local-only check (`tests/test_inventory.py::test_every_real_repo_closes_over_its_own_git_ls_files`); its committed output is the evidence. `catalog/raw-behaviors.json` carries a fact record for every selected file in every repo. |
+| Slot vocabulary from real usage across them | Met | `catalog/slots.yaml` names slots from a controlled vocabulary; a multi-source slot requires examples from ≥2 repos, and every example names its source repo, that repo's `reuse_status_code`, and the `raw_ids` it was drawn from. Enforced by `check_slots` and `tests/test_slots.py::test_every_multi_source_slot_has_examples_from_two_repos`. |
+| Hand-written example house and pack validate | Met | `packs/official/example-house.yaml` is hand-written, listed in `HANDWRITTEN`, and validates against the current house, room-type and slot schemas. `packs/official/example-pack.yaml` is hand-written, listed in `HANDWRITTEN`, and validates against the current `pack-manifest` schema, which references `behavior-vocabulary` `1.1.0` for its behaviour terms -- so a pack declaring an out-of-vocabulary behaviour fails, named. Enforced by `examples.check_examples` and `tests/test_examples.py::test_the_example_pack_declares_a_behaviour_outside_the_vocabulary_fails`. |
+
+The two commands the task names are run by the coordinator after the phase gate,
+not here: `python -m tools.acceptance` (which runs the suite by design) and
+`openspec validate phase-0-foundations --strict`.

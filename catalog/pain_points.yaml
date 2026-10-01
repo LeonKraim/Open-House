@@ -2,7 +2,83 @@
 #
 # Schema: schemas/catalog/pain_points.json. Validate with `oh-catalog validate`.
 #
-# Empty until task 6.2. Every entry carries `our_answer`, non-empty and naming
-# the downstream phase that will answer it, so an observation cannot be filed as
-# a wish.
-pain_points: []
+# Filled by task 6.2. Every entry carries `our_answer`, non-empty and naming the
+# downstream phase that will answer it, so an observation cannot be filed as a
+# wish; each of the four source repos contributes at least one entry, because a
+# register drawn only from the best-documented setup would answer the wrong
+# question. Every sentence below is written in Open House's own words and no
+# entry carries a link back into a source tree.
+pain_points:
+  - repo: ccostan
+    friction: >-
+      The configuration is written for one household and ships no mapping from
+      its entity names to anyone else's, so a reader who copies it has to rename
+      entities by hand before it will run.
+    why_hard: >-
+      Every automation, script and dashboard refers to entities by the author's
+      own names, and the secrets file that ships is a placeholder, so the copied
+      tree does not start until the reader has rebuilt both the secrets and the
+      naming -- and the repository is offered as something to borrow from rather
+      than run.
+    our_answer: >-
+      Phase 4's first-run config flow asks the user to confirm areas and
+      auto-guesses bindings against their own devices, so no entity and no
+      secret has to be renamed to reach a working setup.
+
+  - repo: renemarc
+    friction: >-
+      Behaviour and interface are spread across two runtimes: Home Assistant YAML
+      carries the automations, and a separate AppDaemon tree carries the
+      wall-mounted dashboards and their custom widgets.
+    why_hard: >-
+      A newcomer who wants to reproduce one behaviour has to know both the YAML
+      include layout and the AppDaemon layout, because the two are loaded and
+      debugged apart from one another and neither one shows the whole system.
+    our_answer: >-
+      Phase 5 renders the panel and a generated dashboard from pack schemas with
+      no pack-supplied JavaScript, so a second dashboard runtime is not needed to
+      get an interface.
+
+  - repo: fwartner
+    friction: >-
+      The setup leans on a large set of third-party blueprints and community
+      components, and the repository's own audit records includes that point at
+      directories which no longer exist, next to definitions that repeat one
+      another.
+    why_hard: >-
+      Before any automation runs, a newcomer has to install and pin dozens of
+      external pieces that the source does not pin, and an include pointing at a
+      directory that is not there fails at load with an error that does not name
+      the piece that is actually missing.
+    our_answer: >-
+      Phase 2 ships the derived defaults as official packs with a declared
+      engine_api range and a pinned dependency set, so no third-party blueprint
+      has to be installed or version-pinned by hand.
+
+  - repo: johnkoht
+    friction: >-
+      Presence is carried in per-person helper selectors that a mesh of
+      automations writes to, so the state the rest of the house reads is authored
+      rather than observed.
+    why_hard: >-
+      A partially copied setup leaves those selectors unwritten and the house
+      reading a stale or in-transition value, and the fault surfaces as a wrong
+      room or a missed arrival rather than as an error anybody can point at.
+    our_answer: >-
+      Phase 1 derives occupancy in the engine from bound sensors, with
+      manual-override detection and a decision log, so the state is computed
+      rather than written by other automations.
+
+  - repo: johnkoht
+    friction: >-
+      A template that merged two energy meters turned a missing reading into a
+      zero, and the running total built on it dropped back to nothing as though
+      the meter had been swapped out.
+    why_hard: >-
+      The fault is invisible where it happens and appears days later as an
+      impossible monthly total, so a newcomer has no signal pointing back at the
+      template that caused it.
+    our_answer: >-
+      Phase 8 defines sensor-death fallbacks and Phase 4's startup safety treats
+      unavailable as distinct from off, so a missing reading cannot be read as a
+      zero in the first place.

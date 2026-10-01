@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from tools.catalog import paths, schemas, validate
+from tools.catalog import paths, schemas, validate, vcs
 from tools.catalog.errors import Report
 
 from .conftest import commit, seed_concepts, write, write_version
@@ -318,6 +318,47 @@ def test_editing_a_catalog_schema_in_place_is_not_a_change(fake_root: Path) -> N
         encoding="utf-8",
         newline="",
     )
+
+    report = Report()
+    schemas.check_immutability(report)
+    assert report.diagnostics == [], report.render()
+
+
+def test_the_committed_tree_is_green(real_root: Path) -> None:
+    """The fifth clause of 7.2: the check on the tree the project actually ships.
+
+    Every other test here builds the tree it checks, which is the only way to
+    watch this check fail -- and is also why none of them has read the tree the
+    project releases. `schema-immutability` is the one check whose subject is
+    committed history rather than the working tree, so a tree whose runtime
+    versions were never committed, or a check re-scoped off the eight concepts,
+    is one a fixture cannot see and is named only here.
+
+    The per-version assertion is what keeps the pass from being vacuous. A check
+    that skipped every file because git knew none of them would report nothing,
+    and nothing is exactly what a green result looks like, so the loop asserts
+    that each version has an introducing commit before the empty report is
+    trusted.
+
+    Written against the tree as it stands, because 7.1 has not run yet. Once
+    `behavior-vocabulary/1.1.0.json` is published this must still hold -- and it
+    is precisely what fails if 7.1 publishes it by editing `1.0.0.json` rather
+    than by adding a file, which is the act the backwards arrow exists to make
+    unnecessary.
+    """
+    assert vcs.is_repository(), (
+        "the committed tree must have history to compare against"
+    )
+
+    for concept in paths.RUNTIME_CONCEPTS:
+        versions = schemas.load_versions(concept)
+        assert versions, f"{concept} has no committed version to compare"
+        for version in versions:
+            commit = vcs.introducing_commit(version.relative)
+            assert commit is not None, (
+                f"{version.relative} has no introducing commit, so the "
+                "immutability check skips it rather than comparing it"
+            )
 
     report = Report()
     schemas.check_immutability(report)

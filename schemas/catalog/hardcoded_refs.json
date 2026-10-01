@@ -1,77 +1,111 @@
 {
-  "$id": "https://open-house.invalid/schemas/catalog/hardcoded_refs.json",
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Hardcoding audit",
-  "description": "Every distinct `entity_ref` the extraction found, with its source repo, its inferred scope and its repo's naming-convention label. This is the second committed facts store, and it carries identifiers from all four repos including the two that grant nothing: an entry holds a `domain.object_id`, a scope and a naming-convention label, and none of those is authored text, which is what a licence withholds. The entry field set is closed, so a field that could hold an alias, a display name, a comment or a YAML fragment cannot be added without editing this file and the allowlist together. The two patterns below are the ones `schemas/catalog/fact-shapes.yaml` declares for `entity_ref` and `slug`; task 3.6 routes this entry schema through `fact-fields.yaml` and `fact-shapes.yaml` exactly as task 3.5 does for `raw-behaviors.json`, and until then a test asserts the inlined patterns equal the declared shapes so the two cannot drift apart in the meantime.",
-  "schema_version": "1.0.0",
-  "type": "object",
-  "required": ["refs"],
-  "additionalProperties": false,
-  "properties": {
-    "refs": {
-      "type": "array",
-      "items": {"$ref": "#/$defs/entry"}
-    }
-  },
   "$defs": {
-    "constant": {
-      "enum": ["device_id", "device_tracker", "person", "sun", "time"],
-      "description": "The fixed things a reference may target instead of a slot. Deliberately heterogeneous -- `device_id` is a targeting key while the others are entity domains -- because the property the justification needs is a single one, and each entry records which kind it is."
-    },
     "entry": {
-      "type": "object",
-      "required": ["entity_ref", "repo", "scope", "naming_convention", "slot", "constant"],
       "additionalProperties": false,
+      "description": "An audit entry. Its key set equals the allowlist exactly, enforced from both sides: this schema is generated from the allowlist, and `additionalProperties: false` closes it in the other direction.",
+      "oneOf": [
+        {
+          "properties": {
+            "slot": {
+              "not": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "constant": {
+              "not": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
       "properties": {
+        "constant": {
+          "description": "The justification, when the reference is one of the fixed things rather than a slot. A closed set, deliberately heterogeneous because the property it needs is single: these are the fixed targets a reference may name instead of a slot.",
+          "enum": [
+            "device_id",
+            "device_tracker",
+            "person",
+            "sun",
+            "time",
+            null
+          ]
+        },
         "entity_ref": {
-          "type": "string",
+          "description": "The literal as the source spells it. A fact about someone's naming scheme, committed for all four repos including the two that grant nothing, because the hardcoding audit cannot be complete without it. Excluded from the door in the other direction: a service name is spelled the same way, so which references enter here is decided by the extraction's structural classifier and not by this pattern.",
           "pattern": "^[a-z_]+\\.[a-z0-9_]+$",
-          "description": "The literal as the source spells it. A fact about someone's naming scheme, and the only place a raw identifier of this kind is committed outside `raw-behaviors.json`."
-        },
-        "repo": {
-          "type": "string",
-          "minLength": 1,
-          "description": "The repo the reference was found in. Resolved against `catalog/repos.yaml` by the validator, which can join the two files; a JSON Schema reference cannot reach into a YAML document's contents."
-        },
-        "scope": {
-          "enum": ["room", "house"],
-          "description": "Inferred from where the reference sits, so the same concept can be compared across repos."
+          "type": "string"
         },
         "naming_convention": {
-          "type": "string",
+          "description": "The repo's naming-convention label. A slug so it cannot carry a sentence, and drawn from a fixed set the extraction fixes when it sees the data.",
           "pattern": "^[a-z0-9_]+$",
-          "description": "The repo's naming-convention label, as a slug. A slug rather than an enum because the label set is fixed when task 3.6 sees the data; what is fixed now, and what matters for the licence position, is that the field cannot hold a sentence."
+          "type": "string"
+        },
+        "repo": {
+          "description": "The repo the reference was found in. A slug and not free text: repo handles are lower-case, and a slug cannot hold a sentence.",
+          "pattern": "^[a-z0-9_]+$",
+          "type": "string"
+        },
+        "scope": {
+          "description": "Inferred from the reference's domain, so the same concept can be compared across repos. A closed set, and the inference is what task 5.3 uses to place a reference against the room map.",
+          "enum": [
+            "room",
+            "house"
+          ]
         },
         "slot": {
-          "oneOf": [
-            {"$ref": "../slot/1.0.0.json#/properties/name"},
-            {"type": "null"}
-          ],
-          "description": "The slot this reference maps to, or null when it maps to a constant. A reference to the runtime `slot` schema's own name property rather than a copy of its pattern: a restated pattern is a second definition of a slot name, free to drift from the published one, and it is the thing the conformance check in task 7.6 exists to catch. Resolved against `catalog/slots.yaml` in task 5.3."
-        },
-        "constant": {
-          "oneOf": [
-            {"$ref": "#/$defs/constant"},
-            {"type": "null"}
-          ],
-          "description": "The justification, when the reference is one of the fixed things rather than a slot."
+          "description": "The slot this reference maps to, or null when the reference resolves to a `constant` instead. The closed set is `catalog/slots.yaml` itself, so the field is the product's own vocabulary rather than a copied pattern -- the same rule the raw record's `slots` field follows. Exactly one of `slot` and `constant` is non-null, which `hardcoded_entry_one_of` states above and `check_slots` enforces by naming the reference and its repo.",
+          "enum": [
+            "climate_zone",
+            "contact_sensor",
+            "cover",
+            "house_mode",
+            "humidity_sensor",
+            "leak_sensor",
+            "light_group",
+            "lock",
+            "lux_sensor",
+            "media_player",
+            "motion_sensor",
+            "scene_selector",
+            "temperature_sensor",
+            "vacuum",
+            null
+          ]
         }
       },
-      "allOf": [
-        {
-          "anyOf": [
-            {
-              "properties": {"slot": {"not": {"type": "null"}}},
-              "required": ["slot"]
-            },
-            {
-              "properties": {"constant": {"not": {"type": "null"}}},
-              "required": ["constant"]
-            }
-          ],
-          "description": "A reference that resolves to neither a slot nor a constant fails the build, so every entry either feeds the slot vocabulary or says why it cannot."
-        }
-      ]
+      "required": [
+        "constant",
+        "entity_ref",
+        "naming_convention",
+        "repo",
+        "scope",
+        "slot"
+      ],
+      "type": "object"
     }
-  }
+  },
+  "$id": "https://open-house.invalid/schemas/catalog/hardcoded_refs.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Generated from schemas/catalog/fact-fields.yaml by tools/catalog/facts.py; edit the allowlist and regenerate rather than editing this file. Every distinct `entity_ref` the extraction found, with its source repo, its inferred scope and its repo's naming-convention label. This is the second committed facts store and it carries identifiers from all four repos including the two that grant nothing: an entry holds a `domain.object_id`, a scope and a naming-convention label, and none of those is authored text. No field here can hold an alias, a display name, a comment or a YAML fragment from a source, which is what makes the withheld-expression position structural rather than declarative.",
+  "properties": {
+    "refs": {
+      "description": "One entry per distinct `domain.object_id` in a repo. A service call never appears here: the extraction classifies each reference structurally and only entity references enter the audit.",
+      "items": {
+        "$ref": "#/$defs/entry"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "refs"
+  ],
+  "schema_version": "1.0.0",
+  "title": "Hardcoding audit",
+  "type": "object"
 }

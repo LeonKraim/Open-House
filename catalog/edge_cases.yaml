@@ -2,7 +2,376 @@
 #
 # Schema: schemas/catalog/edge_cases.json. Validate with `oh-catalog validate`.
 #
-# Empty until task 6.1. Each entry names the guard a repo uses, the repo it came
+# Filled by task 6.1. Each entry names the guard a repo uses, the repo it came
 # from, and the Phase 1 placeholder it becomes -- the placeholder is what makes
-# this a work item rather than a reading list, and it is required.
-edge_cases: []
+# this a work item rather than a reading list, and it is required. Every
+# `scenario` and `guard` below is written in Open House's own words: three of
+# the four source repos grant no reuse of their prose (renemarc, fwartner and
+# johnkoht), and two of the four grant nothing for their code either (fwartner
+# and johnkoht), so a guard is described here rather than transcribed, and no
+# entry carries a link back into a source tree.
+#
+# The requirement names five categories of edge case -- flaky device, restart,
+# false trigger, notification spam and unavailable sensor -- and each of the
+# five is recorded below. This is the sweep and not a sample: each of the four
+# repos contributes every guard it ships that answers one of the five, so a repo
+# that solves more cases is represented by more seeds and a repo that solves
+# fewer by fewer. Nothing here is invented to even the counts up, and no solved
+# case is left out to keep the file short. Every entry was read from the named
+# repo and is a guard that repo ships.
+edge_cases:
+  - scenario: >-
+      Exterior lights are left switched on when a restart, a reload, or a missed
+      sunset step interrupts the sequence that would have switched them off.
+    guard: >-
+      An automation that runs at Home Assistant start and again at sunrise and
+      switches a fixed set of exterior light entities off, so a light that
+      survived a restart is cleared instead of staying lit.
+    repo: ccostan
+    phase_1: >-
+      Phase 1 simulator seed: a house reloads with exterior lights already on,
+      and the scenario asserts they are off once the startup automation runs.
+
+  - scenario: >-
+      A brightness cap re-fires on a light change it caused itself, so it fights
+      the automation or scene that made the change.
+    guard: >-
+      A template condition that reads the changed entity's context and proceeds
+      only when a user id is present and no parent id is, which separates a
+      manual turn-on from a change an automation or a scene produced.
+    repo: ccostan
+    phase_1: >-
+      Phase 1 simulator seed: one light is switched on twice, once by a user
+      action and once by an automation, and the scenario asserts that only the
+      manual change is capped.
+
+  - scenario: >-
+      A device that briefly drops off the network is reported as having been
+      switched off, so the household is alerted about a plug that is merely
+      reconnecting.
+    guard: >-
+      A template condition that checks the entity's previous state exists and was
+      not itself unavailable, so a plug losing and regaining its connection is
+      told apart from a plug that was turned off.
+    repo: ccostan
+    phase_1: >-
+      Phase 1 simulator seed: a plug goes unavailable and returns, and the
+      scenario asserts that no switched-off alert is produced.
+
+  - scenario: >-
+      Several household members reach the house within a minute of one another,
+      and the speaker starts a separate greeting for each, so the messages talk
+      over one another and one arrival is welcomed twice.
+    guard: >-
+      One automation that adds each arriving person to a shared group, waits for
+      the entry contact to open, pauses a minute, and then greets the whole group
+      in a single message; a template condition drops the trigger when the
+      person's previous state was already home, unknown or unavailable, so a
+      tracker that returns from a dropout does not set off a second greeting.
+    repo: ccostan
+    phase_1: >-
+      Phase 1 simulator seed: three people arrive in quick succession while one
+      tracker is unavailable, and the scenario asserts that a single greeting
+      names all of them, and that the tracker's later recovery produces none.
+
+  - scenario: >-
+      A hallway or foyer light is switched on and then forgotten, so it stays
+      lit long after the people who wanted it have moved on.
+    guard: >-
+      A state trigger on the light that holds at the on state for twenty minutes
+      before it acts, and then switches that same light off, so a light left on
+      by hand is cleared without waiting for a schedule to reach it.
+    repo: ccostan
+    phase_1: >-
+      Phase 1 simulator seed: a light is left on past the watchdog window and the
+      scenario asserts it is switched off; a reload inside the window asserts it
+      is left alone.
+
+  - scenario: >-
+      A single gust crosses three alert thresholds at once, so three separate
+      wind warnings arrive together and the household cannot tell which one the
+      weather is actually at.
+    guard: >-
+      A run mode that restarts rather than queues, plus a short settle delay
+      before anything is sent, so a lower tier that follows a higher one is
+      cancelled and only the highest current tier is announced, alongside any
+      garage door the wind has caught open.
+    repo: ccostan
+    phase_1: >-
+      Phase 1 simulator seed: wind crosses all three thresholds within one
+      reading, and the scenario asserts a single alert naming the highest tier.
+
+  - scenario: >-
+      A garage door controller reports its closed state for an instant while the
+      door is in fact still travelling open, so a passing flicker is counted as a
+      close and the arrival and departure timeline is corrupted by a door that
+      never actually shut.
+    guard: >-
+      The open edge is required to hold for five seconds before it is believed,
+      so a brief flicker from the door controller is ignored, while the close
+      edge keeps a longer hold of its own because a real close genuinely takes
+      longer to settle.
+    repo: ccostan
+    phase_1: >-
+      Phase 1 simulator seed: a garage door sensor flickers to closed for one
+      second mid-travel and the scenario asserts no close is recorded; a close
+      held past the window asserts that one is.
+
+  - scenario: >-
+      A long-absence mode, and the timestamps that measure how long the house has
+      been empty, are lost or wrongly restored when Home Assistant restarts, so
+      an absence is truncated or a stale mode is left switched on long after the
+      family is already back.
+    guard: >-
+      The away and bed-inactivity timestamps are stored and restored across a
+      restart, and a short reconciliation after startup clears a restored absence
+      mode whenever the household is in fact already home.
+    repo: ccostan
+    phase_1: >-
+      Phase 1 simulator seed: the house restarts mid-absence with the mode on and
+      the family away, and the scenario asserts the mode and its timers survive;
+      a restart with the family home asserts the mode is cleared.
+
+  - scenario: >-
+      A cloud integration stops reporting and an appliance temperature reads
+      unknown, which a plain threshold comparison treats as a dangerous reading
+      and raises as an alarm on an empty house.
+    guard: >-
+      An unknown appliance temperature is left out of the safety comparison
+      rather than read as a value, and the loss of the integration that supplies
+      it is reported once per absence instead of on every reading.
+    repo: ccostan
+    phase_1: >-
+      Phase 1 simulator seed: an appliance temperature sensor goes unavailable
+      while the house is empty, and the scenario asserts no temperature alarm
+      fires and that a single monitoring-gap notice is produced.
+
+  - scenario: >-
+      A comfort sensor that drifts back and forth across a threshold repeats the
+      same warning until the household stops reading it.
+    guard: >-
+      A template condition that compares the automation's last run with the
+      current time and suppresses a repeat inside a fixed window, together with
+      conditions requiring the doors and the windows to have been closed for an
+      hour first.
+    repo: renemarc
+    phase_1: >-
+      Phase 1 simulator seed: humidity crosses the same threshold several times
+      within an hour, and the scenario asserts a bounded number of notifications.
+
+  - scenario: >-
+      A door is propped open while the house moves things in or out, and the
+      warning that it is still open repeats until the household stops reading it.
+    guard: >-
+      A reminder on a repeating clock that stays quiet unless the automation's
+      own last run is more than five minutes old, drawing down a counter that is
+      reset once every door has been shut for a couple of seconds, so the
+      reminders are finite and start over the next time a door is left open.
+    repo: renemarc
+    phase_1: >-
+      Phase 1 simulator seed: a door stays open for an hour and the scenario
+      asserts the reminders are bounded; closing it and reopening it later
+      asserts the bound is restored rather than exhausted.
+
+  - scenario: >-
+      A television is left running when the household goes out, so it plays on
+      to an empty room until somebody happens to come back.
+    guard: >-
+      An automation that fires only once both the presence group and the motion
+      group have been away for two hours, and that repeats both of those state
+      checks as conditions before it acts, so a brief absence or one quiet motion
+      sensor does not switch the television off under someone still watching.
+    repo: renemarc
+    phase_1: >-
+      Phase 1 simulator seed: the house empties with the television on and the
+      scenario asserts it is switched off after the dwell; a motion reading
+      inside the dwell asserts it is left on.
+
+  - scenario: >-
+      A water-leak alert fires before the sensor that reports where the leak is
+      has updated, so the household is told there is a leak but not where it is,
+      which is the one thing that makes the alert actionable.
+    guard: >-
+      A short delay before the alert is sent, long enough for the location
+      reading to arrive, after which the alert names the location when there is
+      one and omits it rather than inventing one when there is not.
+    repo: renemarc
+    phase_1: >-
+      Phase 1 simulator seed: a leak sensor trips while its location sensor still
+      carries its previous value, and the scenario asserts the notification
+      carries the resolved location.
+
+  - scenario: >-
+      A light that reports no state of its own is left in whatever condition the
+      last command put it, so after a restart the house cannot tell whether it is
+      on and the state it displays is fiction.
+    guard: >-
+      An automation at startup that forces the light back to a known state
+      derived from the current mode, rather than trusting a state the hardware
+      cannot confirm.
+    repo: renemarc
+    phase_1: >-
+      Phase 1 simulator seed: a stateless light is in an unknown condition when
+      the house restarts, and the scenario asserts the startup step sets it to
+      the state the current mode implies.
+
+  - scenario: >-
+      A person's presence selector is left mid-transition when automations are
+      reloaded or Home Assistant restarts, so the house still believes someone is
+      arriving.
+    guard: >-
+      An automation that listens for the automation-reload event and the Home
+      Assistant start event and rewrites a status still set to the in-transition
+      value back to its settled value.
+    repo: johnkoht
+    phase_1: >-
+      Phase 1 simulator seed: a reload happens while a presence selector sits
+      mid-transition, and the scenario asserts the selector settles.
+
+  - scenario: >-
+      Several people arrive at once and a burst of arrival announcements fights
+      over the same speaker, or one arrival is announced twice.
+    guard: >-
+      A queued run mode, so announcements run one after another instead of
+      clashing, plus a short pause and a condition that the home has held an
+      occupied state for several minutes before anything is announced.
+    repo: johnkoht
+    phase_1: >-
+      Phase 1 simulator seed: two arrivals fall within a minute of each other,
+      and the scenario asserts one announcement each and no overlap.
+
+  - scenario: >-
+      A finished load of washing is announced again and again until someone
+      empties the machine, so the reminder becomes noise the household tunes out.
+    guard: >-
+      An automation that, before it speaks, compares its own last run against the
+      current time and declines when it ran within the past hour, so the same
+      completion is announced once and then at most hourly while the load is
+      still sitting there.
+    repo: johnkoht
+    phase_1: >-
+      Phase 1 simulator seed: a completed load is left in the machine across
+      several hours and the scenario asserts the announcements stop at the stated
+      cadence.
+
+  - scenario: >-
+      A guest flag is left switched on when Home Assistant restarts, so the house
+      behaves as though visitors are still present after they have gone.
+    guard: >-
+      An automation that runs at startup and clears the guest flag whenever the
+      guest group is not home, so a restart settles the flag to match who is
+      actually in the house instead of trusting the value it was holding.
+    repo: johnkoht
+    phase_1: >-
+      Phase 1 simulator seed: Home Assistant restarts with the guest flag on and
+      the guest group away, and the scenario asserts the flag is cleared.
+
+  - scenario: >-
+      A controller or bridge that is unreachable for a second or two is reported
+      as offline, and an outage that is already in progress when Home Assistant
+      starts raises no state change at all, so it is never reported.
+    guard: >-
+      The offline state is required to hold for several minutes before it alerts,
+      so a momentary drop is ignored, and a separate startup trigger waits a few
+      minutes and then re-checks, so an outage that predates the restart is
+      caught even though no transition fired.
+    repo: johnkoht
+    phase_1: >-
+      Phase 1 simulator seed: a controller is unreachable for one second and the
+      scenario asserts no alert; the house restarts while it is already
+      unreachable and the scenario asserts an alert after the post-start grace.
+
+  - scenario: >-
+      A restore event that follows an outage through an unavailable state is
+      swallowed, so the household is told the power went out but never told it
+      came back.
+    guard: >-
+      The restore is recognised by comparing the outage automation's own last run
+      against the current time rather than the sensor's previous state, so a
+      restore that passes through unavailable is still announced.
+    repo: johnkoht
+    phase_1: >-
+      Phase 1 simulator seed: a power source drops to battery, its sensor goes
+      unavailable, and it returns, and the scenario asserts both the outage and
+      the restore are announced.
+
+  - scenario: >-
+      A network access point that drops off the network stays down until somebody
+      notices, and restarting it by hand is the only recovery anyone has.
+    guard: >-
+      An automation that sees the access point disconnected for a couple of
+      minutes and power-cycles its switch port, but only when the upstream
+      gateway is itself up, since cycling the port cannot help while the gateway
+      is down, and it re-checks that the access point is still down before it
+      acts.
+    repo: johnkoht
+    phase_1: >-
+      Phase 1 simulator seed: an access point disconnects while its gateway is up
+      and the scenario asserts its port is power-cycled; a disconnect while the
+      gateway is down asserts nothing is cycled.
+
+  - scenario: >-
+      A camera treats a household member coming home as an intrusion and pushes a
+      person-detected alert, and it keeps alarming about people who are already
+      inside in the minutes after a door has been used.
+    guard: >-
+      Person detection is suppressed while somebody has just arrived and while an
+      exterior door has been used within the last few minutes, and each camera
+      carries its own snooze and pause controls so a busy view can be quietened
+      without silencing every camera at once.
+    repo: johnkoht
+    phase_1: >-
+      Phase 1 simulator seed: a known tracker arrives and a person is then seen
+      by a camera, and the scenario asserts no detection alert; the same
+      detection with nobody having just arrived asserts one.
+
+  - scenario: >-
+      Automations fire while the system is being worked on by hand and undo the
+      work being done.
+    guard: >-
+      A single house-wide maintenance boolean that every affected automation
+      requires to be off, so service work suspends them without disabling the
+      automations one at a time.
+    repo: fwartner
+    phase_1: >-
+      Phase 1 simulator seed: maintenance mode is on while a manual change is
+      made, and the scenario asserts that no automation overrides it.
+
+  - scenario: >-
+      An appliance whose power sensor dips to zero for an instant is treated as
+      having finished, ending the run and notifying early.
+    guard: >-
+      A state trigger that requires the appliance's power reading to stay at zero
+      for two minutes before the run is ended, so a momentary dip is not read as
+      completion.
+    repo: fwartner
+    phase_1: >-
+      Phase 1 simulator seed: an appliance's power reading dips to zero briefly
+      and returns, and the scenario asserts the run is not ended and no
+      notification is sent.
+
+  - scenario: >-
+      A device that reports a low battery keeps being announced, so one warning
+      piles up in the notification list every time the level is re-read.
+    guard: >-
+      A low-battery alert written under a key derived from the device, so a
+      second warning about the same device replaces the first instead of joining
+      it, and withdrawn once the battery is reported as replaced.
+    repo: fwartner
+    phase_1: >-
+      Phase 1 simulator seed: a device reports a low battery several times and
+      the scenario asserts a single standing alert, which clears when the battery
+      is replaced.
+
+  - scenario: >-
+      A sensor that stops reporting altogether is silent rather than wrong, so a
+      device that has quietly failed looks no different from a device at rest and
+      the house keeps acting on a reading that will never change again.
+    guard: >-
+      An automation that watches the last-seen time of each sensor and reports a
+      device once its last-seen has gone stale, so a device that has stopped
+      reporting is noticed even though it never reports an error of its own.
+    repo: fwartner
+    phase_1: >-
+      Phase 1 simulator seed: a sensor stops updating and the scenario asserts a
+      stale-device report once its last-seen passes the window, and none before.

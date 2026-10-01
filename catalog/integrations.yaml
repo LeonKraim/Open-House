@@ -2,7 +2,447 @@
 #
 # Schema: schemas/catalog/integrations.json. Validate with `oh-catalog validate`.
 #
-# Empty until task 5.4. Each entry carries the repos that use it and a
-# disposition of require, replace or avoid; an integration used by three or more
-# repos is required, and a replace or avoid names its successor.
-integrations: []
+# Every integration, add-on or bridge a reference repo relies on carries the
+# repos that use it and a disposition of require, replace or avoid. An
+# integration used by three or more repos is required -- three independent
+# households reaching for the same dependency is the corroboration that makes
+# it safe to assume on a stranger's behalf; below three it is one person's
+# choice and the ledger says so rather than promoting it. A `replace` or
+# `avoid` names its successor, because a disposition with nothing behind it is
+# an opinion.
+#
+# Evidence, stated once so a reader can check it: a repo uses an entry when its
+# tracked configuration says so -- a domain key, a `platform:`/`domain:`
+# reference, a `custom_components/` directory, a HACS-served `/hacsfiles/`
+# resource, a per-integration config directory or file under the repo (a
+# `mqtt:` block, an `esphome/` tree, a `spotcast.yaml`), or an entity or service
+# identifier the integration is the only source of (`sensor.glances_*`,
+# `alarmo.arm`, `switch.adaptive_lighting_*`). No name here is taken from a
+# repo's README: two of the four grant no licence to reuse their prose, and a
+# dependency the config does not show is a dependency we have not verified. The
+# consequence is that the ledger is a floor rather than a ceiling -- a repo that
+# installs something it never configures leaves no trace, and this file reports
+# what the tree evidences, not what a README claims.
+#
+# The entries below are the union of that evidence across all four clones, read
+# once by a person and committed. The groups are a reading order, not a
+# mechanism; only `name`, `repos`, `disposition` and `replacement` are read.
+# `alexa` (the cloud skill) and `alexa_media` (the community media-player
+# bridge) are distinct dependencies and are recorded separately for that reason.
+
+integrations:
+  # --- Bridges and transports ----------------------------------------------
+  # The ones that move state between Home Assistant and something else: an
+  # MQTT broker, a Zigbee or BLE radio, a camera stream, a phone ecosystem.
+  - name: mqtt
+    repos: [ccostan, fwartner, johnkoht, renemarc]
+    disposition: require
+    replacement: null
+  - name: mosquitto
+    repos: [ccostan, fwartner, johnkoht, renemarc]
+    disposition: require
+    replacement: null
+  - name: zha
+    repos: [fwartner, johnkoht]
+    disposition: require
+    replacement: null
+  - name: zigbee2mqtt
+    repos: [fwartner]
+    disposition: require
+    replacement: null
+  - name: espresense
+    repos: [fwartner, johnkoht]
+    disposition: require
+    replacement: null
+  - name: mqtt_room
+    repos: [fwartner, johnkoht]
+    disposition: require
+    replacement: null
+  - name: go2rtc
+    repos: [ccostan, johnkoht]
+    disposition: require
+    replacement: null
+  - name: homekit
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: rtl4332mqtt
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: matter
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: esphome
+    repos: [fwartner, johnkoht]
+    disposition: require
+    replacement: null
+  - name: appdaemon
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+
+  # --- Community integrations ----------------------------------------------
+  # The HACS and hand-vendored integrations, which are the "HACS integrations"
+  # spec.txt asks this ledger to carry. The two ccostan entries here are the
+  # author's own custom_components; the rest are third-party.
+  - name: hacs
+    repos: [ccostan, fwartner, johnkoht, renemarc]
+    disposition: require
+    replacement: null
+  - name: browser_mod
+    repos: [fwartner, johnkoht, renemarc]
+    disposition: require
+    replacement: null
+  - name: alexa_media
+    repos: [ccostan, fwartner, johnkoht]
+    disposition: require
+    replacement: null
+  - name: adaptive_lighting
+    repos: [fwartner, johnkoht]
+    disposition: require
+    replacement: null
+  - name: alarmo
+    repos: [fwartner, johnkoht]
+    disposition: require
+    replacement: null
+  - name: alexa
+    repos: [ccostan, fwartner]
+    disposition: require
+    replacement: null
+  - name: proxmox
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: glances
+    repos: [ccostan, fwartner]
+    disposition: require
+    replacement: null
+  - name: tplink
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: plex
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: unifi
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: unifigateway
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: fully_kiosk
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: gtfs_custom
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: display
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: rpi_power
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: lightpack
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: github_custom
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: doomsday_clock
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: nanoleaf
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: waqi
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: kodi
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: pushover
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: ebox
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: environment_canada
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: flic
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: lannouncer
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: lifx_cloud
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: limitlessled
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: bluetooth_tracker
+    repos: [renemarc]
+    disposition: require
+    replacement: null
+  - name: frigate
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: spook
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: llmvision
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: hass_agent
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: garadget
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: powerwall
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: alexa_camera_compat
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: tesla_charge_guard
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: spotcast
+    repos: [fwartner]
+    disposition: require
+    replacement: null
+  - name: powercalc
+    repos: [fwartner]
+    disposition: require
+    replacement: null
+  - name: battery_notes
+    repos: [fwartner]
+    disposition: require
+    replacement: null
+  - name: waste_collection_schedule
+    repos: [fwartner]
+    disposition: require
+    replacement: null
+  - name: music_assistant
+    repos: [fwartner]
+    disposition: require
+    replacement: null
+  - name: adguard
+    repos: [fwartner]
+    disposition: require
+    replacement: null
+  - name: feedparser
+    repos: [fwartner]
+    disposition: require
+    replacement: null
+  - name: tgtg
+    repos: [fwartner]
+    disposition: require
+    replacement: null
+  - name: brewdog
+    repos: [fwartner]
+    disposition: require
+    replacement: null
+  - name: meteoalarm
+    repos: [fwartner]
+    disposition: require
+    replacement: null
+  - name: whatsapper
+    repos: [fwartner]
+    disposition: require
+    replacement: null
+  - name: syslog
+    repos: [fwartner]
+    disposition: require
+    replacement: null
+  - name: html5
+    repos: [fwartner]
+    disposition: require
+    replacement: null
+  - name: nfandroidtv
+    repos: [johnkoht]
+    disposition: require
+    replacement: null
+  - name: xiaomi_cloud_map_extractor
+    repos: [johnkoht]
+    disposition: require
+    replacement: null
+  - name: comed_hourly_pricing
+    repos: [johnkoht]
+    disposition: require
+    replacement: null
+  - name: wake_on_lan
+    repos: [johnkoht]
+    disposition: require
+    replacement: null
+
+  # --- Core integrations bound to an external system -----------------------
+  # Not HACS, but still a dependency on something outside Home Assistant -- a
+  # messenger, a database, a metrics endpoint, a service account -- so they
+  # belong in the ledger the product reads to decide what it may assume.
+  - name: telegram_bot
+    repos: [ccostan, fwartner]
+    disposition: require
+    replacement: null
+  - name: influxdb
+    repos: [fwartner]
+    disposition: require
+    replacement: null
+  - name: prometheus
+    repos: [fwartner, johnkoht]
+    disposition: require
+    replacement: null
+  - name: blink
+    repos: [ccostan, renemarc]
+    disposition: require
+    replacement: null
+  - name: speedtestdotnet
+    repos: [ccostan, renemarc]
+    disposition: require
+    replacement: null
+  - name: youtube
+    repos: [ccostan, fwartner]
+    disposition: require
+    replacement: null
+  - name: ifttt
+    repos: [ccostan, renemarc]
+    disposition: require
+    replacement: null
+  - name: samsungtv
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: tesla
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: sleepiq
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: synology_dsm
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: pihole
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: rachio
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: rheem_econet
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: roku
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: mariadb
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: august
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: cbyge
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: bgw_gateway
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: tugtainer
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: water_softener
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: yahoofinance
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: noonhome
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: phynplus
+    repos: [ccostan]
+    disposition: require
+    replacement: null
+  - name: google_translate
+    repos: [renemarc, johnkoht]
+    disposition: require
+    replacement: null
+
+  # --- Superseded: replace or avoid ----------------------------------------
+  # Each names the thing that took its place. `replace` is a better option
+  # existing; `avoid` is the dependency being abandoned upstream or absorbed
+  # into core, and either way the successor is written down so a later phase
+  # reads one answer to "what should we build on".
+  - name: ios
+    repos: [johnkoht, renemarc]
+    disposition: replace
+    replacement: mobile_app
+  - name: variable
+    repos: [renemarc]
+    disposition: replace
+    replacement: input_text
+  - name: picotts
+    repos: [johnkoht]
+    disposition: avoid
+    replacement: piper
+  - name: zwave
+    repos: [renemarc]
+    disposition: avoid
+    replacement: zwave_js
+  - name: updater
+    repos: [renemarc]
+    disposition: avoid
+    replacement: update
+  - name: discovery
+    repos: [renemarc]
+    disposition: avoid
+    replacement: zeroconf
+  - name: darksky
+    repos: [renemarc]
+    disposition: avoid
+    replacement: openweathermap

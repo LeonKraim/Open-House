@@ -1,8 +1,766 @@
-# Every room that exists in any of the four setups, with its source repo and path.
+# Every room that exists in any of the four setups, with its source repo and paths.
 #
 # Schema: schemas/catalog/rooms.json. Validate with `oh-catalog validate`.
 #
-# Empty until task 5.1. Room names are kept as their repo spells them, including
-# non-English ones: this file is the evidence base the room-type map is derived
-# from, and normalising a name here would destroy the evidence.
-rooms: []
+# One record per room, and `paths` is the room's evidence: every selected file in
+# the repo that names it. The unit is the room and not the file, so a room that
+# turns up in a package directory, a dashboard and a set of helpers is one record
+# carrying three paths rather than three records -- otherwise "does this setup
+# have a kitchen" would have as many answers as the kitchen has files.
+#
+# Names are kept as their repo spells them, including non-English ones: this file
+# is the evidence base the room-type map is derived from, and normalising a name
+# here would destroy the evidence.
+#
+# What counts as a room is a rule, settled here once because the room-type map's
+# coverage is bounded by this file and a judgement re-made at every entry is how
+# a real room goes missing. A name is a room when its repo configures behaviour
+# for that space: it is an area in the repo's own vocabulary (an area definition,
+# a room-valued helper, a room dashboard) or it carries a body of behaviour of
+# its own. Outdoor and property areas are rooms on that rule rather than
+# exceptions to it -- a gazebo, a pool, a driveway and a porch each carry
+# occupancy, lighting or camera behaviour here exactly as an indoor room does.
+# The narrower standard, that only enclosed spaces count, is rejected because it
+# would drop ccostan's driveway and johnkoht's gazebo and pool, and the union of
+# real rooms recorded here is the bound on what a later phase can express, so
+# truncating it is the one thing this file must not do.
+#
+# `paths` is not hand-kept. `tools/catalog/rooms.py` re-derives it from
+# `catalog/inventory.json` and fails on any difference in either direction, so a
+# selected file that names the room cannot be left out of the list and a path
+# that does not name it cannot be put in.
+rooms:
+  - name: bedroom
+    repo: ccostan
+    paths:
+      - config/dashboards/bedroom/dashboard.yaml
+      - config/dashboards/bedroom/partials/home_cards.yaml
+      - config/dashboards/bedroom/partials/locator_sections.yaml
+      - config/dashboards/bedroom/views/01_home.yaml
+      - config/dashboards/bedroom/views/02_locator.yaml
+
+  - name: kitchen
+    repo: ccostan
+    paths:
+      - config/automation/kitchen_helper_light.yaml
+      - config/automation/kitchen_lights_and_accents.yaml
+      - config/automation/kitchen_sink_circadian.yaml
+
+  - name: living_room
+    repo: ccostan
+    paths:
+      - config/automation/living_room_color_defaults.yaml
+      - config/dashboards/overview/popups/living_room.yaml
+      - config/scene/living_room.yaml
+
+  - name: master_bath
+    repo: ccostan
+    paths:
+      - config/automation/master_bath_accents.yaml
+
+  - name: garage
+    repo: ccostan
+    paths:
+      - config/automation/Speech/garbage_day_garage.yaml
+      - config/automation/garage_entry_light.yaml
+
+  - name: driveway
+    repo: ccostan
+    paths:
+      - config/automation/driveway_parked_car.yaml
+      - config/script/kiosk_driveway_camera_takeover.yaml
+
+  - name: bedroom
+    repo: renemarc
+    paths:
+      - automations/areas/bedroom_low.yaml
+      - automations/areas/bedroom_off.yaml
+      - automations/areas/bedroom_on.yaml
+
+  - name: kitchen
+    repo: renemarc
+    paths:
+      - automations/areas/kitchen_low.yaml
+      - automations/areas/kitchen_off.yaml
+      - automations/areas/kitchen_on.yaml
+      - automations/devices/kitchen_lights_full.yaml
+      - automations/devices/kitchen_lights_init.yaml
+      - automations/devices/kitchen_lights_off.yaml
+      - automations/devices/kitchen_lights_on.yaml
+      - automations/devices/kitchen_lights_toggle.yaml
+
+  - name: lounge
+    repo: renemarc
+    paths:
+      - automations/areas/lounge_low.yaml
+      - automations/areas/lounge_off.yaml
+      - automations/areas/lounge_on.yaml
+
+  - name: washroom
+    repo: renemarc
+    paths:
+      - automations/areas/washroom_low.yaml
+      - automations/areas/washroom_off.yaml
+      - automations/areas/washroom_on.yaml
+
+  - name: kitchen
+    repo: fwartner
+    paths:
+      - custom_configs/binary_sensors/kitchen_cooking.yaml
+
+  - name: wohnzimmer
+    repo: fwartner
+    paths:
+      - custom_configs/binary_sensors/wohnzimmer_tv.yaml
+
+  - name: basement
+    repo: johnkoht
+    paths:
+      - packages/basement/basement_occupancy.yaml
+      - packages/basement/basement_state.yaml
+      - packages/basement/modes/basement_mode_auto.yaml
+      - packages/basement/modes/basement_mode_off.yaml
+      - packages/basement/modes/basement_not_occupied.yaml
+      - packages/basement/modes/basement_occupied.yaml
+      - packages/basement/sensors/basement_motion_sensor.yaml
+      - packages/basement/sensors/basement_occupancy_sensor.yaml
+      - packages/house/areas/lower_floor/basement_main.yaml
+
+  - name: dining_room
+    repo: johnkoht
+    paths:
+      - dashboards/kohbo/rooms/main_floor/dining_room.yaml
+      - dashboards/kohbo/rooms/main_floor/partials/dining_room_card.yaml
+      - input_number/media_players/sonos_dining_room_volume.yaml
+      - packages/dining_room/dining_room_lighting_automation.yaml
+      - packages/dining_room/dining_room_lights_auto.yaml
+      - packages/dining_room/dining_room_occupancy.yaml
+      - packages/dining_room/dining_room_state.yaml
+      - packages/dining_room/lights/dining_room_lights_group.yaml
+      - packages/dining_room/lights/dining_room_lights_off.yaml
+      - packages/dining_room/modes/dining_room_mode_auto.yaml
+      - packages/dining_room/modes/dining_room_mode_off.yaml
+      - packages/dining_room/modes/dining_room_not_occupied.yaml
+      - packages/dining_room/modes/dining_room_occupied.yaml
+      - packages/dining_room/occupancy/dining_room_presence.yaml
+      - packages/house/areas/first_floor/dining_room.yaml
+
+  - name: driveway
+    repo: johnkoht
+    paths:
+      - dashboards/kohbo/home/_driveway_front_camera_notification.yaml
+      - dashboards/kohbo/security/cameras/_driveway_front_camera_popup.yaml
+      - dashboards/kohbo/security/cameras/_garage_driveway_camera_popup.yaml
+      - packages/security/cameras/detections/driveway_front_camera/driveway_front_camera_detections_animal.yaml
+      - packages/security/cameras/detections/driveway_front_camera/driveway_front_camera_detections_person.yaml
+      - packages/security/cameras/detections/driveway_front_camera/driveway_front_camera_detections_vehicle.yaml
+      - packages/security/cameras/detections/driveway_front_camera/driveway_front_camera_notifications.yaml
+      - packages/security/cameras/detections/driveway_front_camera/driveway_front_camera_proxy.yaml
+      - packages/security/cameras/detections/garage_driveway_camera/garage_driveway_camera_detections_animal.yaml
+      - packages/security/cameras/detections/garage_driveway_camera/garage_driveway_camera_detections_person.yaml
+      - packages/security/cameras/detections/garage_driveway_camera/garage_driveway_camera_detections_vehicle.yaml
+      - packages/security/cameras/detections/garage_driveway_camera/garage_driveway_camera_notifications.yaml
+      - packages/security/cameras/detections/garage_driveway_camera/garage_driveway_camera_proxy.yaml
+
+  - name: family_room
+    repo: johnkoht
+    paths:
+      - automation/family_room/family_room_not_occupied.yaml
+      - automation/family_room/family_room_occupied.yaml
+      - automation/family_room/lights/family_lights_to_away.yaml
+      - automation/family_room/lights/family_lights_to_off.yaml
+      - automation/family_room/lights/family_lights_to_on.yaml
+      - automation/family_room/modes/familiy_room_arrival.yaml
+      - automation/family_room/modes/family_room_away.yaml
+      - automation/family_room/modes/family_room_mode_auto.yaml
+      - automation/family_room/modes/family_room_off.yaml
+      - automation/family_room/modes/family_room_on.yaml
+      - binary_sensors/rooms/family_room_occupancy.yml
+      - binary_sensors/rooms/family_room_presence.yaml
+      - binary_sensors/rooms/family_room_presence_new.yaml
+      - dashboards/kohbo/rooms/main_floor/family_room.yaml
+      - dashboards/kohbo/rooms/main_floor/partials/family_room_card.yaml
+      - input_boolean/rooms/family_room_occupied.yaml
+      - input_select/rooms/family_room.yaml
+      - packages/family_room/lights/family_room_sleep_mode_off.yaml
+      - packages/family_room/lights/family_room_sleep_mode_on.yaml
+      - packages/family_room/media/family_room_music_off.yaml
+      - packages/family_room/media/family_room_speech_notifications.yaml
+      - packages/family_room/media/family_room_speech_notifications_on.yaml
+      - packages/family_room/media/family_room_tv_off.yaml
+      - packages/family_room/media/familyi_room_speech_notifications_off.yaml
+      - packages/family_room/occupancy/family_room_ble_presence.yaml
+      - packages/family_room/occupancy/family_room_presence.yaml
+      - packages/family_room/occupancy/family_room_probably_occupied.yaml
+      - packages/family_room/sensors/family_room_ble_occupancy.yaml
+      - packages/family_room/sensors/family_room_doors.yaml
+      - packages/house/areas/first_floor/family_room.yaml
+      - packages/vacuums/main_level/clean_kitchen_and_family_room_temp.yaml
+
+  - name: foyer
+    repo: johnkoht
+    paths:
+      - dashboards/kohbo/rooms/main_floor/foyer.yaml
+      - dashboards/kohbo/rooms/main_floor/partials/foyer_card.yaml
+      - packages/foyer/foyer_state.yaml
+      - packages/foyer/front_door_lock/front_door_auto_lock.yaml
+      - packages/foyer/front_door_lock/front_door_lock_if_open_too_long.yaml
+      - packages/foyer/front_door_lock/front_door_lock_toggle_switch.yaml
+      - packages/foyer/lights/foyer_lights_day_off.yaml
+      - packages/foyer/lights/foyer_lights_day_on.yaml
+      - packages/foyer/lights/foyer_lights_group.yaml
+      - packages/foyer/lights/foyer_lights_nightlight.yaml
+      - packages/foyer/lights/foyer_lights_nightlight_off.yaml
+      - packages/foyer/lights/foyer_lights_sleep_mode_off.yaml
+      - packages/foyer/lights/foyer_lights_sleep_mode_on.yaml
+      - packages/foyer/lights/foyer_lights_to_dim.yaml
+      - packages/foyer/lights/foyer_lights_to_off.yaml
+      - packages/foyer/modes/foyer_mode_auto.yaml
+      - packages/foyer/modes/foyer_mode_away.yaml
+      - packages/foyer/modes/foyer_mode_dim.yaml
+      - packages/foyer/modes/foyer_mode_off.yaml
+      - packages/foyer/occupancy/foyer_not_occupied.yaml
+      - packages/foyer/occupancy/foyer_occupied.yaml
+      - packages/foyer/occupancy/foyer_occupied_boolean.yaml
+      - packages/house/areas/first_floor/foyer_room.yaml
+
+  - name: garage
+    repo: johnkoht
+    paths:
+      - automation/garage/lights/garage_lights_to_off.yaml
+      - dashboards/kohbo/security/cameras/_garage_driveway_camera_popup.yaml
+      - dashboards/kohbo/security/components/garage_entry_door_lock_component.yaml
+      - dashboards/kohbo/security/garage_entry_lock_popup.yaml
+      - dashboards/kohbo/security/pages/garage_doors.yaml
+      - dashboards/templates/button_cards/cards/devices/horizontal_action_card_entities/kohbo_horizontal_action_card_garage_door_entity.yaml
+      - dashboards/templates/decluttering/cards/horizontal_garage_door_card.yaml
+      - packages/garage/doors/door_2/garage_door_2_open_upon_arrival.yaml
+      - packages/garage/doors/door_3/garage_door_3_open_upon_arrival.yaml
+      - packages/garage/doors/garage_door_remote_locks.yaml
+      - packages/garage/doors/garage_doors_auto_close_timeout.yaml
+      - packages/garage/doors/garage_doors_close_if_open_too_long.yaml
+      - packages/garage/doors/garage_doors_close_when_empty_house.yaml
+      - packages/garage/doors/garage_doors_close_when_home.yaml
+      - packages/garage/doors/garage_doors_group.yaml
+      - packages/garage/doors/garage_doors_lock_remotes.yaml
+      - packages/garage/garage_lighting_automation.yaml
+      - packages/garage/garage_lights_auto.yaml
+      - packages/garage/garage_occupany.yaml
+      - packages/garage/garage_override.yaml
+      - packages/garage/garage_state.yaml
+      - packages/garage/lights/garage_lights_motion_off.yaml
+      - packages/garage/lights/garage_lights_motion_on.yaml
+      - packages/garage/lights/garage_lights_off.yaml
+      - packages/garage/lights/garage_lights_turned_off.yaml
+      - packages/garage/mode/garage_mode_auto.yaml
+      - packages/garage/mode/garage_mode_away.yaml
+      - packages/garage/mode/garage_mode_off.yaml
+      - packages/garage/mode/garage_not_occupied.yaml
+      - packages/garage/mode/garage_occupied.yaml
+      - packages/garage/occupancy/garage_ble_presence.yaml
+      - packages/garage/sensors/garage_ble_occupancy.yaml
+      - packages/mudroom/garage_entry_door/garage_entry_door_auto_lock.yaml
+      - packages/mudroom/garage_entry_door/garage_entry_door_auto_lock_in_evening.yaml
+      - packages/mudroom/garage_entry_door/garage_entry_door_auto_unlock.yaml
+      - packages/mudroom/garage_entry_door/garage_entry_door_lock_if_open_too_long.yaml
+      - packages/mudroom/garage_entry_door/garage_entry_door_lock_toggle_switch.yaml
+      - packages/mudroom/garage_entry_door/garage_entry_door_unlock_upon_arrival.yaml
+      - packages/people/katia/automations/katia_open_garage_upon_arrival.yaml
+      - packages/people/nonna/automations/nonna_open_garage_upon_arrival.yaml
+      - packages/security/cameras/detections/garage_driveway_camera/garage_driveway_camera_detections_animal.yaml
+      - packages/security/cameras/detections/garage_driveway_camera/garage_driveway_camera_detections_person.yaml
+      - packages/security/cameras/detections/garage_driveway_camera/garage_driveway_camera_detections_vehicle.yaml
+      - packages/security/cameras/detections/garage_driveway_camera/garage_driveway_camera_notifications.yaml
+      - packages/security/cameras/detections/garage_driveway_camera/garage_driveway_camera_proxy.yaml
+      - packages/security/lighting/garage_flood/security_lighting_garage_flood_motion_off.yaml
+      - packages/security/lighting/garage_flood/security_lighting_garage_flood_motion_on.yaml
+
+  - name: gazebo
+    repo: johnkoht
+    paths:
+      - packages/gazebo/occupancy/gazebo_presence.yaml
+
+  - name: gianluca_room
+    repo: johnkoht
+    paths:
+      - automation/gianlucas_room/gianluca_room_temperature_alert.yaml
+      - packages/gianluca_room/air_quality/gianluca_bedroom_turn_off_air_purifier.yaml
+      - packages/gianluca_room/air_quality/gianluca_room_air_quality_detections.yaml
+      - packages/gianluca_room/air_quality/gianluca_room_air_quality_sensor.yaml
+      - packages/gianluca_room/climate/gianluca_room_feels_like_temperature.yaml
+      - packages/gianluca_room/climate/gianluca_room_mean_temperature.yaml
+      - packages/gianluca_room/gianlucas_room_state.yaml
+      - packages/gianluca_room/lights/gianluca_lamp_remote_brightness_cycle.yaml
+      - packages/gianluca_room/lights/gianluca_lamp_remote_toggle.yaml
+      - packages/gianluca_room/lights/gianluca_lights_group.yaml
+      - packages/gianluca_room/lights/gianluca_lights_off.yaml
+      - packages/gianluca_room/lights/gianluca_lights_scene_toggle.yaml
+      - packages/gianluca_room/lights/gianluca_lights_scenes.yaml
+      - packages/gianluca_room/lights/gianluca_lights_sync_bulbs_from_switch.yaml
+      - packages/gianluca_room/lights/gianluca_lights_sync_switch_state.yaml
+      - packages/gianluca_room/modes/gianlucas_room_mode_auto.yaml
+      - packages/gianluca_room/modes/gianlucas_room_mode_bedtime.yaml
+      - packages/gianluca_room/modes/gianlucas_room_mode_off.yaml
+      - packages/gianluca_room/modes/gianlucas_room_not_occupied.yaml
+      - packages/gianluca_room/modes/gianlucas_room_occupied.yaml
+      - packages/gianluca_room/occupancy/gianluca_room_ble_presence.yaml
+      - packages/gianluca_room/occupancy/gianlucas_bedroom_presence.yaml
+      - packages/gianluca_room/occupancy/gianlucas_room_occupancy.yaml
+
+  - name: jr_suite
+    repo: johnkoht
+    paths:
+      - dashboards/kohbo/rooms/main_floor/jr_suite.yaml
+      - dashboards/kohbo/rooms/main_floor/partials/jr_suite_card.yaml
+      - dashboards/kohbo/shared/notifications/air_purifier_jr_suite_filter_change.yaml
+      - packages/house/areas/first_floor/jr_suite_room.yaml
+      - packages/jr_suite/air_quality/jr_suite_air_quality_detections.yaml
+      - packages/jr_suite/air_quality/jr_suite_air_quality_sensor.yaml
+      - packages/jr_suite/air_quality/jr_suite_turn_off_air_purifier.yaml
+      - packages/jr_suite/jr_suite_state.yaml
+      - packages/jr_suite/lights/jr_suite_lights_off.yaml
+      - packages/jr_suite/modes/jr_suite_mode_auto.yaml
+      - packages/jr_suite/modes/jr_suite_mode_off.yaml
+      - packages/jr_suite/occupancy/jr_suite_ble_presence.yaml
+      - packages/jr_suite/occupancy/jr_suite_occupied.yaml
+      - packages/jr_suite/occupancy/jr_suite_presence.yaml
+
+  - name: kitchen
+    repo: johnkoht
+    paths:
+      - dashboards/kohbo/rooms/main_floor/kitchen.yaml
+      - dashboards/kohbo/rooms/main_floor/partials/kitchen_card.yaml
+      - dashboards/kohbo/shared/notifications/air_purifier_kitchen_filter_change.yaml
+      - input_number/media_players/sonos_family_and_kitchen_volume.yaml
+      - packages/house/areas/first_floor/kitchen_room.yaml
+      - packages/kitchen/air_quality/kitchen_air_quality_detections.yaml
+      - packages/kitchen/air_quality/kitchen_air_quality_sensor.yaml
+      - packages/kitchen/air_quality/kitchen_turn_off_air_purifier.yaml
+      - packages/kitchen/climate/kitchen_feels_like_temperature.yaml
+      - packages/kitchen/fridge/kitchen_fridge_left_open_alert.yaml
+      - packages/kitchen/kitchen_lighting_automations.yaml
+      - packages/kitchen/kitchen_lights_auto.yaml
+      - packages/kitchen/kitchen_occupancy.yaml
+      - packages/kitchen/kitchen_state.yaml
+      - packages/kitchen/lights/kitchen_lights_day_off.yaml
+      - packages/kitchen/lights/kitchen_lights_day_on.yaml
+      - packages/kitchen/lights/kitchen_lights_group.yaml
+      - packages/kitchen/lights/kitchen_lights_manually_turned_on.yaml
+      - packages/kitchen/lights/kitchen_lights_motion_on.yaml
+      - packages/kitchen/lights/kitchen_lights_sleep_mode_off.yaml
+      - packages/kitchen/lights/kitchen_lights_sleep_mode_on.yaml
+      - packages/kitchen/lights/kitchen_lights_to_away.yaml
+      - packages/kitchen/lights/kitchen_lights_to_off.yaml
+      - packages/kitchen/lights/kitchen_lights_turned_off.yaml
+      - packages/kitchen/media/kitchen_music_off.yaml
+      - packages/kitchen/media/kitchen_speech_notifications.yaml
+      - packages/kitchen/media/kitchen_speech_notifications_off.yaml
+      - packages/kitchen/media/kitchen_speech_notifications_on.yaml
+      - packages/kitchen/modes/kitchen_mode_auto.yaml
+      - packages/kitchen/modes/kitchen_mode_dim.yaml
+      - packages/kitchen/modes/kitchen_mode_off.yaml
+      - packages/kitchen/modes/kitchen_not_occupied.yaml
+      - packages/kitchen/modes/kitchen_occupied.yaml
+      - packages/kitchen/occupancy/kitchen_ble_presence.yaml
+      - packages/kitchen/occupancy/kitchen_presence.yaml
+      - packages/kitchen/sensors/kitchen_ble_occupancy.yaml
+      - packages/kitchen/sensors/kitchen_doors.yaml
+      - packages/kitchen/sensors/kitchen_illuminance.yaml
+      - packages/kitchen/sensors/kitchen_motion_sensor_occupancy.yaml
+      - packages/kitchen/sensors/kitchen_motion_sensor_status.yaml
+      - packages/kitchen/sensors/kitchen_presence_sensor.yaml
+      - packages/kitchen/sensors/kitchen_windows.yaml
+      - packages/vacuums/main_level/clean_kitchen_and_family_room_temp.yaml
+      - packages/vacuums/main_level/vacuums_clean_kitchen_during_nap.yaml
+
+  - name: laundry
+    repo: johnkoht
+    paths:
+      - automation/laundry_upstairs/upstairs_dryer/upstairs_dryer_complete.yml
+      - automation/laundry_upstairs/upstairs_dryer/upstairs_dryer_to_clean.yml
+      - automation/laundry_upstairs/upstairs_dryer/upstairs_dryer_to_finishing.yml
+      - automation/laundry_upstairs/upstairs_dryer/upstairs_dryer_to_idle.yml
+      - automation/laundry_upstairs/upstairs_dryer/upstairs_dryer_to_running.yml
+      - automation/laundry_upstairs/upstairs_washer/upstairs_washer_complete_alert.yaml
+      - automation/laundry_upstairs/upstairs_washer/upstairs_washer_to_clean.yaml
+      - automation/laundry_upstairs/upstairs_washer/upstairs_washer_to_finishing.yaml
+      - automation/laundry_upstairs/upstairs_washer/upstairs_washer_to_idle.yaml
+      - automation/laundry_upstairs/upstairs_washer/upstairs_washer_to_running.yaml
+      - dashboards/kohbo/rooms/laundry/laundry.yaml
+      - dashboards/kohbo/rooms/partials/laundry_room_cards.yaml
+      - dashboards/kohbo/shared/notifications/laundry_main_level_dryer_complete.yaml
+      - dashboards/kohbo/shared/notifications/laundry_main_level_washer_complete.yaml
+      - dashboards/kohbo/shared/notifications/laundry_upstairs_washer_complete.yaml
+      - dashboards/templates/button_cards/cards/laundry/kohbo_laundry_machine_card.yaml
+      - packages/house/areas/first_floor/laundry_room.yaml
+      - packages/laundry/laundry_room_lighting_automation.yaml
+      - packages/laundry/laundry_room_lights_auto.yaml
+      - packages/laundry/laundry_room_occupancy.yaml
+      - packages/laundry/laundry_room_state.yaml
+      - packages/laundry/lights/laundry_room_lights_motion_on.yaml
+      - packages/laundry/lights/laundry_room_lights_off.yaml
+      - packages/laundry/main_level_dryer/main_level_dryer_complete.yaml
+      - packages/laundry/main_level_dryer/main_level_dryer_power_button.yaml
+      - packages/laundry/main_level_dryer/main_level_dryer_running.yaml
+      - packages/laundry/main_level_dryer/main_level_dryer_status.yaml
+      - packages/laundry/main_level_dryer/main_level_dryer_to_clean.yaml
+      - packages/laundry/main_level_dryer/main_level_dryer_to_finishing.yaml
+      - packages/laundry/main_level_dryer/main_level_dryer_to_idle.yaml
+      - packages/laundry/main_level_dryer/main_level_dryer_to_running.yaml
+      - packages/laundry/main_level_washer/main_level_washer_complete_alert.yaml
+      - packages/laundry/main_level_washer/main_level_washer_running.yaml
+      - packages/laundry/main_level_washer/main_level_washer_status.yaml
+      - packages/laundry/main_level_washer/main_level_washer_to_clean.yaml
+      - packages/laundry/main_level_washer/main_level_washer_to_finishing.yaml
+      - packages/laundry/main_level_washer/main_level_washer_to_idle.yaml
+      - packages/laundry/main_level_washer/main_level_washer_to_running.yaml
+      - packages/laundry/modes/laundry_room_mode_auto.yaml
+      - packages/laundry/modes/laundry_room_mode_off.yaml
+      - packages/laundry/modes/laundry_room_not_occupied.yaml
+      - packages/laundry/modes/laundry_room_occupied.yaml
+      - packages/upstairs_laundry/upstairs_laundry_dryer/upstairs_dryer_complete.yaml
+      - packages/upstairs_laundry/upstairs_laundry_dryer/upstairs_dryer_running.yaml
+      - packages/upstairs_laundry/upstairs_laundry_dryer/upstairs_dryer_status.yaml
+      - packages/upstairs_laundry/upstairs_laundry_dryer/upstairs_dryer_to_clean.yaml
+      - packages/upstairs_laundry/upstairs_laundry_dryer/upstairs_dryer_to_finishing.yaml
+      - packages/upstairs_laundry/upstairs_laundry_dryer/upstairs_dryer_to_idle.yaml
+      - packages/upstairs_laundry/upstairs_laundry_dryer/upstairs_dryer_to_running.yaml
+
+  - name: main_bathroom
+    repo: johnkoht
+    paths:
+      - packages/house/areas/upper_floor/main_bathroom.yaml
+      - packages/main_bathroom/lights/main_bathroom_bedtime_motion_on.yaml
+      - packages/main_bathroom/lights/main_bathroom_light_group.yaml
+      - packages/main_bathroom/lights/main_bathroom_lights_motion_on.yaml
+      - packages/main_bathroom/lights/main_bathroom_lights_off.yaml
+      - packages/main_bathroom/lights/main_bathroom_lights_turned_off.yaml
+      - packages/main_bathroom/main_bathroom_lighting_automations.yaml
+      - packages/main_bathroom/main_bathroom_lights_auto.yaml
+      - packages/main_bathroom/main_bathroom_occupancy.yaml
+      - packages/main_bathroom/main_bathroom_shower.yaml
+      - packages/main_bathroom/main_bathroom_state.yaml
+      - packages/main_bathroom/mode/main_bathroom_mode_auto.yaml
+      - packages/main_bathroom/mode/main_bathroom_mode_bedtime.yaml
+      - packages/main_bathroom/mode/main_bathroom_mode_off.yaml
+      - packages/main_bathroom/mode/main_bathroom_not_occupied.yaml
+      - packages/main_bathroom/mode/main_bathroom_occupied.yaml
+      - packages/main_bathroom/occupancy/main_bathroom_ble_presence.yaml
+      - packages/main_bathroom/occupancy/main_bathroom_presence.yaml
+      - packages/main_bathroom/outlets/main_bathroom_turn_off_outlets.yaml
+      - packages/main_bathroom/outlets/main_bathroom_turn_on_outlets.yaml
+
+  - name: main_bedroom
+    repo: johnkoht
+    paths:
+      - dashboards/kohbo/rooms/upper_floor/main_bedroom.yaml
+      - dashboards/kohbo/rooms/upper_floor/partials/main_bedroom_card.yaml
+      - dashboards/kohbo/shared/notifications/air_purifier_main_bedroom_filter_change.yaml
+      - input_number/media_players/sonos_main_bedroom_volume.yaml
+      - packages/house/areas/upper_floor/main_bedroom.yaml
+      - packages/main_bedroom/air_quality/main_bedroom_air_quality_detections.yaml
+      - packages/main_bedroom/air_quality/main_bedroom_air_quality_sensor.yaml
+      - packages/main_bedroom/air_quality/main_bedroom_turn_off_air_purifier.yaml
+      - packages/main_bedroom/climate/main_bedroom_feels_like_temperature.yaml
+      - packages/main_bedroom/climate/main_bedroom_mean_temperature.yaml
+      - packages/main_bedroom/lights/main_bedroom_john_night_light.yaml
+      - packages/main_bedroom/lights/main_bedroom_john_night_light_off.yaml
+      - packages/main_bedroom/lights/main_bedroom_light_group.yaml
+      - packages/main_bedroom/lights/main_bedroom_lights_day_on.yaml
+      - packages/main_bedroom/lights/main_bedroom_lights_manually_toggled_boolean.yaml
+      - packages/main_bedroom/lights/main_bedroom_lights_motion_on.yaml
+      - packages/main_bedroom/lights/main_bedroom_lights_reset_manual_toggle.yaml
+      - packages/main_bedroom/lights/main_bedroom_lights_to_off.yaml
+      - packages/main_bedroom/lights/main_bedroom_lights_turned_off.yaml
+      - packages/main_bedroom/main_bedroom_lighting_automations.yaml
+      - packages/main_bedroom/main_bedroom_lights_auto.yaml
+      - packages/main_bedroom/main_bedroom_occupancy.yaml
+      - packages/main_bedroom/main_bedroom_presence.yaml
+      - packages/main_bedroom/main_bedroom_state.yaml
+      - packages/main_bedroom/media/main_bedroom_media_off.yaml
+      - packages/main_bedroom/media/main_bedroom_media_player_unjoin.yaml
+      - packages/main_bedroom/media/main_bedroom_speech_notifications.yaml
+      - packages/main_bedroom/media/main_bedroom_speech_notifications_off.yaml
+      - packages/main_bedroom/media/main_bedroom_speech_notifications_on.yaml
+      - packages/main_bedroom/mode/main_bedroom_mode_auto.yaml
+      - packages/main_bedroom/mode/main_bedroom_mode_bedtime.yaml
+      - packages/main_bedroom/mode/main_bedroom_mode_off.yaml
+      - packages/main_bedroom/mode/main_bedroom_mode_wake.yaml
+      - packages/main_bedroom/mode/main_bedroom_not_occupied.yaml
+      - packages/main_bedroom/mode/main_bedroom_occupied.yaml
+      - packages/main_bedroom/occupancy/main_bedroom_ble_presence.yaml
+      - packages/main_bedroom/sensors/main_bedroom_ble_occupancy.yaml
+      - packages/main_bedroom/sensors/main_bedroom_sensor_occupancy.yaml
+      - packages/main_bedroom/sensors/main_bedroom_sensor_status.yaml
+
+  - name: mudroom
+    repo: johnkoht
+    paths:
+      - automation/mudroom/lights/mudroom_lights_to_away.yaml
+      - automation/mudroom/lights/mudroom_lights_to_dim.yaml
+      - automation/mudroom/lights/mudroom_lights_to_off.yaml
+      - automation/mudroom/lights/mudroom_lights_to_on.yaml
+      - automation/mudroom/modes/mudroom_mode_away.yaml
+      - automation/mudroom/modes/mudroom_mode_motion.yaml
+      - automation/mudroom/modes/mudroom_mode_night_motion.yaml
+      - automation/mudroom/modes/mudroom_mode_on.yaml
+      - dashboards/kohbo/rooms/main_floor/mudroom.yaml
+      - dashboards/kohbo/rooms/main_floor/partials/mudroom_card.yaml
+      - input_select/rooms/mudroom.yaml
+      - packages/house/areas/first_floor/mudroom_room.yaml
+      - packages/mudroom/garage_entry_door/garage_entry_door_auto_lock.yaml
+      - packages/mudroom/garage_entry_door/garage_entry_door_auto_lock_in_evening.yaml
+      - packages/mudroom/garage_entry_door/garage_entry_door_auto_unlock.yaml
+      - packages/mudroom/garage_entry_door/garage_entry_door_lock_if_open_too_long.yaml
+      - packages/mudroom/garage_entry_door/garage_entry_door_lock_toggle_switch.yaml
+      - packages/mudroom/garage_entry_door/garage_entry_door_unlock_upon_arrival.yaml
+      - packages/mudroom/occupancy/mudroom_not_occupied.yaml
+      - packages/mudroom/occupancy/mudroom_occupied.yaml
+      - packages/mudroom/occupancy/mudroom_occupied_boolean.yaml
+      - packages/mudroom/occupancy/mudroom_presence.yaml
+      - packages/mudroom_bathroom/fan/mudroom_bathroom_fan_entity.yaml
+      - packages/mudroom_bathroom/fan/mudroom_bathroom_fan_off.yaml
+      - packages/mudroom_bathroom/lights/mudroom_bathroom_lights_motion_on.yaml
+      - packages/mudroom_bathroom/lights/mudroom_bathroom_lights_off.yaml
+      - packages/mudroom_bathroom/modes/mudroom_bathroom_mode_auto.yaml
+      - packages/mudroom_bathroom/modes/mudroom_bathroom_mode_off.yaml
+      - packages/mudroom_bathroom/modes/mudroom_bathroom_not_occupied.yaml
+      - packages/mudroom_bathroom/modes/mudroom_bathroom_occupied.yaml
+      - packages/mudroom_bathroom/mudroom_bathroom_occupancy.yaml
+      - packages/mudroom_bathroom/mudroom_bathroom_state.yaml
+
+  - name: mudroom_bathroom
+    repo: johnkoht
+    paths:
+      - packages/mudroom_bathroom/fan/mudroom_bathroom_fan_entity.yaml
+      - packages/mudroom_bathroom/fan/mudroom_bathroom_fan_off.yaml
+      - packages/mudroom_bathroom/lights/mudroom_bathroom_lights_motion_on.yaml
+      - packages/mudroom_bathroom/lights/mudroom_bathroom_lights_off.yaml
+      - packages/mudroom_bathroom/modes/mudroom_bathroom_mode_auto.yaml
+      - packages/mudroom_bathroom/modes/mudroom_bathroom_mode_off.yaml
+      - packages/mudroom_bathroom/modes/mudroom_bathroom_not_occupied.yaml
+      - packages/mudroom_bathroom/modes/mudroom_bathroom_occupied.yaml
+      - packages/mudroom_bathroom/mudroom_bathroom_occupancy.yaml
+      - packages/mudroom_bathroom/mudroom_bathroom_state.yaml
+
+  - name: ninos_room
+    repo: johnkoht
+    paths:
+      - automation/ninos_room/nino_nap_time.yaml
+      - automation/ninos_room/nino_nap_time_ended.yaml
+      - input_select/rooms/ninos_room.yml
+      - packages/ninos_room/air_quality/nino_bedroom_air_quality_detections.yaml
+      - packages/ninos_room/air_quality/nino_bedroom_air_quality_sensor.yaml
+      - packages/ninos_room/air_quality/nino_bedroom_turn_off_air_purifier.yaml
+      - packages/ninos_room/climate/nino_room_mean_temperature.yaml
+      - packages/ninos_room/climate/ninos_room_feels_like_temperature.yaml
+      - packages/ninos_room/lights/nino_nightlight_turn_off.yaml
+      - packages/ninos_room/lights/nino_nightlight_turn_on.yaml
+      - packages/ninos_room/lights/ninos_bedroom_lights_off.yaml
+      - packages/ninos_room/modes/ninos_bedroom_mode_auto.yaml
+      - packages/ninos_room/modes/ninos_bedroom_mode_bedtime.yaml
+      - packages/ninos_room/modes/ninos_bedroom_mode_off.yaml
+      - packages/ninos_room/modes/ninos_bedroom_not_occupied.yaml
+      - packages/ninos_room/modes/ninos_bedroom_occupied.yaml
+      - packages/ninos_room/nino_escaping/nino_escape_monitor.yaml
+      - packages/ninos_room/nino_escaping/nino_escape_monitor_turn_off.yaml
+      - packages/ninos_room/nino_escaping/nino_escape_monitor_turn_on.yaml
+      - packages/ninos_room/ninos_bathroom_heater.yaml
+      - packages/ninos_room/ninos_bedroom_heater.yaml
+      - packages/ninos_room/ninos_bedroom_occupancy.yaml
+      - packages/ninos_room/ninos_bedroom_state.yaml
+      - packages/ninos_room/occupancy/ninos_bedroom_presence.yaml
+      - packages/ninos_room/occupancy/ninos_room_ble_presence.yaml
+
+  - name: office
+    repo: johnkoht
+    paths:
+      - dashboards/kohbo/rooms/main_floor/office.yaml
+      - dashboards/kohbo/rooms/main_floor/partials/office_card.yaml
+      - dashboards/kohbo/rooms/media_players/office_media_player.yaml
+      - dashboards/kohbo/shared/notifications/air_purifier_office_filter_change.yaml
+      - input_boolean/rooms/office_occupied.yml
+      - input_number/media_players/sonos_office_volume.yaml
+      - input_select/rooms/office.yml
+      - packages/house/areas/first_floor/office_room.yaml
+      - packages/office/air_quality/office_air_quality_detections.yaml
+      - packages/office/air_quality/office_air_quality_sensor.yaml
+      - packages/office/air_quality/office_turn_off_air_purifier.yaml
+      - packages/office/climate/office_feels_like_temperature.yaml
+      - packages/office/lights/office_camera_light_off.yaml
+      - packages/office/lights/office_camera_light_on.yaml
+      - packages/office/lights/office_dnd_light_off.yaml
+      - packages/office/lights/office_dnd_light_on.yaml
+      - packages/office/lights/office_lighting_automation_on.yaml
+      - packages/office/lights/office_lighting_automations_off.yaml
+      - packages/office/lights/office_lights_day_off.yaml
+      - packages/office/lights/office_lights_day_on.yaml
+      - packages/office/lights/office_lights_group.yaml
+      - packages/office/lights/office_lights_motion_off.yaml
+      - packages/office/lights/office_lights_motion_on.yaml
+      - packages/office/lights/office_lights_off.yaml
+      - packages/office/lights/office_lights_on.yaml
+      - packages/office/lights/office_lights_scene_toggle.yaml
+      - packages/office/lights/office_lights_scenes.yaml
+      - packages/office/lights/office_lights_sync_bulbs_from_switch.yaml
+      - packages/office/lights/office_lights_sync_switch_state.yaml
+      - packages/office/lights/office_lights_turned_off.yaml
+      - packages/office/lights/shelf_lighting/office_shelf_lights_group.yaml
+      - packages/office/lights/shelf_lighting/turn_off_deep_work_lighting.yaml
+      - packages/office/lights/shelf_lighting/turn_off_office_shelf_lights.yaml
+      - packages/office/lights/shelf_lighting/turn_on_deep_work_lighting.yaml
+      - packages/office/media/office_echo_dnd_off.yaml
+      - packages/office/media/office_echo_dnd_on.yaml
+      - packages/office/media/office_music_clear_queue.yaml
+      - packages/office/media/office_music_off.yaml
+      - packages/office/media/office_music_on.yaml
+      - packages/office/media/office_music_resume.yaml
+      - packages/office/media/office_speech_notifications.yaml
+      - packages/office/media/office_speech_notifications_off.yaml
+      - packages/office/media/office_speech_notifications_on.yaml
+      - packages/office/modes/office_mode_auto.yaml
+      - packages/office/modes/office_mode_dnd.yaml
+      - packages/office/modes/office_mode_dnd_off.yaml
+      - packages/office/modes/office_mode_off.yaml
+      - packages/office/modes/office_not_occupied.yaml
+      - packages/office/modes/office_occupied.yaml
+      - packages/office/occupancy/office_ble_presence.yaml
+      - packages/office/occupancy/office_room_presence.yaml
+      - packages/office/office_dnd.yaml
+      - packages/office/office_doors.yaml
+      - packages/office/office_lighting_automation.yaml
+      - packages/office/office_lights_auto.yaml
+      - packages/office/office_music_playing.yaml
+      - packages/office/office_occupancy.yaml
+      - packages/office/office_presence.yaml
+      - packages/office/office_state.yaml
+      - packages/office/office_treadmill.yaml
+      - packages/people/cristina/commute/cristina_office_day_boolean.yaml
+      - packages/people/cristina/commute/cristina_office_day_reset.yaml
+      - packages/vacuums/main_level/vacuums_clean_office_when_dog_is_at_daycare.yaml
+
+  - name: playroom
+    repo: johnkoht
+    paths:
+      - dashboards/kohbo/rooms/main_floor/partials/playroom_card.yaml
+      - dashboards/kohbo/rooms/main_floor/playroom.yaml
+      - packages/house/areas/first_floor/playroom_room.yaml
+      - packages/playroom/climate/playroom_feels_like_temperature.yaml
+      - packages/playroom/lights/playroom_lights_day_off.yaml
+      - packages/playroom/lights/playroom_lights_day_on.yaml
+      - packages/playroom/lights/playroom_lights_group.yaml
+      - packages/playroom/lights/playroom_lights_motion_off.yaml
+      - packages/playroom/lights/playroom_lights_motion_on.yaml
+      - packages/playroom/lights/playroom_lights_off.yaml
+      - packages/playroom/lights/playroom_lights_to_off.yaml
+      - packages/playroom/lights/playroom_lights_turned_off.yaml
+      - packages/playroom/media/playroom_media_player_unjoin.yaml
+      - packages/playroom/media/playroom_music_off.yaml
+      - packages/playroom/modes/playroom_mode_auto.yaml
+      - packages/playroom/modes/playroom_mode_off.yaml
+      - packages/playroom/modes/playroom_not_occupied.yaml
+      - packages/playroom/modes/playroom_occupied.yaml
+      - packages/playroom/occupancy/playroom_ble_occupancy.yaml
+      - packages/playroom/occupancy/playroom_presence.yaml
+      - packages/playroom/party_time/playroom_activate_party_time.yaml
+      - packages/playroom/party_time/playroom_deactivate_party_time.yaml
+      - packages/playroom/party_time/playroom_party_time_boolean.yaml
+      - packages/playroom/playroom_lighting_automation.yaml
+      - packages/playroom/playroom_lights_auto.yaml
+      - packages/playroom/playroom_occupancy.yaml
+      - packages/playroom/playroom_state.yaml
+      - packages/playroom/sensors/playroom_motion_sensor.yaml
+      - packages/playroom/sensors/playroom_occupancy_sensor.yaml
+      - packages/system/alerts/playroom_ap_unavailable.yaml
+
+  - name: pool
+    repo: johnkoht
+    paths:
+      - dashboards/kohbo/security/cameras/_backyard_pool_camera_popup.yaml
+      - packages/pool/modes/pool_mode_auto.yaml
+      - packages/pool/modes/pool_mode_off.yaml
+      - packages/pool/modes/pool_not_occupied.yaml
+      - packages/pool/modes/pool_occupied.yaml
+      - packages/pool/occupancy/pool_motion_restart_timer.yaml
+      - packages/pool/occupancy/pool_occupancy_timer.yaml
+      - packages/pool/pool_doorbell_active.yaml
+      - packages/pool/pool_occupancy.yaml
+      - packages/pool/pool_state.yaml
+      - packages/pool/sensors/pool_motion_sensor_status.yaml
+      - packages/pool/sensors/pool_outside_temperature.yaml
+      - packages/security/cameras/detections/backyard_pool_camera/backyard_pool_camera_detections_animal.yaml
+      - packages/security/cameras/detections/backyard_pool_camera/backyard_pool_camera_detections_person.yaml
+      - packages/security/cameras/detections/backyard_pool_camera/backyard_pool_camera_notifications.yaml
+
+  - name: porch
+    repo: johnkoht
+    paths:
+      - dashboards/kohbo/security/cameras/_backyard_porch_camera_popup.yaml
+      - packages/security/cameras/detections/backyard_porch_camera/backyard_porch_camera_detections_animal.yaml
+      - packages/security/cameras/detections/backyard_porch_camera/backyard_porch_camera_detections_person.yaml
+      - packages/security/cameras/detections/backyard_porch_camera/backyard_porch_camera_notifications.yaml
+      - packages/security/cameras/detections/backyard_porch_camera/backyard_porch_camera_proxy.yaml
+
+  - name: powder_room
+    repo: johnkoht
+    paths:
+      - packages/powder_room/fan/powder_room_fan_entity.yaml
+      - packages/powder_room/fan/powder_room_fan_off.yaml
+      - packages/powder_room/lights/powder_room_lights_off.yaml
+      - packages/powder_room/modes/powder_room_mode_auto.yaml
+      - packages/powder_room/modes/powder_room_mode_off.yaml
+      - packages/powder_room/modes/powder_room_not_occupied.yaml
+      - packages/powder_room/modes/powder_room_occupied.yaml
+      - packages/powder_room/powder_room_occupancy.yaml
+      - packages/powder_room/powder_room_state.yaml
+
+  - name: stairs
+    repo: johnkoht
+    paths:
+      - packages/stairs/lights/stairs_lights_motion_on.yaml
+      - packages/stairs/lights/stairs_lights_off.yaml
+      - packages/stairs/sensors/stairs_motion_status.yaml
+
+  - name: sunroom
+    repo: johnkoht
+    paths:
+      - packages/sunroom/modes/sunroom_mode_auto.yaml
+      - packages/sunroom/modes/sunroom_mode_off.yaml
+      - packages/sunroom/modes/sunroom_occupied.yaml
+      - packages/sunroom/modes/sunroom_unoccupied.yaml
+      - packages/sunroom/sunroom_occupancy.yaml
+      - packages/sunroom/sunroom_state.yaml
+
+  - name: upstairs_hallway
+    repo: johnkoht
+    paths:
+      - dashboards/kohbo/rooms/upper_floor/partials/upstairs_hallway_card.yaml
+      - dashboards/kohbo/rooms/upper_floor/upstairs_hallway.yaml
+      - packages/house/areas/upper_floor/upstairs_hallway.yaml
+      - packages/upstairs_hallway/lights/upstairs_hallway_lighting_auto.yaml
+      - packages/upstairs_hallway/lights/upstairs_hallway_lighting_automation.yaml
+      - packages/upstairs_hallway/lights/upstairs_hallway_lights_manually_turned_off.yaml
+      - packages/upstairs_hallway/lights/upstairs_hallway_lights_motion_on.yaml
+      - packages/upstairs_hallway/lights/upstairs_hallway_lights_sleep_mode_off.yaml
+      - packages/upstairs_hallway/lights/upstairs_hallway_lights_sleep_mode_on.yaml
+      - packages/upstairs_hallway/lights/upstairs_hallway_lights_to_off.yaml
+      - packages/upstairs_hallway/modes/upstairs_hallway_mode_auto.yaml
+      - packages/upstairs_hallway/modes/upstairs_hallway_mode_bedtime.yaml
+      - packages/upstairs_hallway/modes/upstairs_hallway_mode_off.yaml
+      - packages/upstairs_hallway/modes/upstairs_hallway_not_occupied.yaml
+      - packages/upstairs_hallway/modes/upstairs_hallway_occupied.yaml
+      - packages/upstairs_hallway/sensors/upstairs_hallway_motion.yaml
+      - packages/upstairs_hallway/upstairs_hallway_occupancy.yaml
+      - packages/upstairs_hallway/upstairs_hallway_state.yaml
+
+  - name: upstairs_laundry
+    repo: johnkoht
+    paths:
+      - packages/upstairs_laundry/upstairs_laundry_dryer/upstairs_dryer_complete.yaml
+      - packages/upstairs_laundry/upstairs_laundry_dryer/upstairs_dryer_running.yaml
+      - packages/upstairs_laundry/upstairs_laundry_dryer/upstairs_dryer_status.yaml
+      - packages/upstairs_laundry/upstairs_laundry_dryer/upstairs_dryer_to_clean.yaml
+      - packages/upstairs_laundry/upstairs_laundry_dryer/upstairs_dryer_to_finishing.yaml
+      - packages/upstairs_laundry/upstairs_laundry_dryer/upstairs_dryer_to_idle.yaml
+      - packages/upstairs_laundry/upstairs_laundry_dryer/upstairs_dryer_to_running.yaml
+

@@ -1,0 +1,52 @@
+# Golden selection for renemarc.
+#
+# Schema: schemas/catalog/golden_renemarc.json. Validate with `oh-catalog validate`.
+#
+# No packages at all: one directory per artifact kind, with integration
+# configuration and notify platforms filed under `misc/`.
+#
+# Every path here is hand-picked from the repository and carries the artifact
+# class it is expected to receive, which makes each entry a check rather than a
+# line of a list: a path alone says only that something was selected, while a
+# path with its class fails both when the path stops being selected and when it
+# is selected as the wrong thing.
+#
+# This file is what guards the corpus against a rule list that has gone too far
+# in the *excluding* direction. An exclude rule broad enough to swallow a
+# directory takes these entries with it, and the check fails naming the path and
+# the rule that decided it -- whereas the inventory on its own would simply
+# report a smaller corpus, with nothing left to compare against. It is not a
+# guard in the other direction: a select rule broad enough to pull new files in
+# shows up only as a diff in `catalog/inventory.json`, and the per-repo counts in
+# `catalog/README.md` are what a reviewer reads to see that.
+#
+# Across the four files the pinned classes must cover every class in the closed
+# enum except `other`, so that no class can drop out of the corpus entirely
+# without something saying so.
+
+repo: renemarc
+entries:
+  - path: automations/wake_up.yaml
+    class: automation
+  - path: automations/notifications/leak_notify.yaml
+    class: automation
+  - path: scripts/wake_up.yaml
+    class: script
+  - path: misc/scenes.yaml
+    class: scene
+  - path: misc/lifx.yaml
+    class: helper
+  - path: sensors/atmosphere.yaml
+    class: helper
+  - path: notifications/group.yaml
+    class: helper
+  - path: lights/lightpack.yaml
+    class: helper
+  - path: configuration.yaml
+    class: package
+  - path: customize.yaml
+    class: package
+  - path: zwave_device_config.yaml
+    class: package
+  - path: ui-lovelace.yaml
+    class: dashboard

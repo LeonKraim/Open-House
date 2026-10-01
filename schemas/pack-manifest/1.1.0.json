@@ -1,0 +1,94 @@
+{
+  "$id": "https://open-house.invalid/schemas/pack-manifest/1.1.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pack manifest",
+  "schema_version": "1.1.0",
+  "supersedes": "1.0.0",
+  "description": "A pack's declaration of what it needs and what it provides, now also carrying the kind of pack it is, the slots it can work without, and the behaviours it declares. 1.0.0 could name the slots a pack must be plugged into and the artifacts it hands over, but the pack's behaviours -- the one part of it the frozen vocabulary exists to close -- had nowhere to be written, so a pack could ship a behaviour the vocabulary does not admit and nothing said so. The three behaviour fields reference `behavior-vocabulary`'s published axes rather than restating their terms, so the day the vocabulary gains a version is the day the set of behaviours a pack may declare changes, and no second copy of the term list exists to drift from it. `requires_slots` is what makes a pack portable as before: the pack names the placeholders it must be plugged into and never names a house, a room or an entity.",
+  "type": "object",
+  "required": ["name", "version", "description", "kind", "requires_slots", "provides", "behaviours"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "description": {"type": "string", "minLength": 1},
+    "kind": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "What the pack is for -- `lighting`, `security`, a word of the same lower-snake-case form as a name. A pattern and not an enum because no corpus of packs exists to derive a closed set of kinds from, and inventing one here would freeze a taxonomy nothing corroborates; the shape is fixed, the terms are learned the way the vocabulary's were."
+    },
+    "requires_slots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "description": "Slot names, resolved against slots.yaml. A pack that names a slot no slot file defines is a pack that cannot be installed anywhere."
+    },
+    "optional_slots": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "description": "Slots the pack can use but does not require, so a house missing one still installs it. Separate from `requires_slots` rather than folded in, because the two say different things about the house the pack lands in and one list cannot carry both."
+    },
+    "provides": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/provided"},
+      "description": "Every entry carries the artifact class it confers, because the class-pinning rule is what stops a pack smuggling an unpinnable artifact past the licence gate by calling it a helper."
+    },
+    "behaviours": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/behaviour"},
+      "description": "The behaviours the pack declares, each named by a trigger, a condition and an action drawn from `behavior-vocabulary`'s published axes. The terms are referenced, not restated, so the pack cannot use a behaviour term the vocabulary does not carry."
+    },
+    "min_engine_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}
+  },
+  "$defs": {
+    "provided": {
+      "type": "object",
+      "required": ["path", "class"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repo-relative path. A string fact, so its shape comes from `schemas/catalog/fact-shapes.yaml` shared by every filed fact."
+        },
+        "class": {
+          "enum": [
+            "package",
+            "automation",
+            "script",
+            "scene",
+            "helper",
+            "template",
+            "blueprint",
+            "dashboard",
+            "custom_integration",
+            "other"
+          ],
+          "description": "The artifact class this entry confers, drawn from the closed class set rather than from free text."
+        }
+      }
+    },
+    "behaviour": {
+      "type": "object",
+      "required": ["action"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "trigger": {
+          "$ref": "https://open-house.invalid/schemas/behavior-vocabulary/1.1.0.json#/properties/triggers/items",
+          "description": "A trigger block kind, resolved against the published vocabulary rather than restated here."
+        },
+        "condition": {
+          "$ref": "https://open-house.invalid/schemas/behavior-vocabulary/1.1.0.json#/properties/conditions/items",
+          "description": "A condition block kind, resolved against the published vocabulary rather than restated here."
+        },
+        "action": {
+          "$ref": "https://open-house.invalid/schemas/behavior-vocabulary/1.1.0.json#/properties/actions/items",
+          "description": "The action block kind the behaviour ends in. Required, because a behaviour with no action does nothing and the action is the one axis every behaviour the extraction found carries."
+        }
+      }
+    }
+  }
+}

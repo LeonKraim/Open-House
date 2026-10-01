@@ -1,0 +1,46 @@
+# The hand-written example house -- task 7.3.
+#
+# It exists because a generated example proves only that the generator and the
+# schema agree with each other, not that a person can write to the schema at
+# all. So this file is written to `schemas/house/1.0.0.json` by hand and is the
+# one house the project ships.
+#
+# It exercises two room types, `living_room` and `bedroom`, and both halves of
+# the optional-slot rule the house schema states -- "a slot the type provides may
+# be absent, which is how an optional slot is left unbound". Two rooms share the
+# `living_room` type, which is what makes the difference observable: a slot one
+# of them carries and the other does not is optional by construction, because a
+# required slot would be bound in both. `main_light` is in every room and is
+# therefore required; `accent_light` is a bound optional slot; `floor_lamp` is an
+# optional slot left unbound. The `house_scope` slots are named here rather than
+# left out, because a house-scoped behaviour may only require a slot this list
+# carries.
+name: Example House
+rooms:
+  - id: living_room
+    name: Living Room
+    type: living_room
+    bindings:
+      main_light:
+        entity_id: light.living_room_main
+      accent_light:
+        entity_id: light.living_room_accent
+      floor_lamp:
+        entity_id: light.living_room_floor_lamp
+  - id: living_room_two
+    name: Second Living Room
+    type: living_room
+    bindings:
+      main_light:
+        entity_id: light.living_room_two_main
+      accent_light:
+        entity_id: light.living_room_two_accent
+  - id: master_bedroom
+    name: Master Bedroom
+    type: bedroom
+    bindings:
+      main_light:
+        entity_id: light.master_bedroom_main
+house_scope:
+  slots:
+    - away_mode

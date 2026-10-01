@@ -2,7 +2,7 @@
   "$id": "https://open-house.invalid/schemas/catalog/rooms.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Real rooms across the reference repos",
-  "description": "Every room that exists in any of the four setups, with the repo and path it came from. This file is the evidence base for `room_types.yaml`: a room type's `source_rooms` are drawn from here, so a type that no real room produced cannot be recorded, and the corroboration rule for `default: true` can be checked by joining through this file rather than by trusting a comment.",
+  "description": "Every room that exists in any of the four setups, with the repo it came from and the files that name it. This file is the evidence base for `room_types.yaml`: a room type's `source_rooms` are drawn from here, so a type that no real room produced cannot be recorded, and the corroboration rule for `default: true` can be checked by joining through this file rather than by trusting a comment.",
   "schema_version": "1.0.0",
   "type": "object",
   "required": ["rooms"],
@@ -16,7 +16,7 @@
   "$defs": {
     "room": {
       "type": "object",
-      "required": ["name", "repo", "path"],
+      "required": ["name", "repo", "paths"],
       "additionalProperties": false,
       "properties": {
         "name": {
@@ -24,11 +24,17 @@
           "minLength": 1,
           "description": "The room as the repo spells it. Kept verbatim, including a non-English name: this is the record of what exists, and normalising it here would destroy the evidence the room-type map is derived from."
         },
-        "repo": {"type": "string", "minLength": 1},
-        "path": {
+        "repo": {
           "type": "string",
           "minLength": 1,
-          "description": "Repo-relative path of the file the room was read from."
+          "description": "The repository's owner handle, lowercased, as `licenses.yaml` and `inventory.json` name it. One record per room per repo, so a room two setups both have is two records and the corroboration join counts two repos."
+        },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Repo-relative paths of every selected file the room was read from, sorted. A list rather than one path because a room is ordinarily spread across a package directory, a dashboard and its helpers; every entry names the room and every selected file that names the room is an entry, which `tools/catalog/rooms.py` re-derives and enforces.",
+          "items": {"type": "string", "minLength": 1}
         }
       }
     }

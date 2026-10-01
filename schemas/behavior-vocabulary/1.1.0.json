@@ -1,0 +1,55 @@
+{
+  "$id": "https://open-house.invalid/schemas/behavior-vocabulary/1.1.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Behaviour vocabulary",
+  "schema_version": "1.1.0",
+  "supersedes": "1.0.0",
+  "description": "The closed vocabulary of triggers, conditions and actions a behaviour may use, now carrying the terms the stage-A extraction derived from the four reference estates. 1.0.0 states this shape and enumerates nothing, because the terms are learned from the corpus rather than known when the shape was frozen; this version closes the three derived axes and names its predecessor, which stays present and byte-identical because the arrow points backwards and no published file is ever written into. The mode and profile axes keep 1.0.0's shape: the extraction derives no mode or profile term, and enumerating a set no estate corroborates would put a fabricated vocabulary into the frozen contract.",
+  "type": "object",
+  "required": ["triggers", "conditions", "actions", "axes"],
+  "additionalProperties": false,
+  "properties": {
+    "triggers": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Trigger block kinds the extraction observed across the four estates.",
+      "items": {
+        "enum": ["calendar", "conversation", "device", "event", "homeassistant", "mqtt", "numeric_state", "state", "sun", "tag", "template", "time", "time_pattern", "webhook", "zone"]
+      }
+    },
+    "conditions": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Condition block kinds the extraction observed across the four estates.",
+      "items": {
+        "enum": ["and", "not", "numeric_state", "or", "screen", "state", "sun", "template", "time", "trigger", "zone"]
+      }
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Action block kinds the extraction observed across the four estates.",
+      "items": {
+        "enum": ["choose", "condition", "delay", "device", "event", "if", "parallel", "repeat", "scene", "service", "stop", "variables", "wait_for_trigger", "wait_template"]
+      }
+    },
+    "axes": {
+      "type": "object",
+      "description": "The mode and profile axes a behaviour may be gated on.",
+      "required": ["modes", "profiles"],
+      "additionalProperties": false,
+      "properties": {
+        "modes": {"$ref": "#/$defs/terms"},
+        "profiles": {"$ref": "#/$defs/terms"}
+      }
+    }
+  },
+  "$defs": {
+    "terms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "description": "Carried from 1.0.0 unchanged for the two axes the extraction does not derive. A mode or profile term is a lower-snake-case name, and this axis gains its own enumeration, if ever, the same way the derived axes did: by a further version file and never by an edit."
+    }
+  }
+}

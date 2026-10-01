@@ -1,0 +1,58 @@
+# Golden selection for ccostan.
+#
+# Schema: schemas/catalog/golden_ccostan.json. Validate with `oh-catalog validate`.
+#
+# The two integrations CCOSTAN wrote, and the slices its `config/` directory is
+# assembled from.
+#
+# Every path here is hand-picked from the repository and carries the artifact
+# class it is expected to receive, which makes each entry a check rather than a
+# line of a list: a path alone says only that something was selected, while a
+# path with its class fails both when the path stops being selected and when it
+# is selected as the wrong thing.
+#
+# This file is what guards the corpus against a rule list that has gone too far
+# in the *excluding* direction. An exclude rule broad enough to swallow a
+# directory takes these entries with it, and the check fails naming the path and
+# the rule that decided it -- whereas the inventory on its own would simply
+# report a smaller corpus, with nothing left to compare against. It is not a
+# guard in the other direction: a select rule broad enough to pull new files in
+# shows up only as a diff in `catalog/inventory.json`, and the per-repo counts in
+# `catalog/README.md` are what a reviewer reads to see that.
+#
+# Across the four files the pinned classes must cover every class in the closed
+# enum except `other`, so that no class can drop out of the corpus entirely
+# without something saying so.
+
+repo: ccostan
+entries:
+  - path: config/custom_components/tesla_charge_guard/manifest.json
+    class: custom_integration
+  - path: config/custom_components/alexa_camera_compat/__init__.py
+    class: custom_integration
+  - path: config/automations.yaml
+    class: automation
+  - path: config/automation/away.yaml
+    class: automation
+  - path: config/script/dog_bark.yaml
+    class: script
+  - path: config/scene/living_room.yaml
+    class: scene
+  - path: config/light_groups.yaml
+    class: helper
+  - path: config/group/doors.yaml
+    class: helper
+  - path: config/sensor/MQTT.yaml
+    class: helper
+  - path: config/configuration.yaml
+    class: package
+  - path: config/homekit.yaml
+    class: package
+  - path: config/logger.yaml
+    class: package
+  - path: config/ui-lovelace.yaml
+    class: dashboard
+  - path: config/lovelace/infrastructure_apt_updates_card.yaml
+    class: dashboard
+  - path: config/templates/speech/briefing.yaml
+    class: template

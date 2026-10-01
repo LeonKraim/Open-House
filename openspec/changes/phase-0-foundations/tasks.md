@@ -149,8 +149,10 @@ committed, because CI must not depend on four third-party repositories that are
   decided by the lower `order` without failing; `authored_paths` lacking a
   `custom_integration` or a `blueprint` entry fails naming the missing class; an
   `authored_paths` entry which is not tracked fails; an entry classified as
-  anything but its declared class fails; and the per-deciding-rule counts sum to
-  the excluded count with no rule unseen.
+  anything but its declared class fails; and the per-deciding-rule counts cover
+  every decided file -- so a rule that decided nothing is absent from the map
+  rather than present as a zero -- with the excluded count reported per deciding
+  rule beside the selected one.
 - [ ] 3.2 Add a golden file per repo whose entries are paths **each carrying the
   class it is expected to receive**. This is hand-written data, so it lands
   before the code that checks it. Verify structurally that every class in the

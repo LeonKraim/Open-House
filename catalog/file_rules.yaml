@@ -2,14 +2,579 @@
 #
 # Schema: schemas/catalog/file_rules.json. Validate with `oh-catalog validate`.
 #
-# Empty until task 3.1. Every rule carries a unique integer `order`, a pattern, a
-# select-or-exclude kind, a reason, and -- on a select rule -- the artifact class
-# it confers. First match wins, so the list is ordered rather than a map: the
-# class a selected file receives is its deciding rule's class and is never
-# inferred from the file's content, because inference would need the file and the
-# file lives only in a clone.
+# Every tracked file in all four reference repos is decided by exactly one rule
+# here: selected (it is configuration, it enters the corpus, it receives the
+# class its deciding rule confers) or excluded (it is not, and the rule that
+# excluded it says why). Applied in ascending `order`, first match wins, and the
+# deciding rule is recorded on the file and counted -- so an over-broad exclude
+# is visible as a count, and the golden files fail on a path it swallowed.
 #
-# `authored_paths` holds rules that are also in `rules`, at a low `order`, so an
-# authored path overrides an exclusion and still has a deciding rule to record.
-rules: []
-authored_paths: []
+# The bands below are a reading order rather than a mechanism. `order` is the
+# mechanism, and it is the only thing that matters: a rule must be above the
+# rules it is an exception to, and everything else is documentation.
+#
+#     5-9  never an artifact     files that are not configuration whatever
+#                                directory they sit in. Ahead of everything,
+#                                including the authored paths, because that is
+#                                the one thing they have to be: a rule that
+#                                selects a directory selects what is in it, and
+#                                both authored rules are directory globs. Each
+#                                of the two integrations below carries a
+#                                `README.md`, and a corpus of "configuration
+#                                files" that contains prose is not one
+#   10-19  authored paths        an author's own work, selected past the
+#                                vendored exclusions below because a directory
+#                                convention cannot tell an integration somebody
+#                                wrote from one they cloned
+#   20-29  altered core copies   a repo author's modified copy of a Home
+#                                Assistant core file: excluded, and never
+#                                attributed to them, because they changed it but
+#                                did not write it
+#   30-40  vendored trees        third-party material a repo carries, the few
+#                                directories holding a different system's
+#                                artifacts, and the runtime's own image cache
+#   41-50  repository tooling    the repositories' own machinery. Before the
+#                                by-kind rules below, because these are decided
+#                                by what the directory is for and a plan document
+#                                is a plan document whatever it is written in
+#   51-58  non-configuration     file kinds that are never Home Assistant
+#                                configuration, whatever directory they sit in.
+#                                The two kinds that have to hold that whatever is
+#                                *above* them too are at 5-9 instead
+#   80-83  assembly slices       the top-level blocks the configuration is
+#                                assembled from
+#   100+   behaviour, by kind
+#
+# A rule whose pattern matches nothing is not harmless: it is either a typo or a
+# decision the tree has stopped making, and a rule that decided nothing is
+# reported rather than left in the list to look like coverage. Three rules have
+# already been removed for that reason -- an archive rule, a templated-YAML
+# rule and a service-unit rule, each of which read as coverage and decided no
+# file in any of the four repos.
+
+rules:
+  # --- 5-9: never an artifact -----------------------------------------------
+  #
+  # The two rules here are first in the list, above the authored paths, and the
+  # position is the whole of their content. Every select rule below them is
+  # either a directory glob or a behavioural kind, and a directory glob selects
+  # whatever the directory holds: both authored `custom_components/` trees carry
+  # a `README.md`, which the rules at orders 10 and 11 selected into the corpus
+  # as `custom_integration` until these two rules were moved up from the 41-58
+  # bands. Nothing else in the list had to change for that -- the prose rule was
+  # already there, at order 51, deciding prose everywhere it had not already
+  # been swallowed. A rule is only as general as its position allows.
+  - order: 5
+    pattern: "**/*.{md,mdc}"
+    kind: exclude
+    class: null
+    reason: >-
+      Documentation, including the `.mdc` files an editor's own rule set is
+      written in. It is the repo author's prose about their configuration, which
+      is expression rather than configuration, and two of the four repos grant
+      no licence to reuse it. Ahead of the authored-path rules because those are
+      directory globs and each of the two authored integrations ships a README.
+  - order: 6
+    pattern: "**/{LICENSE,LICENSE.txt,COPYING,NOTICE}*"
+    kind: exclude
+    class: null
+    reason: >-
+      Licence texts. Recorded in `catalog/licenses.yaml` as facts about the
+      repo; committed into the corpus they would be a second copy of a document
+      the corpus does not need and, for `cc_by_nc_sa`, may not carry. Here
+      rather than with the other non-configuration kinds for the same reason as
+      the rule above: a licence file inside an authored tree is a licence file,
+      and the authored rules select by directory.
+
+  # --- 10-19: authored paths ------------------------------------------------
+  #
+  # The two custom integrations CCOSTAN wrote. Both declare
+  # `"codeowners": ["@CCOSTAN"]` in their `manifest.json`, which is what makes
+  # them authored rather than vendored -- the directory they live in holds both.
+  - order: 10
+    pattern: "**/custom_components/tesla_charge_guard/**"
+    kind: select
+    class: custom_integration
+    reason: >-
+      CCOSTAN's own integration, evidenced by `"codeowners": ["@CCOSTAN"]` in
+      its manifest. Listed as an authored path because its directory also holds
+      vendored integrations, which the rule at order 30 excludes.
+  - order: 11
+    pattern: "**/custom_components/alexa_camera_compat/**"
+    kind: select
+    class: custom_integration
+    reason: >-
+      CCOSTAN's own integration, evidenced by `"codeowners": ["@CCOSTAN"]` in
+      its manifest. Authored path for the same reason as order 10.
+  - order: 12
+    pattern: "**/blueprints/automation/fwartner/**"
+    kind: select
+    class: blueprint
+    reason: >-
+      fwartner's own blueprints: 3 of the 64 files under its `blueprints/` tree
+      carry its own namespace, and the other 61 are 32 other authors'. A
+      vendored-tree rule cannot make that distinction, which is why the authored
+      paths are listed by path.
+  - order: 13
+    pattern: "**/custom_configs/blueprints/**"
+    kind: select
+    class: blueprint
+    reason: >-
+      fwartner's own blueprints outside its `blueprints/` tree entirely. These
+      stray paths are why this list is by path and not by directory: an author's
+      work is not where the convention would put it.
+
+  # --- 20-29: altered core copies -------------------------------------------
+  #
+  # renemarc documents these in-tree as copies of core components altered
+  # locally, or copied from another of their own repositories. They are neither
+  # the author's original work nor third-party vendored, so they get a rule of
+  # their own rather than being folded into the vendored exclusion, and they
+  # appear again under `altered_core_copies` below so the distinction is
+  # recorded rather than left to be inferred from a reason string.
+  - order: 20
+    pattern: "**/custom_components/github_custom/**"
+    kind: exclude
+    class: null
+    reason: >-
+      An altered local copy of a Home Assistant core component. The repo author
+      modified it but did not write it, so it is excluded rather than attributed
+      to them, and excluded by a rule of its own rather than as vendored code.
+  - order: 21
+    pattern: "**/custom_components/gtfs_custom/**"
+    kind: exclude
+    class: null
+    reason: >-
+      An altered local copy of a Home Assistant core component. Excluded for the
+      same reason as order 20.
+  - order: 22
+    pattern: "**/custom_components/doomsday_clock/**"
+    kind: exclude
+    class: null
+    reason: >-
+      A copy from a different repository of the same author's. Not written here
+      and not vendored from a third party, so it is excluded by its own rule and
+      recorded under `altered_core_copies`.
+
+  # --- 30-39: vendored trees, and other systems' directories ----------------
+  - order: 30
+    pattern: "**/custom_components/**"
+    kind: exclude
+    class: null
+    reason: >-
+      Third-party integrations vendored into the configuration directory --
+      HACS, browser_mod, fully_kiosk and their neighbours. Not the repo author's
+      work, and not ours to reuse. Authored integrations are selected above this
+      rule by path.
+  - order: 31
+    pattern: "**/blueprints/**"
+    kind: exclude
+    class: null
+    reason: >-
+      Third-party blueprints, namespaced by their own authors. fwartner has 61
+      under other authors' namespaces and johnkoht has 8, all third-party. The
+      authored ones are selected above this rule by path.
+  - order: 32
+    pattern: "**/www/**"
+    kind: exclude
+    class: null
+    reason: >-
+      Front-end assets: vendored JavaScript bundles, card modules, images,
+      sounds and 3D-print files. 3689 of fwartner's 3964 tracked files are here,
+      and none of them is Home Assistant configuration.
+  - order: 33
+    pattern: "**/themes/**"
+    kind: exclude
+    class: null
+    reason: >-
+      Front-end themes. They configure how the interface looks rather than what
+      the house does, and the artifact classes are about behaviour.
+  - order: 34
+    pattern: "**/appdaemon/**"
+    kind: exclude
+    class: null
+    reason: >-
+      AppDaemon apps: a second automation engine written in Python. renemarc's
+      automations there are real behaviour, but they are a different system's
+      artifacts and the corpus is Home Assistant configuration.
+  - order: 35
+    pattern: "**/esphome/**"
+    kind: exclude
+    class: null
+    reason: >-
+      ESPHome device firmware definitions. They are compiled to devices rather
+      than loaded by Home Assistant, so they are not configuration artifacts of
+      the system this corpus feeds.
+  - order: 36
+    pattern: "**/espresense/**"
+    kind: exclude
+    class: null
+    reason: >-
+      Presence-detection firmware configuration, excluded for the same reason as
+      ESPHome: it configures a device rather than the house.
+  - order: 37
+    pattern: "**/custom_sentences/**"
+    kind: exclude
+    class: null
+    reason: >-
+      Conversation sentence templates: they define what a user may say to the
+      assistant rather than what the house does.
+  - order: 38
+    pattern: "**/themes*.{yaml,yml}"
+    kind: exclude
+    class: null
+    reason: >-
+      A single-file theme definition, which johnkoht keeps at `include/themes`.
+      Excluded with the theme directories above and for the same reason: it is
+      front-end appearance, and it carries `frontend:` module URLs rather than
+      anything the house does.
+  - order: 39
+    pattern: "**/*.{disabled,DISABLED}"
+    kind: exclude
+    class: null
+    reason: >-
+      A configuration file the repo author turned off by renaming it. It is not
+      loaded by Home Assistant, so it is not part of the configuration that
+      exists -- and it is usually a note to self rather than an artifact. Both
+      spellings are listed because the four repos use both.
+
+  - order: 40
+    pattern: "**/image/**"
+    kind: exclude
+    class: null
+    reason: >-
+      Home Assistant's image cache: resized copies the runtime writes when an
+      automation or a notification uses an image, filed under the hash of the
+      original. Written by a program rather than by a person, loaded by nothing,
+      and holding no configuration -- it is only in the tree because the repo
+      author committed their runtime directory.
+
+  # --- 41-50: repository tooling --------------------------------------------
+  #
+  # By directory first. These are decided by what the directory is for, so they
+  # are above the by-kind rules that would otherwise claim a plan document as
+  # data because it happens to be JSON, or a vendored virtualenv as Python.
+  - order: 41
+    pattern: "**/{tests,tools,bin,scripts-dev}/**"
+    kind: exclude
+    class: null
+    reason: >-
+      The repositories' own test suites, validators and maintenance scripts.
+      johnkoht commits an entire virtualenv under `tests/.venv`, which is why
+      this rule has to sit above the by-kind rules: 1020 of its files are that
+      virtualenv, and calling them Python scripts would be true and useless.
+      Deliberately not including a bare `scripts/`: that name is used for Home
+      Assistant script definitions in every repo that uses it, and those are
+      behaviour.
+  - order: 42
+    pattern: "**/{docs,plans,memory,notes}/**"
+    kind: exclude
+    class: null
+    reason: >-
+      Prose: documentation, feature plans, and the maintenance notes and
+      post-mortems these repos keep beside their configuration. A plan is a plan
+      whatever it is written in, which is why this is here and not in the
+      by-kind band.
+  - order: 43
+    pattern: "**/{python_scripts,shell_scripts,docker}/**"
+    kind: exclude
+    class: null
+    reason: >-
+      Python scripts, shell scripts and container files: the machinery around
+      the configuration rather than the configuration.
+  - order: 44
+    pattern: "**/room_assistant/**"
+    kind: exclude
+    class: null
+    reason: >-
+      `room-assistant`'s own instance configuration, sitting inside fwartner's
+      repository. It configures a separate service, not Home Assistant, and its
+      files carry that service's keys rather than Home Assistant's.
+  - order: 45
+    pattern: "**/*secret*"
+    kind: exclude
+    class: null
+    reason: >-
+      Secret material, real or dummy, matched by name rather than by directory
+      so that a credential cannot reach the corpus through a select rule. The
+      four repos keep these as `secrets.yaml`, `secrets-dummy.yaml`,
+      `secrets.fake.yaml`, `fake_secrets.yaml` and `travis_secrets.yaml` -- five
+      spellings, one rule -- and the extraction reads these files, so a rule
+      list is the wrong place to learn that one of them was not dummy.
+  - order: 46
+    pattern: "**/*.log*"
+    kind: exclude
+    class: null
+    reason: A log file, or a rotated log file.
+  - order: 48
+    pattern: "**/.*"
+    kind: exclude
+    class: null
+    reason: >-
+      A hidden file: editor and agent instructions, linter configuration,
+      pre-commit hooks, version markers, shopping lists. Home Assistant loads no
+      hidden file -- it reads `configuration.yaml` and what that includes -- so
+      a path beginning with a dot is repository metadata by construction, and
+      listing the names individually would be a list that goes stale at the next
+      tool a repo adopts.
+  - order: 49
+    pattern: "**/.*/**"
+    kind: exclude
+    class: null
+    reason: >-
+      A hidden directory, excluded for the same reason as order 47. At the root
+      this is `.github` and `.cursor`; deeper it is the virtualenv inside
+      `tests/`, which the rule at order 40 reaches first.
+  - order: 50
+    pattern: "**/{go2rtc-1.9.9,chores,chores_automation}"
+    kind: exclude
+    class: null
+    reason: >-
+      Tracked paths that are not configuration and that no rule above reaches,
+      because they have no extension for a by-kind rule to match: a vendored
+      `go2rtc` binary and two maintenance scripts kept beside the configuration
+      they maintain. Named exactly rather than guessed by shape, so that a
+      fourth such path is reported as undecided instead of absorbed.
+
+  # --- 51-58: file kinds that are never configuration ------------------------
+  - order: 52
+    pattern: "**/*.{png,jpg,jpeg,gif,svg,webp,ico,pdf}"
+    kind: exclude
+    class: null
+    reason: >-
+      Non-configuration media -- icons, screenshots and diagrams. Excluded by
+      kind as well as by tree, so that an image in a directory no vendored-tree
+      rule names does not enter the corpus as configuration.
+  - order: 53
+    pattern: "**/*.{mp3,wav,ogg,m4a,flac}"
+    kind: exclude
+    class: null
+    reason: >-
+      Audio files. They are what some automations play, not what they do, and
+      two of the repos carry dozens of them.
+  - order: 54
+    pattern: "**/*.{js,mjs,cjs,ts,map,css,scss,html}"
+    kind: exclude
+    class: null
+    reason: >-
+      Front-end code: custom cards, dashboard resources and their type
+      declarations. Excluded by kind as well as by tree, so a bundle outside
+      `www/` does not slip in through a directory the vendored rule does not
+      name.
+  - order: 55
+    pattern: "**/*.{txt,csv,log,json,mmd,typed,xml,ics}"
+    kind: exclude
+    class: null
+    reason: >-
+      Data and logs rather than configuration. Excluded by kind: the JSON and
+      XML these repos carry are integration data, exported attributes and
+      diagrams, not Home Assistant configuration, and the one JSON document the
+      project commits is generated.
+  - order: 56
+    pattern: "**/*.{sh,ps1,bat,cmd}"
+    kind: exclude
+    class: null
+    reason: >-
+      Shell scripts the repos use to maintain themselves: update checks, split
+      helpers, validation wrappers. Repository tooling rather than house
+      configuration.
+  - order: 57
+    pattern: "**/*.{j2,tmpl,template,sample,rb}"
+    kind: exclude
+    class: null
+    reason: >-
+      Files belonging to some other toolchain: templates for tools that render
+      them, the `.sample` files that ship beside a live unit file, and the Ruby
+      one repo's markdown linter is configured with. None is loaded by Home
+      Assistant.
+  - order: 58
+    pattern: "**/docker-compose*.{yml,yaml}"
+    kind: exclude
+    class: null
+    reason: >-
+      A container definition kept at the repository root rather than under
+      `docker/`, which the rule at order 42 would have excluded. It describes
+      how to run Home Assistant, not what the house does.
+
+  # --- 80-89: the blocks the configuration is assembled from -----------------
+  #
+  # Selected files only, and named rather than inferred. There is deliberately
+  # no `**/*.{yaml,yml}` rule here: Home Assistant YAML that no rule names is
+  # reported as undecided, which is the point -- a rule broad enough to catch it
+  # would be a rule broad enough to pull a vendored integration's data file into
+  # the corpus, and nothing in this project would notice.
+  - order: 80
+    pattern: "**/{configuration,customize,customize_glob,homekit,logbook,logger,recorder,go2rtc,zwave_device_config,ip_bans}.{yaml,yml}"
+    kind: select
+    class: package
+    reason: >-
+      The configuration's own entry point and its single-integration slices:
+      `configuration.yaml` and the files it includes, which each hold one
+      top-level key -- `logger:`, `recorder:`, `homekit:`, `go2rtc:` and so on.
+      A block of configuration the configuration includes, which is what
+      `package` means here.
+      The name must be exact, and that is the whole point of the rule not
+      carrying a trailing `*`: renemarc keeps `misc/homekit.yaml` -- the HomeKit
+      integration's own configuration -- beside `automations/homekit_start.yaml`,
+      which is an automation that starts the HomeKit server. A prefix match calls
+      both of them configuration for an integration, and one of them is not.
+  - order: 81
+    pattern: "**/integrations/**"
+    kind: select
+    class: package
+    reason: >-
+      fwartner's directory of exactly the same thing, split one file per
+      integration: `integrations/logger.yaml`, `integrations/recorder.yaml`,
+      `integrations/http.yaml`. The class is about the artifact, and this is the
+      same artifact as order 80 under a directory convention.
+  - order: 82
+    pattern: "**/configuration/**"
+    kind: select
+    class: package
+    reason: >-
+      fwartner's per-exporter configuration for `influxdb` and `prometheus`: the
+      domain and attribute lists those exporters include or exclude. Named for
+      the directory rather than the file because every file in it is
+      `configuration.yaml` or an include list for the same integration.
+  - order: 83
+    pattern: "**/packages/**"
+    kind: select
+    class: package
+    reason: >-
+      Package files: one file per subsystem holding its helpers, scripts and
+      automations together, which is the shape johnkoht's whole configuration
+      and CCOSTAN's area files use.
+
+  # --- 100+: behaviour, by kind ---------------------------------------------
+  #
+  # A directory of the kind, then the single file of the kind. Both spellings
+  # exist: CCOSTAN keeps `config/automation/`, johnkoht keeps `automation/`, and
+  # every repo also has an `automations.yaml` at its root that the configuration
+  # includes. The class is what the file holds, so the file and the directory
+  # receive the same one.
+  - order: 100
+    pattern: "**/{automation,automations}/**"
+    kind: select
+    class: automation
+    reason: >-
+      Automation definitions, in whatever directory the repo keeps them:
+      a top-level `automation/` in CCOSTAN, `automations/` split by area in
+      renemarc, `automation/` split by household member in johnkoht.
+  - order: 101
+    pattern: "**/{script,scripts}/**"
+    kind: select
+    class: script
+    reason: >-
+      Script definitions -- sequences invoked by name rather than by a trigger.
+  - order: 102
+    pattern: "**/{scene,scenes}/**"
+    kind: select
+    class: scene
+    reason: >-
+      Scene definitions -- a set of entity states applied together.
+  - order: 103
+    pattern: "**/{automation,automations}*.{yaml,yml}"
+    kind: select
+    class: automation
+    reason: >-
+      The single-file automation list. The class follows the contents rather
+      than the directory, so an `automations.yaml` is `automation` for the same
+      reason the files under `automation/` are.
+  - order: 104
+    pattern: "**/{script,scripts}*.{yaml,yml}"
+    kind: select
+    class: script
+    reason: The single-file script list, classed as order 103 is for automations.
+  - order: 105
+    pattern: "**/{scene,scenes}*.{yaml,yml}"
+    kind: select
+    class: scene
+    reason: The single-file scene list, classed as order 103 is for automations.
+  - order: 106
+    pattern: "**/{dashboard,dashboards,lovelace,popup}/**"
+    kind: select
+    class: dashboard
+    reason: >-
+      Dashboards, and the card templates and popups they are built from: the
+      layout of the interface, which is configuration even though it configures
+      presentation. Excluded from this rule: the resources file, which is
+      front-end plumbing and is excluded by kind at order 53.
+  - order: 107
+    pattern: "**/ui-lovelace*.{yaml,yml}"
+    kind: select
+    class: dashboard
+    reason: The single-file dashboard definition, where a repo keeps one.
+  - order: 108
+    pattern: "**/button_card_templates*.{yaml,yml}"
+    kind: select
+    class: dashboard
+    reason: >-
+      johnkoht's shared button-card templates: the definitions every card on its
+      dashboards is built from, kept as one file rather than under `popup/` or
+      `lovelace/`. Same artifact as order 106 under a different name.
+  - order: 109
+    pattern: "**/{template,templates}/**"
+    kind: select
+    class: template
+    reason: >-
+      Template definitions: Jinja that computes a value the house can then use.
+  - order: 110
+    pattern: "**/custom_configs/**"
+    kind: select
+    class: helper
+    reason: >-
+      fwartner's directory of small declarative fragments -- groups, binary
+      sensors, command-line sensors, notifications. Its `blueprints/` and
+      `templates/` children are selected above this rule, so what reaches here
+      is the well-known helper kinds.
+  - order: 111
+    pattern: "**/{misc,inputs,input,helpers,groups,group,alerts,notify,notifications,notifiers,rest,command_line,intents,variables}/**"
+    kind: select
+    class: helper
+    reason: >-
+      The small declarative entity definitions: the helpers proper, the notify
+      platforms and the slices that define a handful of entities of one domain,
+      under whatever name a repo files them. renemarc calls this `misc/` and
+      `inputs/`; the class is about the kind of artifact, not the directory.
+  - order: 112
+    pattern: "**/{sensor,sensors,binary_sensor,binary_sensors,switch,switches,light,lights,cover,covers,lock,locks,media_player,media_players,camera,cameras,climate,fan,fans,vacuum,vacuums,person,people,zone,zones,device_tracker,number,select,text,utility_meter,input_boolean,input_number,input_select,input_text,input_datetime,counter,counters,timer,timers}*/**"
+    kind: select
+    class: helper
+    reason: >-
+      Entity definitions grouped by domain: `lights/lightpack.yaml` defines
+      lights, `input_boolean/rooms/office.yaml` defines a boolean helper. The
+      trailing `*` admits a plural a repo spells differently, and the class is
+      `helper` because what these files do is declare entities for the rest of
+      the configuration to use.
+  - order: 113
+    pattern: "**/{light_groups,notify,notifiers,intents,groups,alerts,variables,sensors,input_boolean,input_number,input_select,input_text,input_datetime,counters,timers,persons,zones}*.{yaml,yml}"
+    kind: select
+    class: helper
+    reason: >-
+      The single-file spelling of order 112: a repository root holding
+      `sensors.yaml` or `light_groups.yaml` beside `configuration.yaml`. The
+      same artifact as the directories, so the same class.
+
+authored_paths:
+  - path: "**/custom_components/tesla_charge_guard/**"
+    class: custom_integration
+  - path: "**/custom_components/alexa_camera_compat/**"
+    class: custom_integration
+  - path: "**/blueprints/automation/fwartner/**"
+    class: blueprint
+  - path: "**/custom_configs/blueprints/**"
+    class: blueprint
+
+altered_core_copies:
+  - path: "**/custom_components/github_custom/**"
+    reason: >-
+      Documented in-tree as a locally altered copy of a Home Assistant core
+      component rather than an integration written here.
+  - path: "**/custom_components/gtfs_custom/**"
+    reason: >-
+      Documented in-tree as a locally altered copy of a Home Assistant core
+      component rather than an integration written here.
+  - path: "**/custom_components/doomsday_clock/**"
+    reason: >-
+      A copy from a different repository of the same author's, not written in
+      this configuration and not vendored from a third party.

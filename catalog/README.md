@@ -45,6 +45,7 @@ base a relative `$ref` resolves against, which is how `room_types.json` and
 | `licenses.yaml` | One licence record per source repo, plus the author-contact block for the two that grant nothing | task 2.1, 2.4 |
 | `repos.yaml` | One identification record per source repo: author, purpose, HA style, scale, version | task 4.1 |
 | `file_rules.yaml` | The **ordered** select/exclude rule list, the authored paths among it, and the altered core copies | task 3.1 |
+| `golden_<repo>.yaml` | Four files. Hand-picked paths per repo, each with the class it is expected to receive -- the only check that fails when the rule list starts excluding too much | task 3.2 |
 | `rooms.yaml` | Every room across the four repos, with the repo and path it came from | task 5.1 |
 | `room_types.yaml` | The room types, and the `house` scope | task 5.2 |
 | `slots.yaml` | The slot vocabulary, derived from cross-repo usage rather than invented | task 5.3 |
@@ -117,6 +118,33 @@ and the rule is silent on an empty one rather than reporting every absence.
   files that a repo has modified -- excluded by a named rule, and never
   attributed to the repo's author, who changed them but did not write them.
 
+**`golden_<repo>.yaml`** -- `repo`, `entries[]`:
+
+`path`, `class`. One file per source repo, named for it: `golden_ccostan.yaml`
+and so on, with `repo` repeating the name so the two can be checked against each
+other. An entry is a path **with the class it is expected to receive**, which is
+what makes it a check rather than a line of a list -- a path alone says only that
+something was selected.
+
+These are the one place a path is written down twice, once by `file_rules.yaml`
+and once by hand, and therefore the only check that fails in the *excluding*
+direction. An exclude rule broad enough to swallow a directory takes a pinned
+path with it and the check names the path and the deciding rule; without them the
+corpus would simply be smaller, and nothing defined as "whatever the rules
+select" can be noticed to be missing from itself. They do **not** guard the other
+direction: a select rule broad enough to pull new files in changes no pinned
+path, and is caught by the diff in `inventory.json` and the counts below.
+
+Across the four, every class in the closed enum except `other` must be pinned,
+so a class cannot drop out of the corpus entirely without something saying so.
+`other` is the residual -- what a file falls into when no class fits -- and
+pinning it would commit the corpus to keeping a file whose only justification is
+that we could not classify it.
+
+The entries are a sample and not the corpus: a file listing every selected path
+would be a copy of `inventory.json`, which is the file nobody reads. They are
+chosen so that a rule change broad enough to matter takes one of them with it.
+
 **`rooms.yaml`** -- `rooms[]`: `name`, `repo`, `path`.
 
 **`room_types.yaml`** -- `room_types[]` validates against the runtime `room-type`
@@ -174,7 +202,19 @@ when somebody has written down why -- and the justification is reproduced in
 
 `repo` is `repo`, `counts`, `files`, `by_class`, `by_rule`, `by_parse`;
 `counts` is `tracked`, `selected`, `excluded`; each entry of `files` is `path`,
-`selected`, `class`, `parse`, `rule`, `error`.
+`selected`, `class`, `parse`, `rule`, `error`; and each entry of `by_rule` is a
+rule's `order`, as a string, mapped to that rule's `decided`, `selected` and
+`excluded`.
+
+`by_rule` counts **every** file its rule decided and not only the excluded ones,
+because a map restricted to exclusions would leave every select rule out, and a
+rule missing from the map reads exactly like a rule that decided nothing. That
+makes `decided` the count that closes over `git ls-files`. `excluded` rides
+beside it rather than being left to be reconstructed, since the closure clause
+names the per-deciding-rule excluded count. All three are checked against the
+file list individually: `decided = selected + excluded` is true of an entry
+whatever the entry says, so comparing the three to each other would pass a map
+whose split had been guessed.
 
 **`raw-behaviors.json`** (generated) -- `records[]` and a `change_notice`:
 
@@ -195,7 +235,10 @@ four reference clones, which are `gitignore`d and absent in CI -- and two of
 which grant no licence to redistribute. They run locally and their **outputs**
 are committed:
 
-- the `git ls-files` closure check over each clone, and
+- the `git ls-files` closure check over each clone, which also confirms that
+  every `authored_paths` pattern matches a tracked file somewhere -- the rule
+  list cannot decide that, since a glob conforms to its declared class whether
+  or not anything matches it -- and
 - the prose gate comparing a shipped string against the verbatim store.
 
 So a green `oh-catalog validate` in CI means every invariant that can be checked
@@ -203,6 +246,21 @@ without the clones holds, and no more than that.
 
 ## Per-repo counts
 
-Recorded by task 3.8, when there is an extraction to count: for each repo, how
-many tracked files were **selected**, how many **excluded**, the per-deciding-rule
-breakdown, and how many selected files failed to **parse**. Empty until then.
+Recorded by task 3.8, from the committed `catalog/inventory.json`. The
+per-rule column lists each deciding rule as `order (decided/selected/excluded)`,
+which is the breakdown with the rules that decided nothing left out rather than
+listed as zeroes -- a rule absent from `by_rule` is a rule that decided no file,
+and the two are the same observation.
+
+| Repo | Tracked | Selected | Excluded | Unparsed | Per deciding rule |
+| --- | --- | --- | --- | --- | --- |
+| `ccostan` | 709 | 218 | 491 | 0 | 5 (26/0/26), 6 (1/0/1), 10 (4/4/0), 11 (2/2/0), 31 (1/0/1), 32 (376/0/376), 33 (1/0/1), 39 (1/0/1), 40 (2/0/2), 41 (13/0/13), 42 (1/0/1), 43 (13/0/13), 45 (2/0/2), 48 (19/0/19), 49 (6/0/6), 52 (2/0/2), 53 (24/0/24), 55 (3/0/3), 80 (5/5/0), 83 (54/54/0), 100 (42/42/0), 101 (16/16/0), 102 (2/2/0), 103 (1/1/0), 106 (78/78/0), 107 (1/1/0), 109 (1/1/0), 111 (6/6/0), 112 (5/5/0), 113 (1/1/0) |
+| `renemarc` | 472 | 144 | 328 | 0 | 5 (30/0/30), 6 (1/0/1), 20 (3/0/3), 21 (3/0/3), 22 (3/0/3), 30 (114/0/114), 32 (124/0/124), 33 (2/0/2), 34 (31/0/31), 43 (3/0/3), 45 (1/0/1), 48 (5/0/5), 49 (5/0/5), 56 (1/0/1), 57 (1/0/1), 58 (1/0/1), 80 (6/6/0), 100 (79/79/0), 101 (8/8/0), 105 (1/1/0), 107 (1/1/0), 111 (24/24/0), 112 (25/25/0) |
+| `fwartner` | 3964 | 129 | 3835 | 0 | 5 (12/0/12), 12 (3/3/0), 13 (2/2/0), 31 (61/0/61), 32 (3689/0/3689), 33 (9/0/9), 35 (35/0/35), 36 (1/0/1), 41 (10/0/10), 43 (1/0/1), 44 (1/0/1), 45 (1/0/1), 46 (1/0/1), 48 (5/0/5), 49 (6/0/6), 50 (2/0/2), 57 (1/0/1), 80 (7/7/0), 81 (21/21/0), 82 (3/3/0), 103 (1/1/0), 104 (1/1/0), 105 (1/1/0), 109 (25/25/0), 110 (65/65/0) |
+| `johnkoht` | 3217 | 1300 | 1917 | 0 | 5 (96/0/96), 6 (12/0/12), 31 (8/0/8), 32 (666/0/666), 33 (6/0/6), 35 (21/0/21), 36 (1/0/1), 37 (6/0/6), 38 (1/0/1), 39 (19/0/19), 41 (1048/0/1048), 42 (6/0/6), 45 (1/0/1), 48 (7/0/7), 49 (3/0/3), 50 (1/0/1), 52 (13/0/13), 54 (1/0/1), 56 (1/0/1), 80 (2/2/0), 83 (870/870/0), 100 (85/85/0), 101 (9/9/0), 102 (2/2/0), 103 (1/1/0), 104 (1/1/0), 105 (2/2/0), 106 (267/267/0), 107 (1/1/0), 108 (1/1/0), 111 (3/3/0), 112 (52/52/0), 113 (4/4/0) |
+| **total** | **8362** | **1791** | **6571** | 0 | |
+
+No selected file in any of the four repositories failed to parse, which is why
+the unparsed column is zero throughout: the rule list selects the YAML shapes it
+can read, and a file it selects but cannot parse is counted and recorded with its
+error rather than dropped (task 3.7).

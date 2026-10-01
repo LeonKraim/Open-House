@@ -44,6 +44,17 @@
         "excluded": {"type": "integer", "minimum": 0}
       }
     },
+    "ruleCounts": {
+      "type": "object",
+      "required": ["decided", "selected", "excluded"],
+      "additionalProperties": false,
+      "description": "One deciding rule's partition of the files it decided. All three are carried because they are three different closures and none implies the others: `decided` equals `selected` plus `excluded` here, but a map restricted to `excluded` could not show a select rule at all, and a map restricted to `decided` could not state the per-rule excluded figure the closure clause names. A rule whose three counts are all zero is absent from the map rather than present as zeroes, which is what makes an absent rule and a rule that decided nothing the same observation.",
+      "properties": {
+        "decided": {"type": "integer", "minimum": 0},
+        "selected": {"type": "integer", "minimum": 0},
+        "excluded": {"type": "integer", "minimum": 0}
+      }
+    },
     "file": {
       "type": "object",
       "required": ["path", "selected", "class", "parse", "rule"],
@@ -113,8 +124,8 @@
         },
         "by_rule": {
           "type": "object",
-          "additionalProperties": {"type": "integer", "minimum": 0},
-          "description": "Rule `order` as a string to count, so that a rule which decided nothing is detectable by its absence from a list of every rule."
+          "additionalProperties": {"$ref": "#/$defs/ruleCounts"},
+          "description": "Rule `order` as a string to the counts that rule decided, so that a rule which decided nothing is detectable by its absence from a list of every rule. Over every decided file and not only the excluded ones: a select rule that decided files would otherwise be missing from the map, and missing is exactly how a rule that decided nothing reads. `decided` therefore sums to the repo's tracked count, which is what makes this map and the `files` list demonstrably two views of one partition; `excluded` is carried beside it rather than left to be derived, because the closure clause names the excluded count per deciding rule, and a figure the reader has to reconstruct is not a figure that was reported."
         },
         "by_parse": {
           "type": "object",

@@ -1,0 +1,16 @@
+# Files under packs/official/ that a person wrote by hand.
+#
+# A marker, not detection. A generator that declines to list its own output here
+# is not caught, and the spec says so rather than pretending otherwise. What the
+# list does buy is the cheap half: the `handwritten-examples` check requires
+# every pack file in this directory to be named here, and every name here to be a
+# file that exists, so an example cannot arrive unlisted or a listed one rot away
+# while the check stays green.
+#
+# The three examples the project ships are all here. The example pack
+# (`example-pack.yaml`, task 7.4) declares its behaviours in vocabulary 1.1.0,
+# which task 7.1 published, and validates against the current `pack-manifest`
+# schema, which references that vocabulary rather than restating its terms.
+example-house.yaml
+example-export.yaml
+example-pack.yaml

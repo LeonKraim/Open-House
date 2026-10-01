@@ -3,7 +3,9 @@
 # Schema: schemas/catalog/overlap_exceptions.json. Validate with
 # `oh-catalog validate`.
 #
-# Empty until task 4.7. One repo's opinion is not corroboration, so a row with a
-# single source defaults only when somebody has written down why -- and the
-# justification is reproduced in `overlap.md` rather than left here to be found.
-exceptions: []
+# One repo's opinion is not corroboration, so a row with a single source is a
+# default only when somebody has written down why -- and the justification is
+# reproduced in `overlap.md` rather than left here to be found.
+exceptions:
+- id: system.health_watchdog
+  justification: 'A watchdog for a device that has stopped answering is not a matter of household taste: an unreachable light is a fault in any house, and this is the only repo that solves it, so the one source is enough to make it a default.'

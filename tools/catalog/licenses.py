@@ -64,6 +64,18 @@ CONTACT_OUTCOMES: frozenset[str] = frozenset(
     {"not_attempted", "contacted", "granted", "declined", "no_response"}
 )
 
+#: What a record's derived-status accessors report for a licence value the
+#: derivation table has no row for. It is deliberately *not* one of the real
+#: statuses: `_check_record` names the unknown value and the record it sits on,
+#: and this is what the other checks see meanwhile. It exists so that asking a
+#: record for its status is a total question -- the value comes from a
+#: hand-edited file, and a file outside the table is a finding rather than a
+#: programming error, so it must not raise out of `validate_all` and take every
+#: other check's findings with it. Every reader compares a status against
+#: `reusable`, and a distinct string is what makes an unknown licence read as
+#: "not reusable" -- the only safe reading -- rather than as a fabricated status.
+UNKNOWN_STATUS = "unknown"
+
 
 def derive(licence: str) -> tuple[str, tuple[str, ...]]:
     """Status and obligations for a licence value, or raise if unknown.
@@ -71,11 +83,35 @@ def derive(licence: str) -> tuple[str, tuple[str, ...]]:
     Raising rather than returning a default is deliberate: an unrecognised
     licence value is the case where a default would be wrong in whichever
     direction it fell, and the requirement is that validation *names* the value.
+
+    This is the *guard* for callers that hold a licence the table is expected to
+    carry -- the derivation table's own tests, and `_check_record` and
+    `derive_row_license`, which both compare against the table only after
+    establishing the value is in it. It is deliberately not the lookup a
+    `LicenceRecord` accessor uses: a record's `license_code` is file data, and
+    file data outside the table is a *finding* rather than a programming error,
+    so asking a record for its status must not raise. `_row_for` is that total
+    lookup, and `load_licences` -- the boundary that meets the file -- is where
+    the distinction matters.
     """
     if licence not in DERIVATION:
         msg = f"unknown licence value {licence!r}; known values are {LICENCE_ORDER}"
         raise ValueError(msg)
     return DERIVATION[licence]
+
+
+def _row_for(licence: str) -> tuple[str, tuple[str, ...]] | None:
+    """The table row for a licence value, or `None` when the table has none.
+
+    The total counterpart of `derive`. It exists for the record accessors below,
+    which read a value written by hand in `catalog/licenses.yaml`: a value
+    outside the table is reported by `_check_record`, which names the record and
+    the value, and until it is corrected every reader of this record must be
+    able to ask for the derived status and be told there is none, rather than
+    have the question raise out of `validate_all` and take every other check's
+    findings with it.
+    """
+    return DERIVATION.get(licence)
 
 
 def restrictiveness(licence: str) -> int:
@@ -102,17 +138,43 @@ class LicenceRecord:
 
     @property
     def reuse_status_code(self) -> str:
-        return derive(self.license_code)[0]
+        """The code status the table gives `license_code`.
+
+        `UNKNOWN_STATUS` for a value outside the table, rather than raising or
+        inventing a real status. The value is file data, so a value the table
+        has no row for is a *finding*, reported by `_check_record` naming the
+        record and the value -- not an exception to be thrown from a property
+        several checks read while they assemble their own reports. The readers
+        all compare against `reusable`, so the sentinel reads as "not reusable",
+        which is the only safe reading of "the table cannot say".
+        """
+        row = _row_for(self.license_code)
+        return row[0] if row is not None else UNKNOWN_STATUS
 
     @property
     def obligations_code(self) -> tuple[str, ...]:
-        return derive(self.license_code)[1]
+        """The code obligations the table gives `license_code`, or none.
+
+        The empty tuple for a value outside the table, for the reason
+        `reuse_status_code` reports `UNKNOWN_STATUS`: an unknown licence incurs
+        no obligation the corpus can be held to, and the empty tuple is what the
+        obligation readers already handle as "none".
+        """
+        row = _row_for(self.license_code)
+        return row[1] if row is not None else ()
 
     @property
     def reuse_status_prose(self) -> str | None:
+        """The prose status, or `None` when no prose licence is recorded.
+
+        `None` means `license_prose` is absent, which is a complete record for a
+        repo whose prose terms were never filed; `UNKNOWN_STATUS` means a value
+        is recorded but outside the table, which `_check_record` names.
+        """
         if self.license_prose is None:
             return None
-        return derive(self.license_prose)[0]
+        row = _row_for(self.license_prose)
+        return row[0] if row is not None else UNKNOWN_STATUS
 
 
 def load_licences() -> list[LicenceRecord]:
@@ -121,8 +183,8 @@ def load_licences() -> list[LicenceRecord]:
     Raising rather than letting the parser's own exception out. `validate_all`
     catches `CheckError` and nothing else, so an unguarded `yaml.safe_load` here
     would escape this check, escape `validate_all`, and reach the pre-commit
-    hook as a traceback: the report is never rendered, so the findings of all
-    nine checks are lost -- including the diagnostic `check_catalog_data_files`
+    hook as a traceback: the report is never rendered, so every other check's
+    findings are lost -- including the diagnostic `check_catalog_data_files`
     builds for this very file, since that check reads it too. A single stray
     bracket was enough to do it.
 

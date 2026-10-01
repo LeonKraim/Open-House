@@ -89,3 +89,73 @@ fields:
       raw Home Assistant identifier appears in the committed store, and it is
       admitted deliberately: an identifier is a fact about a naming scheme, and
       `spec.txt`'s hardcoding audit cannot be complete without one.
+
+# The second committed facts store, `catalog/hardcoded_refs.yaml`, is
+# `refs[]`, and its entry schema under `schemas/catalog/hardcoded_refs.json` is
+# generated from this section exactly as the record schema is generated from
+# `fields` above. The entry field set is closed in the requirement -- a
+# `domain.object_id`, a source repo, an inferred scope and a naming-convention
+# label, plus the `slot`/`constant` the reference resolves to -- and the schema
+# carries `additionalProperties: false` so no expression-bearing field can be
+# added to it informally. The field-name guarantee is the same bidirectional
+# equality: a property the allowlist does not name, and an allowlist entry the
+# schema does not carry, both fail.
+#
+# `hardcoded_entry_one_of` states one entry-level invariant that no single field
+# can: `slot` and `constant` are a pair, and exactly one of them must be
+# non-null. It is named here rather than written into the schema by hand for the
+# reason the whole file exists -- the generated schema follows this file, and a
+# constraint that lived only in the schema could be edited away silently. The
+# requirement is also enforced per-entry by `check_slots`, which names the
+# reference and its source repo; this clause is the structural half, closing the
+# shape the schema admits to the shape the data may take.
+hardcoded_entry_one_of: [slot, constant]
+hardcoded_fields:
+  entity_ref:
+    shape: entity_ref
+    note: >-
+      The literal as the source spells it. A fact about someone's naming scheme,
+      committed for all four repos including the two that grant nothing, because
+      the hardcoding audit cannot be complete without it. Excluded from the door
+      in the other direction: a service name is spelled the same way, so which
+      references enter here is decided by the extraction's structural classifier
+      and not by this pattern.
+
+  repo:
+    shape: slug
+    note: >-
+      The repo the reference was found in. A slug and not free text: repo handles
+      are lower-case, and a slug cannot hold a sentence.
+
+  scope:
+    enum: [room, house]
+    note: >-
+      Inferred from the reference's domain, so the same concept can be compared
+      across repos. A closed set, and the inference is what task 5.3 uses to
+      place a reference against the room map.
+
+  naming_convention:
+    shape: slug
+    note: >-
+      The repo's naming-convention label. A slug so it cannot carry a sentence,
+      and drawn from a fixed set the extraction fixes when it sees the data.
+
+  slot:
+    enum_ref: catalog/slots.yaml#name
+    nullable: true
+    note: >-
+      The slot this reference maps to, or null when the reference resolves to a
+      `constant` instead. The closed set is `catalog/slots.yaml` itself, so the
+      field is the product's own vocabulary rather than a copied pattern -- the
+      same rule the raw record's `slots` field follows. Exactly one of `slot` and
+      `constant` is non-null, which `hardcoded_entry_one_of` states above and
+      `check_slots` enforces by naming the reference and its repo.
+
+  constant:
+    enum: [device_id, device_tracker, person, sun, time]
+    nullable: true
+    note: >-
+      The justification, when the reference is one of the fixed things rather
+      than a slot. A closed set, deliberately heterogeneous because the property
+      it needs is single: these are the fixed targets a reference may name
+      instead of a slot.

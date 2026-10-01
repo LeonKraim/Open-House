@@ -1,0 +1,67 @@
+# Open House -- continuous integration. Task 7.8.
+#
+# CI runs on this repository alone. The four reference clones live under
+# `ressources/` and the withheld-expression store under `.local/`; both are
+# excluded by `.gitignore`, two of the four repos grant no licence to
+# redistribute, and a pipeline pinned to four third-party repositories fails
+# when those repositories change rather than when this one does. The clones are
+# an input to a one-time local generation step whose outputs are committed, so
+# every job below reads only committed files and needs no network.
+#
+# `tools/catalog/ci.py` checks this file in turn: no job may reach for either
+# directory, and a job that does fails the build naming the job. That check reads
+# only this repository, so its boundary is the CI boundary and not the local one;
+# it is exercised by its own tests until it is registered in `validate.py`.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # The validator: `oh-catalog validate` runs every check registered in
+  # `tools/catalog/validate.py`'s `_CHECKS`, in one command. Each of those reads
+  # only this repository -- the clone-reading checks are local-only and their
+  # outputs are committed -- so the job needs no network and no `ressources/`.
+  validate:
+    name: oh-catalog validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install uv and pin Python
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the dependencies
+        run: uv sync --all-groups
+
+      - name: Validate the catalog, the schemas and the invariants
+        run: uv run python -m tools.catalog.cli validate
+
+  # The hooks, run as a developer runs them, so that the configuration in
+  # `.pre-commit-config.yaml` is exercised in CI rather than assumed to work: the
+  # ruff check and format hooks, pyright in strict mode, and the same
+  # `oh-catalog validate` the job above runs.
+  pre-commit:
+    name: pre-commit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install uv and pin Python
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the dependencies
+        run: uv sync --all-groups
+
+      - name: Run every hook on every file
+        run: uv run pre-commit run --all-files --show-diff-on-failure

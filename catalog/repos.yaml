@@ -2,5 +2,96 @@
 #
 # Schema: schemas/catalog/repos.json. Validate with `oh-catalog validate`.
 #
-# Empty until task 4.1.
-repos: []
+# One record per repo the project draws from, in the order `catalog/licenses.yaml`
+# records them. `name` is the owner handle, lowercased: the token
+# `docs/reference/<name>.md` is named for and every other record in the project
+# spells it, with the full URL carried here in `repo_url`.
+#
+# `ha_style` lists every structural style the repo actually exhibits, drawn from
+# the closed set the schema defines and de-duplicated. The four use several at
+# once -- one repo keeps no packages and splits every domain into its own
+# directory, another runs an AppDaemon layer beside Home Assistant -- so naming a
+# single style would make the choice arbitrary. The list is unordered: an earlier
+# draft asked for "most characteristic first", and nothing can check that.
+#
+# `ha_version` is the value in the repo's own `.HA_VERSION`, which for CCOSTAN
+# sits under `config/` rather than at the clone root. It is compared against the
+# clones by `tools/catalog/repos.py`'s local half and not in CI, since the clones
+# are absent there; `purpose`, `scale` and `best_at` are prose read off the clone
+# and are not derived from any file.
+
+repos:
+  - name: ccostan
+    repo_url: https://github.com/CCOSTAN/Home-AssistantConfig
+    author: Carlo Costanzo
+    purpose: >-
+      A single-household estate whose configuration is assembled from Home
+      Assistant packages, each integration grouped into one package file, with
+      dashboards and themes included from their own directories.
+    ha_style:
+      - package
+      - split-include
+      - custom-integration
+    scale: >-
+      Mid-sized: 709 tracked files, of which 218 are configuration.
+    ha_version: "2026.9.4"
+    best_at: >-
+      The only repo whose custom integrations are the author's own original
+      work, rather than vendored, altered, or copied from another repository.
+
+  - name: renemarc
+    repo_url: https://github.com/renemarc/home-assistant-config
+    author: René-Marc Simard
+    purpose: >-
+      A broad estate that keeps no packages at all, filing each artifact kind in
+      its own directory, coordinating modes through helpers, and running an
+      AppDaemon layer alongside Home Assistant's own automations.
+    ha_style:
+      - split-include
+      - custom-integration
+      - appdaemon
+    scale: >-
+      Modest and dense: 472 tracked files, of which 144 are configuration.
+    ha_version: "0.108.8"
+    best_at: >-
+      The only repo that drives part of its behaviour through an AppDaemon
+      layer, and the source of the most instructive patterns of the four even
+      though its own YAML no longer loads on a current release.
+
+  - name: fwartner
+    repo_url: https://github.com/fwartner/homeassistant-config
+    author: Florian Wartner
+    purpose: >-
+      A modern estate that keeps its integrations in Home Assistant packages,
+      leans on a large set of community components, and splits its own helpers,
+      groups and templates under a custom_configs tree.
+    ha_style:
+      - package
+      - split-include
+      - blueprint-driven
+    scale: >-
+      A large tree with a small corpus: 3,964 tracked files, of which only 129
+      are configuration, the rest mostly vendored cards and packaged
+      integrations.
+    ha_version: "2026.2.1"
+    best_at: >-
+      The only repo that authors its own blueprints, rather than only consuming
+      other people's.
+
+  - name: johnkoht
+    repo_url: https://github.com/johnkoht/hassio-config
+    author: John Koht
+    purpose: >-
+      A room-by-room estate written as Home Assistant packages, with a uniform
+      entity-naming scheme and a dashboard rendered from a view strategy.
+    ha_style:
+      - package
+      - split-include
+      - dashboard-strategy
+    scale: >-
+      The largest single contribution: 3,217 tracked files, of which 1,300 are
+      configuration.
+    ha_version: "2026.7.4"
+    best_at: >-
+      The most uniform entity-naming scheme of the four, mapping domain and room
+      into every identifier so that a name states where an entity belongs.

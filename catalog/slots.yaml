@@ -1,9 +1,341 @@
-# The slot vocabulary, derived from cross-repo usage rather than invented.
+# The slot vocabulary: the placeholder names a device is bound to.
 #
-# Schema: schemas/catalog/slots.json. Validate with `oh-catalog validate`.
+# Schema: schemas/catalog/slots.json, whose `slots[]` items validate against the
+# runtime `slot` schema. Validate with `oh-catalog validate`.
 #
-# Empty until task 5.3. Each slot is validated by the runtime `slot` schema,
-# which also carries the example rule: an example names its source repo and that
-# repo's reuse status, and an example with no `raw_ids` must carry a description
-# in our own words instead.
-slots: []
+# The names are not invented here. They are the controlled vocabulary of roles
+# `tools/catalog/lexicon.py` fixes (task 4.2), and the `accepts_domains` of each
+# is what the lexicon gives that role -- `tools/catalog/slots.py` recomputes both
+# and fails a slot whose name is outside the vocabulary or whose domains disagree
+# with the rule that decided it, so the two files cannot drift.
+#
+# An example cites the raw records it was drawn from by `raw_id`, and a repo that
+# grants nothing gets a description of the pattern in our own words as well: the
+# two non-granting repos withhold their expression, so an identifier is a fact we
+# may record but a spelling we may not transcribe. A non-granting example carries
+# no entity reference of its own, which is what the check reads its citations to
+# confirm. The two granting repos need no description, and carry none.
+#
+# `required` is the one judgement here: true where a room of a type providing the
+# slot cannot be set up without it. Lighting and occupancy are the two the room
+# types almost all provide; the rest are a room's, the house's, or neither's,
+# depending on the house.
+
+slots:
+  - name: light_group
+    description: >-
+      The switchable lighting unit for a space: one lamp, or the group a room
+      turns on and off together. A scene binds the role, not a fixture.
+    accepts_domains: [light]
+    required: true
+    source_repos: [ccostan, fwartner, johnkoht]
+    examples:
+      - repo: ccostan
+        reuse_status_code: reusable
+        raw_ids: [ccostan_config_automation_system_watchdog_light_yaml]
+      - repo: fwartner
+        reuse_status_code: ideas_only
+        raw_ids: [fwartner_automations_yaml]
+        description: >-
+          A lamp whose identifier ends in the plural group noun for its room, so
+          the whole room is switched as a single unit.
+      - repo: johnkoht
+        reuse_status_code: ideas_only
+        raw_ids: [johnkoht_automation_family_room_lights_family_lights_to_away_yaml]
+        description: >-
+          A light whose identifier names its room and the plural lighting group,
+          so a scene can bind the room's lighting as one.
+
+  - name: motion_sensor
+    description: >-
+      A presence reading for a space: occupancy, motion, or a device that reports
+      either. It drives arrival lighting and absence shutdowns.
+    accepts_domains: [binary_sensor]
+    required: true
+    source_repos: [fwartner, johnkoht, renemarc]
+    examples:
+      - repo: renemarc
+        reuse_status_code: reusable
+        raw_ids: [renemarc_customize_yaml]
+      - repo: fwartner
+        reuse_status_code: ideas_only
+        raw_ids: [fwartner_automations_yaml]
+        description: >-
+          A presence contact whose identifier compounds a German presence noun
+          into the name of a room's device.
+      - repo: johnkoht
+        reuse_status_code: ideas_only
+        raw_ids: [johnkoht_automation_family_room_family_room_not_occupied_yaml]
+        description: >-
+          An occupancy-reading device for a named room, spelled as that room's
+          own occupancy sensor.
+
+  - name: contact_sensor
+    description: >-
+      An opening contact on a door, window or gate: the binary state that says a
+      way into a space is open.
+    accepts_domains: [binary_sensor]
+    required: false
+    source_repos: [fwartner, johnkoht, renemarc]
+    examples:
+      - repo: renemarc
+        reuse_status_code: reusable
+        raw_ids: [renemarc_automations_notifications_front_door_notify_yaml]
+      - repo: fwartner
+        reuse_status_code: ideas_only
+        raw_ids: [fwartner_automations_yaml]
+        description: >-
+          A door or window contact whose identifier compounds the object and the
+          room it belongs to.
+      - repo: johnkoht
+        reuse_status_code: ideas_only
+        raw_ids: [johnkoht_automation_gianlucas_room_gianluca_heater_off_yaml]
+        description: >-
+          An opening contact for a named room, spelled as the room's door sensor.
+
+  - name: leak_sensor
+    description: >-
+      A water contact that raises an alert rather than driving a light. Its
+      binding is an alarm, which is why it is not folded into the opening contact
+      that shares its domain.
+    accepts_domains: [binary_sensor]
+    required: false
+    source_repos: [johnkoht, renemarc]
+    examples:
+      - repo: renemarc
+        reuse_status_code: reusable
+        raw_ids: [renemarc_customize_yaml]
+      - repo: johnkoht
+        reuse_status_code: ideas_only
+        raw_ids: [johnkoht_dashboards_kohbo_rooms_main_floor_kitchen_yaml]
+        description: >-
+          A water contact under a kitchen fixture, spelled with the fixture and
+          the leak noun.
+
+  - name: lux_sensor
+    description: >-
+      An ambient-light reading in lux: the input a daylit room dims its lamps
+      against, and not a lamp's own brightness.
+    accepts_domains: [sensor]
+    required: false
+    source_repos: [fwartner, johnkoht]
+    examples:
+      - repo: fwartner
+        reuse_status_code: ideas_only
+        raw_ids: [fwartner_automations_yaml]
+        description: >-
+          An illuminance reading on a sensor node, spelled with the node's own
+          prefix before the reading noun.
+      - repo: johnkoht
+        reuse_status_code: ideas_only
+        raw_ids: [johnkoht_automation_weather_bad_weather_mode_off_yaml]
+        description: >-
+          An ambient-light reading from a weather station, spelled as the
+          station's own illuminance channel.
+
+  - name: temperature_sensor
+    description: >-
+      A temperature reading for a space, in either language the sources spell it.
+      The room's climate input.
+    accepts_domains: [sensor]
+    required: false
+    source_repos: [ccostan, fwartner, johnkoht, renemarc]
+    examples:
+      - repo: ccostan
+        reuse_status_code: reusable
+        raw_ids: [ccostan_config_dashboards_infrastructure_partials_car_sections_yaml]
+      - repo: renemarc
+        reuse_status_code: reusable
+        raw_ids: [renemarc_customize_yaml]
+      - repo: fwartner
+        reuse_status_code: ideas_only
+        raw_ids: [fwartner_automations_yaml]
+        description: >-
+          A temperature reading bound to a room by compounding the room's name
+          ahead of the reading noun.
+      - repo: johnkoht
+        reuse_status_code: ideas_only
+        raw_ids: [johnkoht_automation_gianlucas_room_gianluca_heater_off_yaml]
+        description: >-
+          A temperature reading whose identifier names the room and its
+          air-quality device before the reading noun.
+
+  - name: humidity_sensor
+    description: >-
+      A humidity reading for a space. A bathroom or a humidor binds it where other
+      rooms do not, which is why it is its own role.
+    accepts_domains: [sensor]
+    required: false
+    source_repos: [ccostan, fwartner, johnkoht, renemarc]
+    examples:
+      - repo: ccostan
+        reuse_status_code: reusable
+        raw_ids: [ccostan_config_dashboards_overview_sections_00_summary_yaml]
+      - repo: renemarc
+        reuse_status_code: reusable
+        raw_ids: [renemarc_automations_notifications_humidity_notify_yaml]
+      - repo: fwartner
+        reuse_status_code: ideas_only
+        raw_ids: [fwartner_automations_yaml]
+        description: >-
+          A humidity reading on a room's climate node, spelled with the node's
+          prefix.
+      - repo: johnkoht
+        reuse_status_code: ideas_only
+        raw_ids: [johnkoht_dashboards_kohbo_climate_air_quality_yaml]
+        description: >-
+          A humidity reading for a named floor, spelled with the floor and the
+          humidity noun.
+
+  - name: climate_zone
+    description: >-
+      A heating or cooling zone: the thermostat a room's temperature behaviour
+      drives. Every entity on the domain is one, so the domain alone carries the
+      role.
+    accepts_domains: [climate]
+    required: false
+    source_repos: [ccostan, fwartner, johnkoht]
+    examples:
+      - repo: ccostan
+        reuse_status_code: reusable
+        raw_ids: [ccostan_config_dashboards_overview_sections_00_summary_yaml]
+      - repo: fwartner
+        reuse_status_code: ideas_only
+        raw_ids: [fwartner_automations_yaml]
+        description: >-
+          A thermostat for a named room, whose identifier compounds the device
+          type with the room.
+      - repo: johnkoht
+        reuse_status_code: ideas_only
+        raw_ids: [johnkoht_automation_house_climate_main_floor_main_floor_climate_resume_yaml]
+        description: >-
+          A thermostat for a main floor, named for the floor and the climate
+          function it serves.
+
+  - name: media_player
+    description: >-
+      A speaker or a display. The domain is the role, so it is a slot wherever it
+      stands.
+    accepts_domains: [media_player]
+    required: false
+    source_repos: [johnkoht, renemarc]
+    examples:
+      - repo: renemarc
+        reuse_status_code: reusable
+        raw_ids: [renemarc_automations_devices_video_player_resume_yaml]
+      - repo: johnkoht
+        reuse_status_code: ideas_only
+        raw_ids: [johnkoht_automation_all_away_media_off_yaml]
+        description: >-
+          A speaker in a named person's room, spelled with the person's name and
+          the device type.
+
+  - name: house_mode
+    description: >-
+      The selector holding the home's state -- away, guest, asleep. House-scoped,
+      and its name is what tells it from a room's scene selector on the same
+      domain.
+    accepts_domains: [input_select]
+    required: false
+    source_repos: [fwartner, johnkoht]
+    examples:
+      - repo: fwartner
+        reuse_status_code: ideas_only
+        raw_ids: [fwartner_automations_yaml]
+        description: >-
+          A selector whose identifier names a presence mode, holding the whole
+          home's state.
+      - repo: johnkoht
+        reuse_status_code: ideas_only
+        raw_ids: [johnkoht_automation_family_room_lights_family_lights_to_away_yaml]
+        description: >-
+          A selector named for the house itself, holding the state the whole home
+          is in.
+
+  - name: scene_selector
+    description: >-
+      A selector whose options are lighting moods for a room or the house. It
+      shares the domain with the mode selector and is told from it by the scene
+      token rather than by scope.
+    accepts_domains: [input_select]
+    required: false
+    source_repos: [johnkoht, renemarc]
+    examples:
+      - repo: renemarc
+        reuse_status_code: reusable
+        raw_ids: [renemarc_automations_devices_video_player_resume_yaml]
+      - repo: johnkoht
+        reuse_status_code: ideas_only
+        raw_ids: [johnkoht_automations_yaml]
+        description: >-
+          A selector for a named room's lighting moods, spelled with the room and
+          the scene noun.
+
+  - name: cover
+    description: >-
+      An opening cover: a garage door, a roller blind, a shade. What a room or an
+      entrance opens without walking to it.
+    accepts_domains: [cover]
+    required: false
+    source_repos: [ccostan, fwartner, johnkoht]
+    examples:
+      - repo: ccostan
+        reuse_status_code: reusable
+        raw_ids: [ccostan_config_automation_timed_triggers_sunset_turn_on_yaml]
+      - repo: fwartner
+        reuse_status_code: ideas_only
+        raw_ids: [fwartner_automations_yaml]
+        description: >-
+          A roller blind for a named room, spelled with the device type and the
+          room.
+      - repo: johnkoht
+        reuse_status_code: ideas_only
+        raw_ids: [johnkoht_dashboards_kohbo_security_pages_garage_doors_yaml]
+        description: >-
+          A garage door named for the entrance it serves, numbered where a house
+          has more than one.
+
+  - name: lock
+    description: >-
+      A door lock. Every entity on the domain is one; a front door lock is read as
+      the house's and an interior one as a room's.
+    accepts_domains: [lock]
+    required: false
+    source_repos: [ccostan, fwartner, johnkoht]
+    examples:
+      - repo: ccostan
+        reuse_status_code: reusable
+        raw_ids: [ccostan_config_automation_timed_triggers_sunset_turn_on_yaml]
+      - repo: fwartner
+        reuse_status_code: ideas_only
+        raw_ids: [fwartner_automations_yaml]
+        description: >-
+          A smart lock on the house's main door, spelled with the maker's device
+          name and the door.
+      - repo: johnkoht
+        reuse_status_code: ideas_only
+        raw_ids: [johnkoht_automations_yaml]
+        description: >-
+          A lock on a garage entry, named for the way in that it secures.
+
+  - name: vacuum
+    description: >-
+      A robot vacuum that cleans the floor plan rather than one room, so it is
+      house-scoped. The domain is the role.
+    accepts_domains: [vacuum]
+    required: false
+    source_repos: [ccostan, fwartner, johnkoht]
+    examples:
+      - repo: ccostan
+        reuse_status_code: reusable
+        raw_ids: [ccostan_config_dashboards_infrastructure_partials_vacuum_sections_yaml]
+      - repo: fwartner
+        reuse_status_code: ideas_only
+        raw_ids: [fwartner_automations_yaml]
+        description: >-
+          A robot vacuum named by its model designation, with no room attached.
+      - repo: johnkoht
+        reuse_status_code: ideas_only
+        raw_ids: [johnkoht_dashboards_kohbo_home_vacuum_active_notification_yaml]
+        description: >-
+          A vacuum named for the floor it cleans, not for a single room.

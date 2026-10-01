@@ -1,0 +1,52 @@
+# Golden selection for fwartner.
+#
+# Schema: schemas/catalog/golden_fwartner.json. Validate with `oh-catalog validate`.
+#
+# The repo with the authored blueprints: three under its own namespace, two
+# outside the blueprints tree entirely.
+#
+# Every path here is hand-picked from the repository and carries the artifact
+# class it is expected to receive, which makes each entry a check rather than a
+# line of a list: a path alone says only that something was selected, while a
+# path with its class fails both when the path stops being selected and when it
+# is selected as the wrong thing.
+#
+# This file is what guards the corpus against a rule list that has gone too far
+# in the *excluding* direction. An exclude rule broad enough to swallow a
+# directory takes these entries with it, and the check fails naming the path and
+# the rule that decided it -- whereas the inventory on its own would simply
+# report a smaller corpus, with nothing left to compare against. It is not a
+# guard in the other direction: a select rule broad enough to pull new files in
+# shows up only as a diff in `catalog/inventory.json`, and the per-repo counts in
+# `catalog/README.md` are what a reviewer reads to see that.
+#
+# Across the four files the pinned classes must cover every class in the closed
+# enum except `other`, so that no class can drop out of the corpus entirely
+# without something saying so.
+
+repo: fwartner
+entries:
+  - path: automations.yaml
+    class: automation
+  - path: blueprints/automation/fwartner/awtrix_solar.yaml
+    class: blueprint
+  - path: custom_configs/blueprints/climate_alert.yaml
+    class: blueprint
+  - path: scripts.yaml
+    class: script
+  - path: scenes.yaml
+    class: scene
+  - path: custom_configs/groups/ha_menu.yaml
+    class: helper
+  - path: custom_configs/notify/iphone.yaml
+    class: helper
+  - path: templates/header_main.yaml
+    class: template
+  - path: custom_configs/templates/moonphase.yaml
+    class: template
+  - path: configuration.yaml
+    class: package
+  - path: ip_bans.yaml
+    class: package
+  - path: integrations/dhcp.yaml
+    class: package

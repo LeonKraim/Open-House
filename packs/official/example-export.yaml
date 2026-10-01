@@ -1,0 +1,27 @@
+# The hand-written example export document -- task 7.5.
+#
+# Phase 0 freezes the *shape* of an export and ships one static example that
+# validates against `schemas/export-document/1.0.0.json`. The round-trip -- write
+# this out, read it back, diff it as a dry run, re-link after a re-pair -- is
+# Phase 3's, and the deferral is recorded in `docs/reference/phase-0-
+# verification.md` rather than left implicit.
+#
+# Every binding carries a `registry_id` as well as an `entity_id`, and the schema
+# requires both. An `entity_id` alone is not stable across a re-pair: the id the
+# user sees (`light.living_room_main`) can be reassigned to a different physical
+# device, while the registry id (`living_room_main`) is what the binding was
+# actually resolved against. An export that named only entity ids would be an
+# export that cannot be re-imported, which is the one thing an export is for --
+# so the schema refuses a binding that carries only `entity_id`.
+format_version: "1.0.0"
+house: Example House
+exported_at: "2026-10-01T00:00:00Z"
+bindings:
+  - room: living_room
+    slot: main_light
+    registry_id: living_room_main
+    entity_id: light.living_room_main
+  - room: master_bedroom
+    slot: main_light
+    registry_id: master_bedroom_main
+    entity_id: light.master_bedroom_main
