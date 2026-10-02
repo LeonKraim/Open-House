@@ -1,0 +1,7 @@
+name: laundry
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/derived/laundry.yaml
+sha256: sha256:8de9e5e67bb4e1deabf06a34926856951efd7d44fe42cf278cd1c3d64caad1ba
+tier: official

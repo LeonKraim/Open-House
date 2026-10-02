@@ -36,43 +36,48 @@ keyword the renderer does not know is a field it draws as `unsupported` -- and
 its declarations are gathered from the packs this house holds, filtered to the
 ones that reach the room being asked about.
 
-What a pack declares, today, is its behaviours: the manifest's `behaviours`
-clause is the only clause a pack has, and each declared behaviour's tunables are
-the pack's *settings*. `InstalledPack.behaviours` is that clause as the engine
-recorded it, and the unit registered under each name declares its own defaults
-(`engine/behaviours/base.py`, `behaviour_defaults`), which is exactly the "high
-level" a person configures: the quiet timeout, the lux threshold. A pack that
-registered no unit -- a behaviour id this build does not implement, which is
-every pack whose behaviours are not one of the shipped three -- contributes
-nothing, which is the honest answer and not a failure: there is no declaration
-to build a field from.
+A pack declares two kinds of setting, and they arrive by different roads.
+`pack-manifest/1.3.0`'s top-level `options` clause is the author's own form --
+one typed entry per tunable, with a title, a description, bounds and members --
+and it is carried on every unit the pack registered
+(`engine/behaviours/declared.py`), because an installed record keeps a digest
+rather than a document and the build is the last place the two can be seen
+together. A *unit's* `defaults` mapping is the other road, and it is what the
+three hand-written behaviours use; a declared behaviour contributes none, since
+its manifest states its settings rather than its code.
 
-No pack in this checkout declares an options schema, and the `pack-manifest`
-schema has no clause for one. That is a fact about the repository rather than a
-gap in this module: the machinery below reads whatever a pack's declared
-behaviours expose and builds the schema from that, so the day a pack carries a
-behaviour this build registers, its tunables appear on the room's settings page
-with no change here.
+Both land under one key space and the same JSON Schema, which is the point:
+`option_properties` draws a declared option as `schema-spec.ts`'s checkbox, number
+field or select, and `_node` guesses the same three from a Python default. A pack
+that registered no unit at all contributes nothing, which is the honest answer and
+not a failure -- the record names behaviour ids, and a manifest's clause is read
+through the unit those ids resolve to.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import cast
 
 import jsonschema
 
-from engine.binding import RoomScope
+from engine.behaviours import scope_key
+from engine.behaviours.base import BehaviourScope
+from engine.behaviours.declared import option_key, reach_key
+from engine.binding import HouseScope, RoomScope
 from engine.install import InstalledPack
 from engine.profiles import Profile, ProfileError, ProfileKind
 
-from .live import LiveSession, LiveSessionError
+from .live import HOUSE, LiveSession, LiveSessionError
 
 __all__ = [
     "activate",
     "active_profiles",
+    "humanize",
+    "option_properties",
     "options",
     "profiles",
+    "reach_properties",
     "set_option",
 ]
 
@@ -80,6 +85,11 @@ __all__ = [
 #: the node's own `title` and only falls back to humanising the key, so a schema
 #: with no title at all would be a form whose heading is a raw config key.
 OPTIONS_TITLE = "Room options"
+
+#: The same heading for the house's own form. The house is a target like a room,
+#: so its options are drawn by the same code and differ only in the word: a form
+#: headed "Room options" on the House tab would name a room the person is not on.
+HOUSE_OPTIONS_TITLE = "House options"
 
 #: The JSON Schema type each declared default projects to, in the order the test
 #: has to run: `bool` first because it is an `int` in Python, and a flag read as
@@ -110,20 +120,23 @@ def options(
 
     The values are *resolved*, not read from the schema's defaults: an option a
     person has overridden has to read back as what they set, or `set_option`
-    would be a write the next `options` call forgot. They resolve at the room
-    scope through the engine's own resolver, so the answer is the one the
-    behaviours will read on the next tick and not a second opinion about it.
+    would be a write the next `options` call forgot. They resolve at the scope
+    the module is placed in -- the room's for a room module, the house's for one
+    put in the house (`HOUSE`) -- through the engine's own resolver, so the answer
+    is the one the behaviours will read on the next tick and not a second opinion
+    about it.
     """
-    session.require_room(room_id)
+    if room_id != HOUSE:
+        session.require_room(room_id)
     properties = _declarations(session, room_id)
     if not properties:
         return (None, {})
     schema: dict[str, object] = {
         "type": "object",
-        "title": OPTIONS_TITLE,
+        "title": HOUSE_OPTIONS_TITLE if room_id == HOUSE else OPTIONS_TITLE,
         "properties": properties,
     }
-    scope = RoomScope(room_id)
+    scope = HouseScope() if room_id == HOUSE else RoomScope(room_id)
     values = {
         key: session.engine.settings.resolve_or(key, scope, node["default"]).value
         for key, node in properties.items()
@@ -150,17 +163,20 @@ def set_option(
     message that named only the value would leave a reader hunting a form with a
     dozen fields.
     """
-    session.require_room(room_id)
+    if room_id != HOUSE:
+        session.require_room(room_id)
     schema, _values = options(session, room_id=room_id)
     node = _property(schema, key)
     if node is None:
-        raise LiveSessionError(f"there is no option {key!r} in the room {room_id!r}")
+        where = "the house" if room_id == HOUSE else f"the room {room_id!r}"
+        raise LiveSessionError(f"there is no option {key!r} in {where}")
     rejection = _rejects(node, value)
     if rejection is not None:
         raise LiveSessionError(
             f"the value {value!r} is not accepted for the option {key!r}: {rejection}"
         )
-    session.engine.settings.set_override(key, RoomScope(room_id), value)
+    scope = HouseScope() if room_id == HOUSE else RoomScope(room_id)
+    session.engine.settings.set_override(key, scope, value)
     return options(session, room_id=room_id)
 
 
@@ -189,7 +205,7 @@ def profiles(session: LiveSession) -> tuple[Mapping[str, object], ...]:
     return tuple(
         {
             "name": profile.name,
-            "label": _humanize(profile.name),
+            "label": humanize(profile.name),
             "description": profile.description,
             "kind": str(profile.kind),
             "axis": profile.axis,
@@ -269,24 +285,319 @@ def _declarations(session: LiveSession, room_id: str) -> dict[str, dict[str, obj
     nothing, and that is not an error: a pack's manifest declares behaviour names
     the engine is free not to implement, and inventing a field for one would put
     a control on the screen for a setting nothing reads.
+
+    Membership is `reaches_room` and not a test written here, because the page
+    must list a card for every pack this form carries settings for: the same rule
+    answers both, so a key can never be left with no card to sit under.
+
+    For the house (`HOUSE`) the bound set is every room's, because the house's
+    roles are the rooms' roles gathered (`engine.binding.resolve_slot`): a module
+    put in the house reaches a role when *any* room binds it, so its options are
+    shown against the union rather than a room the house does not have.
     """
-    bound = set(session.engine.house.room(room_id).bindings)
     installed = session.engine.installed
     units = session.engine.behaviours
     declared: dict[str, dict[str, object]] = {}
     for pack in installed.names:
         record = installed.packs[pack]
-        if not _reaches(record, bound):
+        if not reaches_room(session, record, room_id):
             continue
         for behaviour_id in record.behaviours:
             unit = units.get(behaviour_id)
             if unit is None:
                 continue
+            # The pack's own declarations first, because they are the ones a
+            # person is meant to set: a manifest's `options` clause states its
+            # type, its bounds, its members and its words, where a unit's
+            # `defaults` states only a value whose kind has to be guessed from
+            # Python. Both land under one key space, so a later declaration for a
+            # key an earlier one already named is dropped rather than duplicated.
+            for key, node in option_properties(
+                pack, getattr(unit, "options", ())
+            ).items():
+                declared.setdefault(key, node)
             for key, default in unit.defaults.items():
                 node = _node(key, default, behaviour_id)
                 if node is not None:
                     declared.setdefault(key, node)
+        # The roles, last, so a pack that declared a `reach.<slot>` option of its
+        # own keeps its own words: the derived control is the fallback every pack
+        # gets, not a field that overwrites one an author wrote.
+        acting = tuple(
+            slot
+            for behaviour_id in record.behaviours
+            if (unit := units.get(behaviour_id)) is not None
+            and (slot := getattr(unit, "action_slot", None)) is not None
+        )
+        for key, node in reach_properties(pack, acting).items():
+            declared.setdefault(key, node)
     return {key: declared[key] for key in sorted(declared)}
+
+
+def reaches_room(session: LiveSession, record: InstalledPack, room_id: str) -> bool:
+    """Whether a page's form carries `record`'s settings.
+
+    The *one* rule, and the reason it is a function rather than a line inside
+    `_declarations`: a room's page draws a card per module and asks each card for
+    the settings it owns (`pack_option_keys`), so the packs the form carries
+    settings for and the packs the page draws cards for have to be the same set.
+    When they were two rules, every key the form carried for a pack the page did
+    not list fell through to the panel's leftover bucket -- one undifferentiated
+    "Other settings" card holding another module's switches, which is a form a
+    person cannot read and cannot tell apart from the room's own.
+
+    A room's answer is membership of the room's bound slots (`_reaches`), not the
+    room the pack was installed into: the form is the room's configurability, and
+    a pack whose roles this room binds is one it can be configured against. The
+    house's answer is the house's own rule (`_reaches_house`), because the house
+    has no bindings of its own to gather -- it reads the rooms'.
+    """
+    if room_id == HOUSE:
+        return _reaches_house(session, record)
+    return _reaches(record, _bound_slots(session, room_id))
+
+
+def _reaches_house(session: LiveSession, record: InstalledPack) -> bool:
+    """Whether the house's own form should carry `record`'s options.
+
+    A pack belongs on the House tab's form when its settings are read at house
+    scope, which is one of two facts and not a guess. A pack *placed in the
+    house* is the first: a person put it there, and its settings are the house's.
+    A pack with at least one atom that resolves to house scope is the second, and
+    it is why a bedtime button sitting in a bedroom still appears on the House
+    tab -- its lights-off atom is house-scoped, reads its options at house scope,
+    and a form that omitted the pack would leave that setting with nowhere to be
+    set.
+
+    The scope read is the *resolved* one (the engine's `scope_key` over the house
+    setting, defaulting to the unit's declared scope), so a person who widened an
+    atom to the house moves its pack onto this form and one who narrowed it takes
+    the pack off. A pack with no registered behaviour and no house placement is
+    not shown, which is the honest answer for a pack nothing evaluates.
+    """
+    if session.module_room(record.name) == HOUSE:
+        return True
+    return any(
+        _resolved_scope(session, unit) is BehaviourScope.HOUSE
+        for unit in record.behaviours
+        if unit in session.engine.behaviours
+    )
+
+
+def _resolved_scope(session: LiveSession, unit: str) -> BehaviourScope:
+    """The scope a unit is evaluated in, read the way the engine reads it."""
+    found = session.engine.behaviours[unit]
+    chosen = session.engine.settings.resolve_or(
+        scope_key(unit), HouseScope(), str(found.scope)
+    ).value
+    if chosen != str(BehaviourScope.HOUSE):
+        return BehaviourScope.ROOM
+    # A widening the house scope cannot resolve is reported as not in force, the
+    # same way `live_modules._chosen_scope` reads it: the engine ignores such a
+    # setting (`Engine._scopes`), so a form built from it would carry options for
+    # an atom that is still evaluated per room.
+    return (
+        BehaviourScope.HOUSE
+        if session.engine.reaches_house(unit)
+        else BehaviourScope.ROOM
+    )
+
+
+def _bound_slots(session: LiveSession, room_id: str) -> set[str]:
+    """The slots the form is filtered against: one room's, or the whole house's.
+
+    A room's are exactly the room's own bindings; the house's are every room's
+    gathered, which is the same union `resolve_slot` makes for a house-scoped
+    role. The house is `HOUSE` and has no room of its own, so asking the house
+    for `room("")` would answer `None` and the caller would read an attribute off
+    it.
+    """
+    if room_id == HOUSE:
+        return {slot for room in session.engine.house.rooms for slot in room.bindings}
+    return set(session.engine.house.room(room_id).bindings)
+
+
+def pack_option_keys(session: LiveSession, record: InstalledPack) -> tuple[str, ...]:
+    """Every setting key `record` owns, in the order its behaviours declare them.
+
+    The join that lets a screen draw a module rather than a form: `_declarations`
+    merges every pack's properties into one flat object, which is right for a
+    schema and wrong for a person -- a card listing "Lux threshold" and "Door
+    left open for" side by side, with nothing saying which module either belongs
+    to, is a form nobody can reason about. This is the same computation the
+    declarations make, kept per pack, so the panel can put each setting under the
+    module that declares it without parsing keys.
+
+    Membership is the resolver's own namespace -- a key belongs to `record` when
+    it is spelled `module.<record>.<...>`, which is the prefix `option_key`
+    writes -- and never a substring match, so `module.fan` does not claim
+    `module.fan_boost`'s settings. The three sources are the pack's declared
+    `options`, its units' own defaults, and the `reach.<slot>` checkboxes derived
+    from the roles its behaviours act through; all three land in the form, so all
+    three belong to the card.
+    """
+    prefix = option_key(record.name, "")
+    units = session.engine.behaviours
+    keys: list[str] = []
+    for behaviour_id in record.behaviours:
+        unit = units.get(behaviour_id)
+        if unit is None:
+            continue
+        candidates = list(
+            option_properties(record.name, getattr(unit, "options", ()))
+        ) + list(unit.defaults)
+        acting = getattr(unit, "action_slot", None)
+        if acting is not None:
+            candidates += list(reach_properties(record.name, (acting,)))
+        for key in candidates:
+            if key.startswith(prefix) and key not in keys:
+                keys.append(key)
+    return tuple(keys)
+
+
+def reach_properties(pack: str, slots: Iterable[str]) -> dict[str, dict[str, object]]:
+    """One checkbox per role a pack's behaviours act through, keyed and typed.
+
+    The control the phrase "the user could also set ... that he only want ... the
+    current room only gets addressed by lights or thermostat or doors" asks for,
+    and the second half of a module's reach beside its scope: the scope decides
+    *where* the module acts, and these decide *on what*. A bedtime button that
+    should shut the house's doors and dim its lights but leave the thermostats
+    alone is one pack with one role unticked, which is a setting and not a
+    different manifest.
+
+    Derived rather than declared, because the roles are already facts of the pack:
+    each `action_slot` is a role some behaviour writes through, and asking an
+    author to restate them as options would be asking for a list that can be
+    wrong -- a declared `reach.door_contact` for a pack that acts on no doors is
+    a checkbox that silently does nothing. The manifest's own `options` are read
+    first (`_declarations`), so a pack that wants to say more about one of these
+    -- a different title, a description naming the cost -- can still declare it.
+
+    **The pack's name goes on the description**, through the same suffix a
+    declared option's description carries. Two installed modules that both act on
+    the room's lights are two checkboxes a person has to tell apart, and "Act on
+    light group" with the same sentence under it twice is exactly the pair the
+    suffix exists to break (`_attributed`).
+
+    `boolean` and defaulting true, which is what makes this additive: every pack
+    installed before this existed reads every role as reached and behaves exactly
+    as it did.
+    """
+    properties: dict[str, dict[str, object]] = {}
+    for slot in sorted(set(slots)):
+        label = humanize(slot).lower()
+        properties[option_key(pack, reach_key(slot))] = {
+            "type": "boolean",
+            "title": f"Act on {label}",
+            "description": _attributed(
+                f"Untick to leave {label} alone: the module keeps running "
+                "but stops writing to this role",
+                pack,
+            ),
+            "default": True,
+        }
+    return properties
+
+
+#: The JSON Schema node each declared option `type` becomes. Spelled out rather
+#: than derived from the manifest's `default`, because the declaration says more
+#: than a value can: `duration` and `integer` are the same JSON type and
+#: different questions, and a `number` option whose default happens to be `2`
+#: must still be a number field rather than a whole-number one.
+_OPTION_NODES: Mapping[str, Mapping[str, object]] = {
+    "boolean": {"type": "boolean"},
+    "integer": {"type": "integer"},
+    "number": {"type": "number"},
+    "string": {"type": "string"},
+    "enum": {"type": "string"},
+    # A duration is whole seconds, and the floor is what makes the panel's number
+    # input refuse a negative one before the engine ever sees it. The ceiling is
+    # deliberately absent: an author who wants one declares `maximum`.
+    "duration": {"type": "integer", "minimum": 0},
+}
+
+
+def option_properties(
+    pack: str, rows: Iterable[Mapping[str, object]]
+) -> dict[str, dict[str, object]]:
+    """One schema property per option `pack` declares, keyed by its setting key.
+
+    The key is the resolver's own (`engine/behaviours/declared.py`'s
+    `option_key`), so the property name a form sends back is the name a value is
+    written under and the name a behaviour reads -- one spelling, three uses.
+
+    The declaration is honoured literally: `title` and `description` are the
+    author's words rather than a humanised key, `minimum`/`maximum` bound the
+    field, `enum` becomes a select, and `unit` is appended to the description
+    because a number with no unit beside it is a number a person guesses at. The
+    manifest's own headings are what make this a form an author can design rather
+    than a table of engine internals.
+    """
+    properties: dict[str, dict[str, object]] = {}
+    for row in rows:
+        key = row.get("key")
+        kind = row.get("type")
+        if not isinstance(key, str) or not isinstance(kind, str):
+            continue
+        node = dict(_OPTION_NODES.get(kind, {}))
+        if not node:
+            continue
+        node["title"] = _option_title(row, key)
+        node["description"] = _option_description(row, pack)
+        node["default"] = _option_default(row, kind)
+        for bound in ("minimum", "maximum"):
+            value = row.get(bound)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                node[bound] = value
+        members = row.get("enum")
+        if kind == "enum" and isinstance(members, list):
+            node["enum"] = list(members)
+        properties[option_key(pack, key)] = node
+    return properties
+
+
+def _option_title(row: Mapping[str, object], key: str) -> str:
+    """The label: the author's `title`, or the key humanised as a fallback."""
+    title = row.get("title")
+    return title if isinstance(title, str) and title else humanize(key)
+
+
+def _attributed(said: str, pack: str) -> str:
+    """`said` with the pack that declared it named after it.
+
+    Appended rather than substituted, because the panel shows every room's
+    options in one form and two packs may each declare the same thing: a `grace`,
+    or a role both of them act on. Without the name a person would be looking at
+    two identical labels, and one of them under two different settings.
+    """
+    return f"{said} -- from the pack {pack}."
+
+
+def _option_description(row: Mapping[str, object], pack: str) -> str:
+    """What the option does, the author's words plus the pack that set it."""
+    description = row.get("description")
+    said = description.strip() if isinstance(description, str) else ""
+    unit = row.get("unit")
+    measured = f" (in {unit})" if isinstance(unit, str) and unit else ""
+    prefix = f"{said}{measured}" if said else f"Declared by the {pack} module"
+    return _attributed(prefix, pack)
+
+
+def _option_default(row: Mapping[str, object], kind: str) -> object:
+    """The declared default, as JSON-shaped data the form can start from.
+
+    The validator guarantees the value is of the declared type, so this does not
+    re-check it; the one thing it does is give an `enum` with no default the
+    first member, because a select whose initial value is `undefined` renders
+    empty and a person cannot tell an unset option from an empty one.
+    """
+    default = row.get("default")
+    if default is None and kind == "enum":
+        members = row.get("enum")
+        if isinstance(members, list) and members:
+            return members[0]
+    return default
 
 
 def _reaches(record: InstalledPack, bound: set[str]) -> bool:
@@ -321,7 +632,7 @@ def _node(key: str, default: object, behaviour_id: str) -> dict[str, object] | N
         return None
     node: dict[str, object] = {
         "type": kind,
-        "title": _humanize(key.rsplit(".", 1)[-1]),
+        "title": humanize(key.rsplit(".", 1)[-1]),
         "description": f"Set by the {behaviour_id} behaviour.",
         "default": _plain(default),
     }
@@ -398,7 +709,7 @@ def _active(profile: Profile, selected: set[str], house_profile: str | None) -> 
     return profile.name == house_profile
 
 
-def _humanize(name: str) -> str:
+def humanize(name: str) -> str:
     """`quiet_timeout_seconds` -> `Quiet timeout seconds`.
 
     The same shape `schema-spec.ts`'s `humanizeKey` produces, kept here rather

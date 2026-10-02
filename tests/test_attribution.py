@@ -49,8 +49,8 @@ TERMS: dict[str, tuple[str, str, str | None, tuple[str, ...]]] = {
         "LICENSE.txt",
         ("attribution", "state_changes"),
     ),
-    "fwartner": ("Florian Wartner", "no_licence", None, ()),
-    "johnkoht": ("John Koht", "no_licence", None, ()),
+    "fwartner": ("Florian Wartner", "public_domain", None, ()),
+    "johnkoht": ("John Koht", "public_domain", None, ()),
 }
 
 #: The fields the committed-notice test asserts, as parametrisation rows.
@@ -193,15 +193,23 @@ def test_a_state_changes_repo_states_the_change_notice(real_root: Path) -> None:
 
 
 def test_a_non_granting_repo_is_stated_as_facts_and_concepts_only(
-    real_root: Path,
+    fake_root: Path,
 ) -> None:
-    """The two repos that grant nothing say so, rather than reading as licensed."""
-    for repo in ("fwartner", "johnkoht"):
-        record = next(r for r in licenses.load_licences() if r.repo == repo)
-        section = attribution.render_section(record)
-        assert "`ideas_only`" in section
-        assert "Not reused." in section
-        assert "Not quoted." in section
+    """A record that grants nothing says so, rather than reading as licensed.
+
+    Built on a fixture because the two repos that withheld -- `fwartner` and
+    `johnkoht` -- granted unrestricted reuse on 2026-10-02, so no shipped record
+    carries `no_licence` any more and the rule would otherwise go untested.
+    """
+    _seed(
+        fake_root,
+        _record("fwartner", license_code="no_licence", license_prose="no_licence"),
+    )
+    record = next(r for r in licenses.load_licences() if r.repo == "fwartner")
+    section = attribution.render_section(record)
+    assert "`ideas_only`" in section
+    assert "Not reused." in section
+    assert "Not quoted." in section
 
 
 # --- the drift check ---------------------------------------------------------

@@ -28,7 +28,7 @@ from openhouse.facade import OpenHouse, open_session
 ROOT = Path(__file__).resolve().parents[1]
 
 #: The three units this phase ships, in the order the engine evaluates them.
-SHIPPED = ("away_shutdown", "motion_lighting", "override")
+SHIPPED = ("away_shutdown", "motion_lighting", "override", "safety_alert")
 
 
 @pytest.fixture(scope="module")
@@ -51,7 +51,7 @@ def _outcomes(session: OpenHouse) -> list[str]:
 def _motion(session: OpenHouse) -> None:
     """Trip the living-room motion sensor and let the engine tick once.
 
-    `minimal`'s living room binds `lux_sensor` and reads dark, so a tick with
+    `minimal`'s living room binds `ambient_light_sensor` and reads dark, so a tick with
     motion present is exactly the input `motion_lighting` would act on -- which
     is what makes the OFF-by-default check below non-vacuous. The advance is one
     minute because an advance of zero evaluates nothing at all.
@@ -438,13 +438,15 @@ def test_there_is_no_always_on_tier_in_the_engine(vocabulary: Vocabulary) -> Non
 def test_away_shutdown_is_unreachable_from_the_control_surface(
     vocabulary: Vocabulary,
 ) -> None:
-    """`away_shutdown` declines when only the `house_mode` entity is set.
+    """An empty house left quiet is not an away house.
 
     `away_shutdown` gates on `ctx.mode_is_active("away")`, which reads the
-    engine's `ModeSet`, and `house_mode` is an *entity* -- which the behaviour's
-    own docstring records as explicitly not the gate. So setting the selector to
-    `away` and emptying the house leaves the unit evaluating (it is enabled, so
-    its records are `declined` and not `skipped: disabled`) and not acting.
+    engine's own `ModeSet`. The home's state is the engine's variable and not a
+    slot, so no control-surface operation reaches it: a person cannot bind a
+    device to say `away`, and there is no entity whose value could disagree with
+    the modes every other behaviour is gated on. So an enabled unit over a quiet
+    house leaves the unit evaluating (its records are `declined`, not
+    `skipped: disabled`) and not acting.
 
     The claim is scoped to the entity, and deliberately not the stronger one it
     used to make. No operation on the control surface activates a mode *other
@@ -460,7 +462,6 @@ def test_away_shutdown_is_unreachable_from_the_control_surface(
         vocabulary=vocabulary,
         house_settings={"behaviour.away_shutdown.enabled": True},
     )
-    session.set_state("input_select.house_mode", "away")
     session.set_state("binary_sensor.living_room_motion", "off")
     session.advance_time(minutes=30)
     away = [
@@ -486,7 +487,7 @@ def test_a_restored_away_mode_reaches_the_unit(vocabulary: Vocabulary) -> None:
     an absolute, and is true only of every operation *but* `restore`.
 
     Falsified by a `restore` that dropped the modes it was handed, or by an
-    `away_shutdown` that acted on the `house_mode` entity rather than on the set.
+    `away_shutdown` that read a stale entity rather than the engine's own set.
     """
     session = open_session(
         house="minimal",

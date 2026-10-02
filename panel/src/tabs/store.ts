@@ -25,6 +25,20 @@ const TIER_CHIP: Record<StoreEntry["tier"], string> = {
 };
 
 export class StoreTab extends OpenHouseElement {
+  // `confirming` is a click that only arms a button, and `tierFilter` is a
+  // choice; both are invisible to Lit as plain fields (see base.ts).
+  static override properties = {
+    ...OpenHouseElement.properties,
+    entries: { state: true },
+    generatedAt: { state: true },
+    cached: { state: true },
+    isLoading: { state: true },
+    error: { state: true },
+    busy: { state: true },
+    confirming: { state: true },
+    tierFilter: { state: true },
+  };
+
   private entries: StoreEntry[] = [];
   private generatedAt: string | null = null;
   private cached = false;

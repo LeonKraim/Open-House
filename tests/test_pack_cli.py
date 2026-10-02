@@ -66,9 +66,11 @@ def _document(
 ) -> dict[str, object]:
     """A manifest the current schema accepts, pinned to one file beside it.
 
-    `requires_slots` and `provides` are both `minItems: 1`, so a pack that pins
-    nothing is not a smaller valid pack -- it is an invalid one, and a fixture
-    that left either empty would fail for a reason the test is not about.
+    `provides` is `minItems: 1`, so a pack that hands nothing over is not a
+    smaller valid pack -- it is an invalid one, and a fixture that left it empty
+    would fail for a reason the test is not about. `requires_slots` may be empty
+    -- a pack that acts through a service and no placeholder needs nothing of the
+    room -- so the fixture names `light_group` to leave the pinning to `provides`.
     """
     document: dict[str, object] = {
         "name": name,
@@ -121,28 +123,27 @@ def _classes(report: pack_verbs.ManifestReport) -> list[str]:
 
 
 def test_the_shipped_packs_validate(real_root: Path) -> None:
-    """Every manifest under `packs/official/` validates, and the twelve are there.
+    """Every manifest under `packs/official/` validates, and the thirteen are there.
 
     Falsified by a check that reports a pass over a directory it did not read:
-    the six room templates and the three module packs are named, so a scan that
+    the six room templates and the four module packs are named, so a scan that
     skipped them, or a `provides` path left dangling, fails here rather than
-    reporting a clean pass over twelve names that happen to parse.
+    reporting a clean pass over thirteen names that happen to parse.
 
-    The count is twelve because the shipped set is the six default room
-    templates, the house template, the guest-mode pack, and the three module
-    packs task 7.1-7.3 add (the Bedtime button, the Roomba button and the
-    bathroom fan). `example-pack.yaml` is counted too: it is a pack file in this
-    directory and a `module`, so the count is twelve manifests and not the twelve
-    the phase's *set* names -- the set is `test_official_packs.py`'s claim and
-    this is the directory's.
+    The count is thirteen because the shipped set is the six default room
+    templates, the house template, the guest-mode pack, the four module packs
+    tasks 7.1-7.3 add (the Bedtime button, the Roomba button, the bathroom fan
+    and the fridge guard), and `example-pack.yaml` -- itself a pack file in this
+    directory and a `module`, which the phase's *set* does not name. So the count
+    is the directory's claim and the set is `test_official_packs.py`'s.
     """
     report = pack_verbs.validate_directory(SHIPPED)
     assert report.ok
-    assert report.checked == 12
+    assert report.checked == 13
     assert report.unreadable == ()
     names = {manifest.name for manifest in report.reports}
     assert set(ROOM_TEMPLATES) <= names
-    assert {"bedtime", "roomba", "bathroom_fan"} <= names
+    assert {"bedtime", "roomba", "bathroom_fan", "fridge_guard"} <= names
     assert all(manifest.ok for manifest in report.reports)
 
 
@@ -279,7 +280,7 @@ def test_a_class_the_map_does_not_name_is_reported_under_its_own_reason(
                         "name": "act",
                         "action": "service",
                         "services": ["light.turn_on"],
-                        "slots": ["lux_sensor"],
+                        "slots": ["ambient_light_sensor"],
                     }
                 ],
             ),

@@ -8,13 +8,19 @@
 # rather than trusted.
 #
 # The trigger names a slot, not an entity: a person binds their own button to the
-# pack's behaviour, and no `domain.object_id` appears here.
+# pack's behaviour, and no `domain.object_id` appears here. `bedtime_button` is
+# the slot this pack brings -- the press, which no room type provides -- and
+# `light_group` is the room's, which is what the press acts on.
 alias: Bedtime button
 trigger:
-  - platform: state
-    entity_id: light_group
-    to: "off"
+  - platform: device
+    entity_id: bedtime_button
 action:
   - service: light.turn_off
     target:
       entity_id: light_group
+  # The mode the pack enters is not written here. `pack-manifest/1.3.0`'s `mode`
+  # clause carries it -- `lights_off` reads `mode: sleep` -- and the engine checks
+  # the name against the house's configured modes rather than against a device, so
+  # there is no entity for this file to name. `schemas/mode/1.0.0.json` lower-cases
+  # a mode name, which is why the clause reads `sleep` where a person says "Sleep".

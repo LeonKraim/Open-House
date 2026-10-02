@@ -57,7 +57,7 @@ room_types:
       - {repo: johnkoht, room: ninos_room}
       - {repo: johnkoht, room: gianluca_room}
       - {repo: johnkoht, room: jr_suite}
-    provides_slots: [climate_zone, light_group, lux_sensor, media_player, motion_sensor, scene_selector, temperature_sensor]
+    provides_slots: [climate_zone, light_group, ambient_light_sensor, media_player, motion_sensor, scene_selector, temperature_sensor]
 
   - name: dining_room
     description: >-
@@ -91,7 +91,7 @@ room_types:
     default: false
     source_rooms:
       - {repo: johnkoht, room: foyer}
-    provides_slots: [contact_sensor, light_group, lock, motion_sensor]
+    provides_slots: [door_contact, light_group, lock, motion_sensor]
 
   - name: garage
     description: >-
@@ -129,7 +129,7 @@ room_types:
       - {repo: renemarc, room: kitchen}
       - {repo: fwartner, room: kitchen}
       - {repo: johnkoht, room: kitchen}
-    provides_slots: [climate_zone, contact_sensor, light_group, lux_sensor, media_player, motion_sensor, temperature_sensor]
+    provides_slots: [climate_zone, door_contact, light_group, ambient_light_sensor, media_player, motion_sensor, temperature_sensor]
 
   - name: laundry
     description: >-
@@ -150,7 +150,7 @@ room_types:
       - {repo: ccostan, room: living_room}
       - {repo: renemarc, room: lounge}
       - {repo: fwartner, room: wohnzimmer}
-    provides_slots: [light_group, lux_sensor, media_player, motion_sensor, temperature_sensor]
+    provides_slots: [light_group, ambient_light_sensor, media_player, motion_sensor, temperature_sensor]
 
   - name: mudroom
     description: >-
@@ -159,7 +159,7 @@ room_types:
     default: false
     source_rooms:
       - {repo: johnkoht, room: mudroom}
-    provides_slots: [contact_sensor, light_group, lock, motion_sensor]
+    provides_slots: [door_contact, light_group, lock, motion_sensor]
 
   - name: office
     description: >-
@@ -168,7 +168,7 @@ room_types:
     default: false
     source_rooms:
       - {repo: johnkoht, room: office}
-    provides_slots: [climate_zone, contact_sensor, light_group, lux_sensor, media_player, motion_sensor, scene_selector, temperature_sensor]
+    provides_slots: [climate_zone, door_contact, light_group, ambient_light_sensor, media_player, motion_sensor, scene_selector, temperature_sensor]
 
   - name: playroom
     description: >-
@@ -212,9 +212,26 @@ room_types:
 
 # The house scope: slots that belong to the whole house rather than to a room.
 # A house-scoped behaviour may require only these, a room-scoped one only what
-# some room type above provides. They are the house-scoped roles of the lexicon
-# -- the mode selector, the house's own light group, its locks, its scenes and
-# its vacuum -- so an away shutdown has the slots it needs without being pushed
-# through a room type.
+# some room type above provides. They are the mode selector, the house's own
+# light group, its locks, its scenes, its vacuum, and the roles that are worth
+# reading *across* rooms even though a room has one of each -- every door, every
+# light, every thermostat -- so an away shutdown or a bedtime that covers the
+# house has the slots it needs without being pushed through a room type.
+#
+# A slot listed here is not thereby a house-only role: `light_group` and `lock`
+# are the lexicon's two-scoped roles, and the rest are room roles the house
+# scope collects (`engine.binding.resolve_slot` gathers a house slot from every
+# room, in room order). What this list decides is which questions can be asked
+# of the house at all -- and therefore which behaviours the panel may offer to
+# widen, since widening one whose slots are absent here would resolve nothing.
 house:
-  slots: [contact_sensor, house_mode, leak_sensor, light_group, lock, media_player, scene_selector, vacuum]
+  slots:
+    - climate_zone
+    - door_contact
+    - leak_sensor
+    - light_group
+    - lock
+    - media_player
+    - scene_selector
+    - temperature_sensor
+    - vacuum

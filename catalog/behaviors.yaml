@@ -30,7 +30,11 @@ behaviors:
   - light_group
   optional_slots: []
   concept: A motion sensor turning a room's lights on when somebody enters.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - light.turn_on
   raw_ids:
   - ccostan_config_automation_upstairs_motion_ifttt_yaml
   - johnkoht_packages_garage_lights_garage_lights_motion_on_yaml
@@ -46,8 +50,8 @@ behaviors:
   - johnkoht_packages_stairs_lights_stairs_lights_motion_on_yaml
   - johnkoht_packages_upstairs_hallway_lights_upstairs_hallway_lights_motion_on_yaml
   - renemarc_automations_motion_front_start_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: apache_2_0
+  reuse_status: reusable
   obligations:
   - attribution
   - state_changes
@@ -67,15 +71,19 @@ behaviors:
   - light_group
   optional_slots: []
   concept: A room's lights switching themselves off once the motion they answered has stopped and a quiet period has passed.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - light.turn_off
   raw_ids:
   - johnkoht_packages_garage_lights_garage_lights_motion_off_yaml
   - johnkoht_packages_office_lights_office_lights_motion_off_yaml
   - johnkoht_packages_playroom_lights_playroom_lights_motion_off_yaml
   - johnkoht_packages_security_lighting_garage_flood_security_lighting_garage_flood_motion_off_yaml
   - renemarc_automations_motion_front_stop_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: apache_2_0
+  reuse_status: reusable
   obligations:
   - attribution
   - state_changes
@@ -95,7 +103,11 @@ behaviors:
   - light_group
   optional_slots: []
   concept: A room's lights following the room leaving its occupied state.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - light.turn_off
   raw_ids:
   - johnkoht_automation_family_room_lights_family_lights_to_off_yaml
   - johnkoht_automation_garage_lights_garage_lights_to_off_yaml
@@ -139,8 +151,8 @@ behaviors:
   - johnkoht_packages_upstairs_hallway_lights_upstairs_hallway_lights_to_off_yaml
   - renemarc_automations_devices_kitchen_lights_off_yaml
   - renemarc_automations_devices_nightlight_off_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: apache_2_0
+  reuse_status: reusable
   obligations:
   - attribution
   - state_changes
@@ -160,7 +172,11 @@ behaviors:
   - light_group
   optional_slots: []
   concept: A room's lights coming on at a scheduled or mode-driven cue.
-  expression: null
+  expression:
+    trigger:
+    - time
+    action:
+    - light.turn_on
   raw_ids:
   - ccostan_config_automation_kitchen_helper_light_yaml
   - ccostan_config_automation_kitchen_lights_and_accents_yaml
@@ -193,8 +209,8 @@ behaviors:
   - renemarc_automations_devices_kitchen_lights_on_yaml
   - renemarc_automations_devices_kitchen_lights_toggle_yaml
   - renemarc_automations_devices_nightlight_on_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: apache_2_0
+  reuse_status: reusable
   obligations:
   - attribution
   - state_changes
@@ -212,9 +228,13 @@ behaviors:
   required_slots:
   - light_group
   optional_slots:
-  - lux_sensor
+  - ambient_light_sensor
   concept: Dropping a room's lights to a low, warm setting for night use.
-  expression: null
+  expression:
+    trigger:
+    - time
+    action:
+    - light.turn_on
   raw_ids:
   - johnkoht_automation_mudroom_lights_mudroom_lights_to_dim_yaml
   - johnkoht_packages_foyer_lights_foyer_lights_nightlight_yaml
@@ -231,8 +251,8 @@ behaviors:
   - renemarc_automations_devices_kiosk_low_yaml
   - renemarc_automations_modes_low_mode_start_yaml
   - renemarc_automations_modes_low_mode_stop_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: apache_2_0
+  reuse_status: reusable
   obligations:
   - attribution
   - state_changes
@@ -249,10 +269,14 @@ behaviors:
   - renemarc
   required_slots:
   - light_group
-  - lux_sensor
+  - ambient_light_sensor
   optional_slots: []
   concept: Continuously adjusting a light's colour temperature to the time of day.
-  expression: null
+  expression:
+    trigger:
+    - time_pattern
+    action:
+    - light.turn_on
   raw_ids:
   - ccostan_config_automation_kitchen_sink_circadian_yaml
   - renemarc_automations_cct_lifx_yaml
@@ -278,7 +302,11 @@ behaviors:
   - scene_selector
   optional_slots: []
   concept: Choosing a named lighting scene for a room from a selector control.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - light.turn_on
   raw_ids:
   - fwartner_blueprints_automation_fwartner_random_effect_yaml
   - fwartner_custom_configs_blueprints_awtrix_random_effect_yaml
@@ -299,8 +327,8 @@ behaviors:
   - renemarc_scripts_scene_gaming_yaml
   - renemarc_scripts_scene_movie_yaml
   - renemarc_scripts_scene_romantic_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: apache_2_0
+  reuse_status: reusable
   obligations:
   - attribution
   - state_changes
@@ -318,7 +346,11 @@ behaviors:
   - light_group
   optional_slots: []
   concept: A seasonal lighting programme switching itself on and off around a holiday.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - light.turn_on
   raw_ids:
   - johnkoht_packages_holidays_christmas_christmas_disabled_yaml
   - johnkoht_packages_holidays_christmas_christmas_enabled_yaml
@@ -333,8 +365,8 @@ behaviors:
   - johnkoht_packages_holidays_christmas_santa_santa_welcome_yaml
   - johnkoht_packages_holidays_christmas_santa_santa_xmas_eve_yaml
   - johnkoht_packages_holidays_halloween_halloween_lights_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -377,14 +409,18 @@ behaviors:
   - light_group
   optional_slots: []
   concept: Flashing the house's lights to draw attention to an alert.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - light.turn_on
   raw_ids:
   - ccostan_config_automation_flash_all_yaml
   - ccostan_config_automation_home_flash_yaml
   - ccostan_config_script_flash_notify_yaml
   - johnkoht_packages_security_fire_alarm_alarm_flash_lights_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: generic
@@ -400,17 +436,20 @@ behaviors:
   - johnkoht
   required_slots:
   - light_group
-  - house_mode
   optional_slots: []
   concept: Turning the house's lights off when nobody is home.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - light.turn_off
   raw_ids:
   - ccostan_config_script_interior_off_yaml
   - johnkoht_automation_family_room_lights_family_lights_to_away_yaml
   - johnkoht_automation_mudroom_lights_mudroom_lights_to_away_yaml
   - johnkoht_packages_kitchen_lights_kitchen_lights_to_away_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: generic
@@ -427,7 +466,11 @@ behaviors:
   - light_group
   optional_slots: []
   concept: A room's lights returning to their default colour after a special one.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - light.turn_on
   raw_ids:
   - ccostan_config_automation_color_tornado_yaml
   - ccostan_config_automation_living_room_color_defaults_yaml
@@ -450,7 +493,11 @@ behaviors:
   - motion_sensor
   optional_slots: []
   concept: A room marking itself occupied when its sensors see activity.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - johnkoht_automation_family_room_family_room_not_occupied_yaml
   - johnkoht_automation_family_room_family_room_occupied_yaml
@@ -494,8 +541,8 @@ behaviors:
   - johnkoht_packages_sunroom_modes_sunroom_unoccupied_yaml
   - johnkoht_packages_upstairs_hallway_modes_upstairs_hallway_not_occupied_yaml
   - johnkoht_packages_upstairs_hallway_modes_upstairs_hallway_occupied_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -507,12 +554,15 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots:
   - media_player
   concept: Announcing that somebody has arrived home.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - notify.send_message
   raw_ids:
   - johnkoht_automation_family_room_modes_familiy_room_arrival_yaml
   - johnkoht_automation_gianlucas_room_gianluca_heater_on_upon_arrival_yaml
@@ -555,8 +605,8 @@ behaviors:
   - johnkoht_scripts_people_cristina_cristina_home_yaml
   - johnkoht_scripts_people_joe_joe_home_yaml
   - johnkoht_scripts_people_john_john_home_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -568,12 +618,15 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots:
   - media_player
   concept: Announcing that somebody has left the house.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - notify.send_message
   raw_ids:
   - johnkoht_automation_guests_guest_announce_departure_yaml
   - johnkoht_automation_people_cristina_cristina_announce_departure_yaml
@@ -599,8 +652,8 @@ behaviors:
   - johnkoht_packages_school_reminders_nino_departure_reminder_yaml
   - johnkoht_packages_vehicles_audi_automations_audi_is_away_yaml
   - johnkoht_packages_vehicles_bmw_automations_bmw_is_away_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -613,11 +666,14 @@ behaviors:
   source_repos:
   - ccostan
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Tracking whether a named household member is home.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - ccostan_config_packages_mqtt_status_yaml
   - johnkoht_automation_misc_today_is_full_moon_yml
@@ -651,8 +707,8 @@ behaviors:
   - johnkoht_packages_today_is_a_full_moon_yaml
   - johnkoht_scripts_people_cristina_cristina_arrived_work_yaml
   - johnkoht_scripts_people_cristina_cristina_left_work_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: generic
@@ -666,17 +722,20 @@ behaviors:
   source_repos:
   - ccostan
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: A guest flag that softens presence-driven automations while visitors stay.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - ccostan_config_automation_speech_guest_mode_yaml
   - johnkoht_automation_guests_guest_mode_off_yaml
   - johnkoht_automation_guests_guest_mode_on_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: generic
@@ -690,19 +749,22 @@ behaviors:
   source_repos:
   - ccostan
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots:
   - cover
   concept: Reacting to a household vehicle arriving home.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - cover.open_cover
   raw_ids:
   - ccostan_config_packages_tesla_model_y_yaml
   - johnkoht_packages_security_cameras_detections_driveway_front_camera_driveway_front_camera_detections_vehicle_yaml
   - johnkoht_packages_security_cameras_detections_front_door_camera_front_door_camera_detections_vehicle_yaml
   - johnkoht_packages_security_cameras_detections_garage_driveway_camera_garage_driveway_camera_detections_vehicle_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: generic
@@ -715,18 +777,21 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: A single signal that the last person has left the house.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - johnkoht_automation_all_away_media_off_yaml
   - johnkoht_packages_security_alarm_alarm_arm_when_house_empty_yaml
   - johnkoht_packages_vacuums_main_level_main_level_vacuum_clean_when_house_is_empty_yaml
   - johnkoht_packages_vacuums_main_level_main_level_vacuum_daily_clean_when_house_empty_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -738,11 +803,14 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: A room running in its automatic, sensor-driven mode.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - johnkoht_automation_family_room_modes_family_room_mode_auto_yaml
   - johnkoht_automation_house_modes_house_mode_auto_yaml
@@ -764,8 +832,8 @@ behaviors:
   - johnkoht_packages_powder_room_modes_powder_room_mode_auto_yaml
   - johnkoht_packages_sunroom_modes_sunroom_mode_auto_yaml
   - johnkoht_packages_upstairs_hallway_modes_upstairs_hallway_mode_auto_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -779,11 +847,14 @@ behaviors:
   - ccostan
   - johnkoht
   - renemarc
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: A room switched off so its automations stop acting on it.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - input_boolean.turn_off
   raw_ids:
   - ccostan_config_automation_timed_triggers_sunrise_turn_off_yaml
   - ccostan_config_automation_tv_time_on_and_off_yaml
@@ -851,8 +922,8 @@ behaviors:
   - renemarc_automations_areas_lounge_off_yaml
   - renemarc_automations_areas_washroom_off_yaml
   - renemarc_automations_devices_tv_off_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: apache_2_0
+  reuse_status: reusable
   obligations:
   - attribution
   - state_changes
@@ -866,19 +937,22 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: A room declaring itself away while the house is out.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - johnkoht_automation_family_room_modes_family_room_away_yaml
   - johnkoht_automation_house_modes_house_mode_away_yaml
   - johnkoht_automation_mudroom_modes_mudroom_mode_away_yaml
   - johnkoht_packages_foyer_modes_foyer_mode_away_yaml
   - johnkoht_packages_garage_mode_garage_mode_away_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -892,11 +966,14 @@ behaviors:
   - ccostan
   - johnkoht
   - renemarc
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Putting the whole house into its night state.
-  expression: null
+  expression:
+    trigger:
+    - time
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - ccostan_config_automation_good_night_yaml
   - ccostan_config_automation_timed_triggers_wake_up_yaml
@@ -912,8 +989,8 @@ behaviors:
   - renemarc_automations_modes_night_mode_stop_yaml
   - renemarc_automations_wake_up_yaml
   - renemarc_scripts_wake_up_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: apache_2_0
+  reuse_status: reusable
   obligations:
   - attribution
   - state_changes
@@ -928,11 +1005,14 @@ behaviors:
   source_repos:
   - ccostan
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: The house's away state, and the shutdown it triggers.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - ccostan_config_automation_away_yaml
   - johnkoht_automation_people_cristina_cristina_away_yaml
@@ -946,8 +1026,8 @@ behaviors:
   - johnkoht_scripts_people_cristina_cristina_away_yaml
   - johnkoht_scripts_people_joe_joe_away_yaml
   - johnkoht_scripts_people_john_john_away_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: generic
@@ -962,17 +1042,20 @@ behaviors:
   - ccostan
   - johnkoht
   required_slots:
-  - house_mode
   - light_group
   optional_slots: []
   concept: A longer absence where the house simulates being lived in.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - light.turn_on
   raw_ids:
   - ccostan_config_packages_vacation_mode_yaml
   - johnkoht_automation_house_modes_house_mode_vacation_yaml
   - johnkoht_packages_house_vacation_mode_vacation_mode_turn_on_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: generic
@@ -986,16 +1069,20 @@ behaviors:
   source_repos:
   - johnkoht
   required_slots:
-  - house_mode
   - media_player
   optional_slots: []
   concept: A mode for when the house is entertaining, driving media and lighting.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - light.turn_on
+    - media_player.turn_on
   raw_ids:
   - johnkoht_packages_house_entertainment_entertainment_mode_activated_yaml
   - johnkoht_packages_house_entertainment_entertainment_mode_deactivated_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -1007,17 +1094,20 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Turning on a storm setting when severe weather is forecast.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - johnkoht_automation_weather_bad_weather_mode_on_yaml
   - johnkoht_packages_weather_severe_weather_alert_nws_alerts_update_event_id_history_yaml
   - johnkoht_packages_weather_severe_weather_alert_severe_weather_warning_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -1030,11 +1120,14 @@ behaviors:
   source_repos:
   - johnkoht
   - renemarc
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: A quiet setting that suppresses announcements and dims the house.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - johnkoht_packages_house_quiet_mode_quiet_mode_turn_on_yaml
   - johnkoht_packages_people_john_do_not_disturb_automations_john_dnd_on_yaml
@@ -1044,8 +1137,8 @@ behaviors:
   - renemarc_automations_modes_nap_mode_stop_yaml
   - renemarc_automations_modes_quiet_mode_start_yaml
   - renemarc_automations_modes_quiet_mode_stop_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: apache_2_0
+  reuse_status: reusable
   obligations:
   - attribution
   - state_changes
@@ -1060,16 +1153,19 @@ behaviors:
   source_repos:
   - ccostan
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: A house-level flag reporting whether anybody is home.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - ccostan_config_automation_speech_home_stats_yaml
   - johnkoht_dashboards_kohbo_rooms_active_rooms_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: generic
@@ -1089,7 +1185,11 @@ behaviors:
   - temperature_sensor
   optional_slots: []
   concept: Driving a climate zone's setpoint from a schedule or presence.
-  expression: null
+  expression:
+    trigger:
+    - time
+    action:
+    - climate.set_temperature
   raw_ids:
   - ccostan_config_packages_climate_yaml
   - ccostan_config_packages_rheem_econet_yaml
@@ -1111,8 +1211,8 @@ behaviors:
   - johnkoht_packages_climate_second_floor_second_floor_climate_to_eco_yaml
   - johnkoht_packages_climate_second_floor_second_floor_climate_to_resume_yaml
   - johnkoht_packages_climate_second_floor_second_floor_resume_before_bed_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: generic
@@ -1129,14 +1229,18 @@ behaviors:
   - temperature_sensor
   optional_slots: []
   concept: Warning when a room's temperature leaves its comfortable band.
-  expression: null
+  expression:
+    trigger:
+    - numeric_state
+    action:
+    - notify.send_message
   raw_ids:
   - johnkoht_automation_gianlucas_room_gianluca_heater_on_yaml
   - johnkoht_automation_gianlucas_room_gianluca_room_temperature_alert_yaml
   - johnkoht_packages_ninos_room_ninos_bathroom_heater_yaml
   - johnkoht_packages_ninos_room_ninos_bedroom_heater_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -1152,7 +1256,11 @@ behaviors:
   - temperature_sensor
   optional_slots: []
   concept: Running an air purifier according to air quality or occupancy.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - fan.turn_on
   raw_ids:
   - johnkoht_dashboards_kohbo_shared_notifications_air_purifier_gianluca_filter_change_yaml
   - johnkoht_dashboards_kohbo_shared_notifications_air_purifier_jr_suite_filter_change_yaml
@@ -1175,8 +1283,8 @@ behaviors:
   - johnkoht_packages_ninos_room_air_quality_nino_bedroom_turn_off_air_purifier_yaml
   - johnkoht_packages_office_air_quality_office_air_quality_detections_yaml
   - johnkoht_packages_office_air_quality_office_turn_off_air_purifier_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -1190,14 +1298,20 @@ behaviors:
   - johnkoht
   required_slots:
   - climate_zone
-  - contact_sensor
+  - door_contact
   optional_slots: []
   concept: Pausing heating while a window in the room is open.
-  expression: null
+  expression:
+    trigger:
+    - state
+    condition:
+    - state
+    action:
+    - climate.turn_off
   raw_ids:
   - johnkoht_packages_security_windows_left_open_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -1209,17 +1323,20 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots:
   - motion_sensor
   concept: Arming the alarm at night while everybody is in.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - alarm_control_panel.alarm_arm_home
   raw_ids:
   - johnkoht_packages_security_alarm_alarm_arm_at_bedtime_yaml
   - johnkoht_packages_security_alarm_alarm_arm_home_script_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -1231,16 +1348,19 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots:
   - lock
   concept: Disarming the alarm on a legitimate arrival or a morning routine.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - alarm_control_panel.alarm_disarm
   raw_ids:
   - johnkoht_packages_security_alarm_alarm_disarm_in_morning_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -1253,20 +1373,23 @@ behaviors:
   source_repos:
   - ccostan
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots:
   - light_group
   concept: Reacting to the alarm sounding.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - light.turn_on
   raw_ids:
   - ccostan_config_automation_guard_dog_yaml
   - ccostan_config_packages_triggers_self_destruct_yaml
   - ccostan_config_script_dog_bark_yaml
   - johnkoht_packages_security_alarm_alerm_triggered_yaml
   - johnkoht_packages_security_fire_alarm_fire_alarm_triggered_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: generic
@@ -1283,15 +1406,19 @@ behaviors:
   - lock
   optional_slots: []
   concept: Locking a door automatically after it closes or after a period.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - lock.lock
   raw_ids:
   - johnkoht_packages_foyer_front_door_lock_front_door_auto_lock_yaml
   - johnkoht_packages_foyer_front_door_lock_front_door_lock_if_open_too_long_yaml
   - johnkoht_packages_mudroom_garage_entry_door_garage_entry_door_auto_lock_in_evening_yaml
   - johnkoht_packages_mudroom_garage_entry_door_garage_entry_door_auto_lock_yaml
   - johnkoht_packages_mudroom_garage_entry_door_garage_entry_door_lock_if_open_too_long_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -1305,15 +1432,18 @@ behaviors:
   - johnkoht
   required_slots:
   - lock
-  - house_mode
   optional_slots: []
   concept: Unlocking an entry door when a resident arrives.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - lock.unlock
   raw_ids:
   - johnkoht_packages_mudroom_garage_entry_door_garage_entry_door_auto_unlock_yaml
   - johnkoht_packages_security_security_unlock_front_door_by_fingerprint_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -1327,18 +1457,22 @@ behaviors:
   - ccostan
   - johnkoht
   required_slots:
-  - contact_sensor
+  - door_contact
   optional_slots:
   - cover
   concept: Warning that a door or garage door has stayed open.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - cover.close_cover
   raw_ids:
   - ccostan_config_automation_speech_door_opened_yaml
   - johnkoht_packages_garage_doors_garage_doors_close_if_open_too_long_yaml
   - johnkoht_packages_garage_doors_garage_doors_close_when_empty_house_yaml
   - johnkoht_packages_security_doors_left_open_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: generic
@@ -1351,12 +1485,15 @@ behaviors:
   scope: house
   source_repos:
   - renemarc
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots:
   - light_group
   concept: Reacting to a smoke or fire alarm.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - light.turn_on
   raw_ids:
   - renemarc_automations_notifications_smoke_notify_yaml
   license: apache_2_0
@@ -1379,12 +1516,17 @@ behaviors:
   - leak_sensor
   optional_slots: []
   concept: Reacting to a water leak sensor.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - valve.close_valve
+    - notify.send_message
   raw_ids:
   - johnkoht_dashboards_kohbo_shared_notifications_leak_sensor_offline_yaml
   - renemarc_automations_notifications_leak_notify_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: apache_2_0
+  reuse_status: reusable
   obligations:
   - attribution
   - state_changes
@@ -1398,12 +1540,15 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots:
   - media_player
   concept: Notifying when a camera sees a person.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - notify.send_message
   raw_ids:
   - johnkoht_packages_security_cameras_detections_backyard_northwest_camera_backyard_northwest_camera_detections_person_yaml
   - johnkoht_packages_security_cameras_detections_backyard_pool_camera_backyard_pool_camera_detections_person_yaml
@@ -1412,8 +1557,8 @@ behaviors:
   - johnkoht_packages_security_cameras_detections_driveway_front_camera_driveway_front_camera_detections_person_yaml
   - johnkoht_packages_security_cameras_detections_front_door_camera_front_door_camera_detections_person_yaml
   - johnkoht_packages_security_cameras_detections_garage_driveway_camera_garage_driveway_camera_detections_person_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -1425,11 +1570,14 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Notifying when a camera sees an animal.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - notify.send_message
   raw_ids:
   - johnkoht_packages_security_cameras_detections_backyard_northwest_camera_backyard_northwest_camera_detections_animal_yaml
   - johnkoht_packages_security_cameras_detections_backyard_pool_camera_backyard_pool_camera_detections_animal_yaml
@@ -1438,8 +1586,8 @@ behaviors:
   - johnkoht_packages_security_cameras_detections_driveway_front_camera_driveway_front_camera_detections_animal_yaml
   - johnkoht_packages_security_cameras_detections_front_door_camera_front_door_camera_detections_animal_yaml
   - johnkoht_packages_security_cameras_detections_garage_driveway_camera_garage_driveway_camera_detections_animal_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -1451,11 +1599,14 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Turning camera notifications on and off around presence.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - johnkoht_dashboards_templates_decluttering_security_camera_popup_yaml
   - johnkoht_packages_security_cameras_camera_notifications_camera_notification_action_handler_yaml
@@ -1469,8 +1620,8 @@ behaviors:
   - johnkoht_packages_security_cameras_detections_driveway_front_camera_driveway_front_camera_notifications_yaml
   - johnkoht_packages_security_cameras_detections_front_door_camera_front_door_camera_notifications_yaml
   - johnkoht_packages_security_cameras_detections_garage_driveway_camera_garage_driveway_camera_notifications_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -1484,20 +1635,24 @@ behaviors:
   - ccostan
   - johnkoht
   - renemarc
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots:
   - media_player
   concept: Announcing a doorbell press inside the house.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - media_player.media_play
+    - notify.send_message
   raw_ids:
   - ccostan_config_automation_system_door_chime_yaml
   - johnkoht_packages_doorbell_ring_yaml
   - renemarc_automations_notifications_door_notify_reset_yaml
   - renemarc_automations_notifications_door_notify_yaml
   - renemarc_automations_notifications_front_door_notify_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: apache_2_0
+  reuse_status: reusable
   obligations:
   - attribution
   - state_changes
@@ -1513,11 +1668,14 @@ behaviors:
   - ccostan
   - renemarc
   required_slots:
-  - contact_sensor
-  - house_mode
+  - door_contact
   optional_slots: []
   concept: Warning that an entry was opened without a resident arriving.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - notify.send_message
   raw_ids:
   - ccostan_config_automation_system_bad_logins_yaml
   - renemarc_automations_modes_tamper_start_yaml
@@ -1541,18 +1699,21 @@ behaviors:
   - johnkoht
   required_slots:
   - media_player
-  - house_mode
   optional_slots: []
   concept: Switching media players off when the house empties.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - media_player.turn_off
   raw_ids:
   - johnkoht_packages_office_media_office_echo_dnd_on_yaml
   - johnkoht_packages_office_media_office_music_clear_queue_yaml
   - johnkoht_packages_office_media_office_music_on_yaml
   - johnkoht_packages_office_media_office_music_resume_yaml
   - johnkoht_packages_office_media_office_speech_notifications_on_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -1569,12 +1730,16 @@ behaviors:
   - media_player
   optional_slots: []
   concept: Managing media volume, including ducking for announcements.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - media_player.turn_on
   raw_ids:
   - ccostan_config_script_amp_settings_yaml
   - johnkoht_packages_media_alexa_volume_control_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: generic
@@ -1591,7 +1756,11 @@ behaviors:
   - media_player
   optional_slots: []
   concept: Pausing and resuming a media player around an interlude.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - media_player.media_pause
   raw_ids:
   - renemarc_automations_devices_video_player_resume_yaml
   - renemarc_automations_devices_video_player_stop_yaml
@@ -1615,7 +1784,11 @@ behaviors:
   - media_player
   optional_slots: []
   concept: Starting and stopping music in a room from its own selector.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - media_player.media_play
   raw_ids:
   - ccostan_config_packages_roku_yaml
   - ccostan_config_script_roku_remote_finder_reset_yaml
@@ -1623,8 +1796,8 @@ behaviors:
   - johnkoht_packages_kitchen_media_kitchen_speech_notifications_on_yaml
   - johnkoht_packages_main_bedroom_media_main_bedroom_media_player_unjoin_yaml
   - johnkoht_packages_playroom_media_playroom_media_player_unjoin_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: generic
@@ -1637,12 +1810,15 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots:
   - media_player
   concept: Announcing that a washing machine or dryer has finished.
-  expression: null
+  expression:
+    trigger:
+    - numeric_state
+    action:
+    - notify.send_message
   raw_ids:
   - johnkoht_automation_laundry_upstairs_upstairs_dryer_upstairs_dryer_complete_yml
   - johnkoht_automation_laundry_upstairs_upstairs_dryer_upstairs_dryer_to_clean_yml
@@ -1673,8 +1849,8 @@ behaviors:
   - johnkoht_packages_upstairs_laundry_upstairs_laundry_dryer_upstairs_dryer_to_finishing_yaml
   - johnkoht_packages_upstairs_laundry_upstairs_laundry_dryer_upstairs_dryer_to_idle_yaml
   - johnkoht_packages_upstairs_laundry_upstairs_laundry_dryer_upstairs_dryer_to_running_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -1688,18 +1864,21 @@ behaviors:
   - johnkoht
   required_slots:
   - vacuum
-  - house_mode
   optional_slots: []
   concept: Running the robot vacuum over a room or a chosen set of rooms.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - vacuum.start
   raw_ids:
   - johnkoht_dashboards_kohbo_home_vacuum_active_notification_yaml
   - johnkoht_packages_vacuums_main_level_clean_kitchen_and_family_room_temp_yaml
   - johnkoht_packages_vacuums_main_level_manual_cleaning_clean_selected_rooms_yaml
   - johnkoht_packages_vacuums_main_level_manual_cleaning_reset_room_selections_after_complete_yaml
   - johnkoht_packages_vacuums_main_level_vacuums_clean_kitchen_during_nap_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -1714,10 +1893,13 @@ behaviors:
   - johnkoht
   required_slots:
   - vacuum
-  - house_mode
   optional_slots: []
   concept: Running the robot vacuum on a schedule, excluding rooms to avoid.
-  expression: null
+  expression:
+    trigger:
+    - time
+    action:
+    - vacuum.start
   raw_ids:
   - ccostan_config_packages_vacuum_yaml
   - johnkoht_dashboards_kohbo_shared_notifications_main_level_vacuum_error_yaml
@@ -1732,8 +1914,8 @@ behaviors:
   - johnkoht_packages_vacuums_main_level_main_level_vacuum_reset_selection_when_complete_yaml
   - johnkoht_packages_vacuums_main_level_main_level_vacuum_skip_tonight_close_out_yaml
   - johnkoht_packages_vacuums_main_level_vacuums_clean_office_when_dog_is_at_daycare_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: generic
@@ -1747,20 +1929,23 @@ behaviors:
   source_repos:
   - ccostan
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots:
   - media_player
   concept: One engine that decides which devices receive a notification.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - notify.send_message
   raw_ids:
   - ccostan_config_script_notify_engine_yaml
   - ccostan_config_script_speech_engine_yaml
   - ccostan_config_script_speech_processing_yaml
   - johnkoht_packages_announcements_announcement_engine_yaml
   - johnkoht_packages_general_notifications_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: generic
@@ -1776,10 +1961,13 @@ behaviors:
   - johnkoht
   required_slots:
   - media_player
-  - house_mode
   optional_slots: []
   concept: Speaking a message through the house's speakers.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - media_player.media_play
   raw_ids:
   - ccostan_config_automation_speech_announcements_yaml
   - ccostan_config_automation_speech_garbage_day_garage_yaml
@@ -1796,8 +1984,8 @@ behaviors:
   - johnkoht_packages_people_announcements_person_announcement_history_yaml
   - johnkoht_packages_people_announcements_person_announcement_script_yaml
   - johnkoht_packages_places_grocery_store_announcement_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: generic
@@ -1810,15 +1998,18 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Sending a notification whose action buttons run further steps.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - notify.send_message
   raw_ids:
   - johnkoht_packages_alexa_actionable_notifications_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -1830,18 +2021,21 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Reminding the household which bins go out tonight.
-  expression: null
+  expression:
+    trigger:
+    - time
+    action:
+    - notify.send_message
   raw_ids:
   - johnkoht_dashboards_kohbo_shared_notifications_garbage_day_yaml
   - johnkoht_packages_reminders_garbage_day_automations_garbage_day_is_today_reminder_yaml
   - johnkoht_packages_reminders_garbage_day_automations_garbage_day_is_tomorrow_reminder_yaml
   - johnkoht_packages_reminders_garbage_day_automations_garbage_day_on_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -1854,11 +2048,14 @@ behaviors:
   source_repos:
   - ccostan
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Raising a reminder for an event that repeats on a schedule.
-  expression: null
+  expression:
+    trigger:
+    - time
+    action:
+    - notify.send_message
   raw_ids:
   - ccostan_config_automation_medicine_logger_yaml
   - ccostan_config_packages_medicine_yaml
@@ -1887,8 +2084,8 @@ behaviors:
   - johnkoht_packages_school_reminders_school_closed_tomorrow_reminder_yaml
   - johnkoht_packages_school_reminders_school_late_start_tomorrow_reminder_yaml
   - johnkoht_packages_school_reminders_school_morning_reminder_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: generic
@@ -1904,11 +2101,14 @@ behaviors:
   - fwartner
   - johnkoht
   - renemarc
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Raising an alert when a device or service reports a problem.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - notify.send_message
   raw_ids:
   - ccostan_config_script_notify_live_activity_yaml
   - fwartner_blueprints_automation_fwartner_iphone_battery_yaml
@@ -1932,8 +2132,8 @@ behaviors:
   - renemarc_automations_notifications_radon_notify_reset_yaml
   - renemarc_automations_notifications_radon_notify_yaml
   - renemarc_automations_notifications_update_notify_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: apache_2_0
+  reuse_status: reusable
   obligations:
   - attribution
   - state_changes
@@ -1947,12 +2147,15 @@ behaviors:
   scope: house
   source_repos:
   - renemarc
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots:
   - media_player
   concept: Summarising the day for the household in the morning.
-  expression: null
+  expression:
+    trigger:
+    - time
+    action:
+    - notify.send_message
   raw_ids:
   - renemarc_automations_notifications_daily_greeting_yaml
   license: apache_2_0
@@ -1972,17 +2175,20 @@ behaviors:
   - ccostan
   - johnkoht
   - renemarc
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Running a routine when Home Assistant starts or stops.
-  expression: null
+  expression:
+    trigger:
+    - homeassistant
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - ccostan_config_automation_timed_triggers_startup_notification_yaml
   - johnkoht_packages_pool_occupancy_pool_motion_restart_timer_yaml
   - renemarc_automations_homekit_start_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: apache_2_0
+  reuse_status: reusable
   obligations:
   - attribution
   - state_changes
@@ -1996,11 +2202,14 @@ behaviors:
   scope: house
   source_repos:
   - ccostan
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Watching for a device that has stopped reporting and restarting it.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - light.turn_on
   raw_ids:
   - ccostan_config_automation_system_watchdog_light_yaml
   - ccostan_config_automation_timed_triggers_night_watchdog_yaml
@@ -2022,11 +2231,14 @@ behaviors:
   scope: house
   source_repos:
   - ccostan
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Tracking whether the network and dependent services are reachable.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - ccostan_config_packages_pihole_ha_yaml
   - ccostan_config_packages_proxmox_yaml
@@ -2048,11 +2260,14 @@ behaviors:
   - ccostan
   - fwartner
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Reading energy use and the tariff, and acting on a price signal.
-  expression: null
+  expression:
+    trigger:
+    - numeric_state
+    action:
+    - switch.turn_off
   raw_ids:
   - ccostan_config_packages_phynplus_yaml
   - ccostan_config_packages_powerwall_yaml
@@ -2061,8 +2276,8 @@ behaviors:
   - johnkoht_packages_energy_comed_comed_day_ahead_prices_yaml
   - johnkoht_packages_energy_sensors_energy_history_yaml
   - johnkoht_packages_energy_sensors_energy_prices_are_negative_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: generic
@@ -2076,11 +2291,14 @@ behaviors:
   source_repos:
   - ccostan
   - renemarc
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Reporting that a software update is available.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - notify.send_message
   raw_ids:
   - ccostan_config_packages_tugtainer_updates_yaml
   - renemarc_automations_update_verify_yaml
@@ -2101,11 +2319,14 @@ behaviors:
   source_repos:
   - ccostan
   - renemarc
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Running a fixed routine at a time of day.
-  expression: null
+  expression:
+    trigger:
+    - time
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - ccostan_config_automation_timed_triggers_0830_yaml
   - ccostan_config_automation_timed_triggers_2200_yaml
@@ -2127,11 +2348,14 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Reacting to entries on a shared calendar.
-  expression: null
+  expression:
+    trigger:
+    - calendar
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - johnkoht_dashboards_kohbo_school_components_school_settings_popup_yaml
   - johnkoht_dashboards_kohbo_school_school_yaml
@@ -2143,8 +2367,8 @@ behaviors:
   - johnkoht_packages_school_primary_school_calendar_sensors_yaml
   - johnkoht_packages_school_primary_school_primary_school_lunch_menu_yaml
   - johnkoht_packages_school_school_overrides_reset_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -2156,15 +2380,18 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Turning a weather forecast into local sensors.
-  expression: null
+  expression:
+    trigger:
+    - time_pattern
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - johnkoht_packages_weather_outside_weather_pirateweather_hourly_forecast_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -2176,11 +2403,14 @@ behaviors:
   scope: house
   source_repos:
   - ccostan
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Recording events into a log for later inspection.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - notify.send_message
   raw_ids:
   - ccostan_config_automation_system_trigger_dump_yaml
   - ccostan_config_packages_hass_agent_homepc_yaml
@@ -2201,11 +2431,14 @@ behaviors:
   scope: house
   source_repos:
   - ccostan
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Running scheduled network diagnostics.
-  expression: null
+  expression:
+    trigger:
+    - time
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - ccostan_config_packages_wireless_yaml
   license: mit
@@ -2224,19 +2457,22 @@ behaviors:
   - ccostan
   - johnkoht
   - renemarc
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Reacting to an NFC tag or an inbound webhook.
-  expression: null
+  expression:
+    trigger:
+    - tag
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - ccostan_config_automation_dash_buttons_yaml
   - ccostan_config_packages_nfc_tags_yaml
   - johnkoht_button_card_templates_yaml
   - johnkoht_packages_security_alarm_panic_button_yaml
   - renemarc_automations_webhook_ifttt_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: apache_2_0
+  reuse_status: reusable
   obligations:
   - attribution
   - state_changes
@@ -2254,7 +2490,11 @@ behaviors:
   - light_group
   optional_slots: []
   concept: A light programme following sunrise and sunset.
-  expression: null
+  expression:
+    trigger:
+    - sun
+    action:
+    - light.turn_on
   raw_ids:
   - ccostan_config_automation_timed_triggers_sunset_turn_on_yaml
   license: mit
@@ -2273,10 +2513,14 @@ behaviors:
   - ccostan
   required_slots:
   - light_group
-  - lux_sensor
+  - ambient_light_sensor
   optional_slots: []
   concept: Raising a room's lighting on a dark or rainy day.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - light.turn_on
   raw_ids:
   - ccostan_config_automation_dark_rainy_day_yaml
   - ccostan_config_automation_late_night_brightness_guard_yaml
@@ -2301,13 +2545,17 @@ behaviors:
   - light_group
   optional_slots: []
   concept: Setting a light's brightness from a control or a schedule.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - light.turn_on
   raw_ids:
   - johnkoht_packages_gianluca_room_lights_gianluca_lamp_remote_brightness_cycle_yaml
   - renemarc_automations_devices_aurora_brightness_yaml
   - renemarc_automations_devices_lightpack_auto_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: apache_2_0
+  reuse_status: reusable
   obligations:
   - attribution
   - state_changes
@@ -2321,11 +2569,14 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: A room entering its bedtime or wake setting.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - light.turn_off
   raw_ids:
   - johnkoht_automation_gianlucas_room_gianluca_nap_time_ended_yaml
   - johnkoht_automation_gianlucas_room_gianluca_nap_time_yaml
@@ -2339,8 +2590,8 @@ behaviors:
   - johnkoht_packages_main_bedroom_mode_main_bedroom_mode_wake_yaml
   - johnkoht_packages_ninos_room_modes_ninos_bedroom_mode_bedtime_yaml
   - johnkoht_packages_upstairs_hallway_modes_upstairs_hallway_mode_bedtime_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -2352,11 +2603,14 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Deriving whether a named household member is in bed.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - johnkoht_automation_people_cristina_cristina_in_bed_yaml
   - johnkoht_automation_people_john_john_in_bed_yml
@@ -2377,8 +2631,8 @@ behaviors:
   - johnkoht_packages_people_nino_sleep_nino_bed_just_got_up_yaml
   - johnkoht_packages_people_nino_sleep_nino_bed_just_laid_down_yaml
   - johnkoht_packages_people_nino_sleep_nino_bed_sleep_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: discard
   retention: audit
@@ -2390,11 +2644,14 @@ behaviors:
   scope: house
   source_repos:
   - ccostan
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Defining the alarm panel and its arming helpers.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - alarm_control_panel.alarm_arm_home
   raw_ids:
   - ccostan_config_packages_alarm_yaml
   license: mit
@@ -2411,11 +2668,14 @@ behaviors:
   scope: house
   source_repos:
   - renemarc
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Capturing a camera snapshot on an event.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - notify.send_message
   raw_ids:
   - renemarc_scripts_blink_snapshot_yaml
   license: apache_2_0
@@ -2433,11 +2693,14 @@ behaviors:
   scope: house
   source_repos:
   - renemarc
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Switching the dashboard theme and wallpaper.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - renemarc_automations_devices_kiosk_auto_yaml
   - renemarc_automations_theme_auto_yaml
@@ -2458,17 +2721,20 @@ behaviors:
   source_repos:
   - ccostan
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Templating a dashboard section from house state.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - ccostan_config_dashboards_overview_sections_10_family_yaml
   - ccostan_config_dashboards_overview_sections_20_comfort_yaml
   - johnkoht_dashboards_templates_decluttering_room_room_overview_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: module_candidate
@@ -2481,19 +2747,22 @@ behaviors:
   scope: house
   source_repos:
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: Switching a smart outlet on or off around a routine.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - switch.turn_on
   raw_ids:
   - johnkoht_packages_main_bathroom_outlets_main_bathroom_turn_off_outlets_yaml
   - johnkoht_packages_main_bathroom_outlets_main_bathroom_turn_on_outlets_yaml
   - johnkoht_packages_office_office_treadmill_yaml
   - johnkoht_packages_people_john_focus_mode_set_focus_mode_yaml
   - johnkoht_packages_phones_plugged_in_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: public_domain
+  reuse_status: reusable
   obligations: []
   classification: module_candidate
   retention: null
@@ -2505,11 +2774,14 @@ behaviors:
   scope: house
   source_repos:
   - ccostan
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: A package wrapping one device integration's automations.
-  expression: null
+  expression:
+    trigger:
+    - state
+    action:
+    - lock.lock
   raw_ids:
   - ccostan_config_packages_august_yaml
   - ccostan_config_packages_bearclaw_yaml
@@ -2542,11 +2814,14 @@ behaviors:
   - ccostan
   - fwartner
   - johnkoht
-  required_slots:
-  - house_mode
+  required_slots: []
   optional_slots: []
   concept: A housekeeping automation the others in the corpus do not cover.
-  expression: null
+  expression:
+    trigger:
+    - time
+    action:
+    - input_boolean.turn_on
   raw_ids:
   - ccostan_config_automation_driveway_parked_car_yaml
   - ccostan_config_automation_mealtime_yaml
@@ -2578,8 +2853,8 @@ behaviors:
   - johnkoht_packages_security_cameras_detection_notifications_security_detection_display_notification_on_screens_yaml
   - johnkoht_packages_system_ups_ups_offline_yaml
   - johnkoht_scripts_yaml
-  license: no_licence
-  reuse_status: ideas_only
+  license: mit
+  reuse_status: reusable
   obligations:
   - attribution
   classification: module_candidate

@@ -4,7 +4,7 @@ Task 7.0, derived from `catalog/behaviors.yaml`. The unit's primary row is
 `lighting.motion_light_on` (`scope: room`, `required_slots: [motion_sensor,
 light_group]`), and it cites three more rows rather than paraphrasing them: the
 off half is `lighting.motion_light_off`, the optional lux slot is granted by
-`lighting.room_light_dim` (the only cited row that declares `lux_sensor` as an
+`lighting.room_light_dim` (the only cited row that declares `ambient_light_sensor` as an
 optional slot), and the sun branch is `lighting.solar_sun_light`. A behaviour
 that read its slots or its scope anywhere else would be a second definition of a
 concept the corpus exists to define once.
@@ -103,7 +103,7 @@ class MotionLightingBehaviour:
     corpus_rows = CORPUS_ROWS
     scope = BehaviourScope.ROOM
     required_slots = ("motion_sensor", "light_group")
-    optional_slots = ("lux_sensor",)
+    optional_slots = ("ambient_light_sensor",)
     #: Ranked below the shutdown: when both want a light, leaving the house
     #: unlit outranks lighting it.
     priority = 0
@@ -187,9 +187,9 @@ def _is_dark(ctx: BehaviourContext) -> bool:
     fallback `engine-core`'s optional-slot mechanism exists to make expressible as
     data rather than as a second behaviour.
     """
-    lux = ctx.binding("lux_sensor")
+    lux = ctx.binding("ambient_light_sensor")
     if not lux.is_empty:
-        reading = ctx.read("lux_sensor", Reduction.ANY)
+        reading = ctx.read("ambient_light_sensor", Reduction.ANY)
         value = _lux(ctx.views(reading))
         if value is not None:
             ctx.consult(DarkSourceReading(source=DarkSource.LUX, value=value))

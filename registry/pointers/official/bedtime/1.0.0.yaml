@@ -1,0 +1,7 @@
+name: bedtime
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/official/bedtime.yaml
+sha256: sha256:cfa1cd7f97fe1125ac44c24b29f61632af398d2ca842c97a9db8cdb84dc401db
+tier: official

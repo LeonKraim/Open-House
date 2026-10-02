@@ -1875,16 +1875,15 @@
           "description": "The slots this artifact binds. The closed set is the slot vocabulary itself, which is why the reference is to `catalog/slots.yaml` rather than to the raw entity ids: the slot a hardcoded reference maps to is the product's own vocabulary, derived in §5.",
           "items": {
             "enum": [
+              "ambient_light_sensor",
               "climate_zone",
-              "contact_sensor",
               "cover",
+              "door_contact",
               "fan",
-              "house_mode",
               "humidity_sensor",
               "leak_sensor",
               "light_group",
               "lock",
-              "lux_sensor",
               "media_player",
               "motion_sensor",
               "scene_selector",

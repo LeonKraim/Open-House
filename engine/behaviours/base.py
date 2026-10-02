@@ -70,6 +70,24 @@ def priority_key(behaviour_id: str) -> str:
     return f"behaviour.{behaviour_id}.priority"
 
 
+def scope_key(behaviour_id: str) -> str:
+    """The key a behaviour's *chosen* scope resolves under.
+
+    A unit's declared scope is a fact about the pack -- what the family it was
+    derived from is about -- and a person's answer to "should this reach the
+    room or the house" is a setting, so it resolves through the same resolver as
+    the enable flag and the priority. The declared scope is the value when no
+    layer sets the key, which is what makes the setting a preference rather than
+    a required choice: a house that never opens the control gets the pack's
+    intent.
+
+    Resolved at house scope and never at a room's, because the question is
+    "which rooms does this behaviour run for" and a question asked once per room
+    could answer differently per room and then have no single answer.
+    """
+    return f"behaviour.{behaviour_id}.scope"
+
+
 def module_enable_key(module: str) -> str:
     """The key a whole behaviour family's enable flag resolves under.
 
@@ -143,8 +161,55 @@ class BehaviourContext(Protocol):
         """Whether the house is in `name`, recorded as an input. Unknown fails."""
         ...
 
+    def enter_mode(self, name: str) -> None:
+        """Ask the house to enter `name`, recorded as an input of this evaluation.
+
+        The one thing a behaviour may ask of the house that is not a device
+        write, and it is an *ask* rather than a write: the request is recorded
+        here and the engine applies the modes its evaluations asked for after it
+        has arbitrated their commands, so a unit cannot change the mode the tick
+        is being evaluated against while the tick is still deciding.
+
+        Whether the house *declares* the mode is decided here, at runtime, and
+        the answer is recorded: a manifest does not know which house it will land
+        in, so `pack-manifest/1.3.0` checks the name's shape and this is where it
+        meets a house. An undeclared name is refused rather than raised, because
+        the two reasons one arrives -- a pack installed into a house whose modes
+        were changed under it, and a hand-edited manifest -- are both things a
+        tick must survive.
+        """
+        ...
+
     def quiet_for(self, slot: str, timeout: timedelta) -> bool:
         """Whether `slot` has been clear of activity for at least `timeout`."""
+        ...
+
+    def held_for(self, slot: str, read: SlotRead) -> timedelta | None:
+        """How long `slot` has held the reading `read` carries, observed now.
+
+        The second duration the engine keeps, and the one a declared behaviour's
+        `for` clause reads: "the fridge contact has read `on` for this long". It
+        is answered by *observing* rather than by reading, because the answer is
+        a function of this tick's reading and the last one's -- a caller that only
+        asked would never advance the clock the answer is measured against.
+
+        `None` for a slot nothing has observed a reading of, which is not the
+        same as zero. Zero is a real answer and the important one: the reading
+        changed on this very tick, so a `for` clause cannot fire the instant a
+        door opens.
+        """
+        ...
+
+    def option(self, pack: str, key: str, default: object) -> ResolvedSetting:
+        """Resolve a pack's declared option, recorded as an input.
+
+        The key is `module.<pack>.<key>` (`engine/behaviours/declared.py`'s
+        `option_key`), which is the option's own layer rather than a behaviour's:
+        an option belongs to the pack, so two behaviours that read it read one
+        value. `default` is the pack's own declaration and stands at the bottom
+        of the stack, so a house that has set nothing resolves the value the
+        author wrote rather than failing to resolve at all.
+        """
         ...
 
     def house_is_empty(self) -> bool:

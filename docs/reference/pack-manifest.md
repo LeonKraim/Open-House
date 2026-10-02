@@ -11,7 +11,7 @@ test here rather than misleading a reader.
 
 | Authority | Read from | Answers |
 | --- | --- | --- |
-| the schema | `schemas/pack-manifest/1.2.0.json` | what a document of this kind may be |
+| the schema | `schemas/pack-manifest/1.3.0.json` | what a document of this kind may be |
 | the licence vocabulary | `schemas/catalog/licenses.json` | what a licence code means, and where it sits in the published order |
 | the corpus | `catalog/behaviors.yaml` | what a row grants to a pack derived from it |
 | the marker | `packs/official/HANDWRITTEN` | which files a person wrote rather than a derivation produced |
@@ -48,8 +48,11 @@ fails the schema never reaches the gate.
 | `i18n` | every kind | the schema, then the coverage check against the names the document declares |
 | `provides` | every kind | the schema; the *paths* are `engine/sandbox.py`'s, which resolves each one and checks the file is of the class declared |
 | `requires_slots`, `behaviours` | `module`, `behavior` | the schema, and `engine/sandbox.py` for what a behaviour reaches and calls |
+| `optional_slots` | optional | the schema; the sandbox refuses a name no vocabulary and no `slots` clause declares |
+| `slots` | optional | the schema; `engine/declared_slots.py` reads the clause and the install merges it into the house's vocabulary |
 | `dependencies`, `conflicts` | optional | the schema's grammar; the *resolution* against a house is the install's |
 | `derives_from` | a derived pack only | the corpus and the marker |
+| `options` | optional | the schema, then `engine/manifest.py`'s two cross-field checks |
 
 `engine_api` and each `reference`'s `range` take the *same* range grammar, which
 the schema publishes as a `pattern` on both, so a pack author has one range syntax
@@ -59,7 +62,37 @@ three-component versions: `>=1.0.0 <2.0.0` admits `1.0.0`, and `^1.2` admits
 `schemas/engine-api/1.0.0.json` and never read from `pyproject.toml`, whose
 `version` is a packaging value that moves for packaging reasons.
 
-## The twelve reasons a manifest is refused
+### What a behaviour may say
+
+`1.2.0` fixed a behaviour's clauses to `name, trigger, condition, action,
+priority, services, slots`, and every one of those named a *kind* with no value
+beside it: a manifest could say `condition: state` and could not say which state.
+`1.3.0` keeps those clauses and adds the values that make them say something.
+
+| Clause | What it is |
+| --- | --- |
+| `slots` | the roles the behaviour reaches. The **last** is the one `services` act through and the earlier ones are what it observes — a reading of the shipped example, not a clause anywhere |
+| `services` | the calls it makes, each resolved to the state it writes through `catalog/services.yaml` |
+| `scope` | `room` or `house`. `room` is what silence means, which is what every `1.2.0` pack meant because that version could not say otherwise |
+| `match` | the readings the observed slot must currently hold. Absent is *not* `match: []`: a clause nobody wrote gates on nothing |
+| `mode` | the house mode the behaviour enters when it acts. Additive, not alternative — a behaviour may turn lights off *and* put the house to sleep |
+| `for` | the name of a `duration` option the pack declares: the matched reading must have held for that many seconds |
+| `priority` | the arbitration number, from `catalog/pack-policy.yaml`'s default when unstated |
+
+`options` is a clause of the *pack* rather than of a behaviour — one typed entry
+per tunable, with a title, a description, bounds and members — so two behaviours
+of one pack that read `grace` read the same number. `for` names one of those by
+key, and a `for` naming an option the pack does not declare as a `duration` is
+the `unknown_option` refusal below.
+
+One setting a pack gets without declaring it: each role a behaviour acts through
+becomes a per-room switch under `module.<pack>.reach.<slot>`. It is derived from
+`slots` rather than written as an option, because a declared one could disagree
+with what the pack actually acts on — a `reach.door_contact` for a pack that acts
+on no doors is a checkbox that silently does nothing. Absent means *reached*, so
+every pack written before this existed behaves exactly as it did.
+
+## The fourteen reasons a manifest is refused
 
 A failure carries a reason, the failing instance path (`behaviours/0/action`,
 `<document>` for the whole document) and a message naming the constraint that
@@ -82,14 +115,23 @@ and a reason is what this module actually decided.
 | `handwritten_derivation` | a marker-listed pack carries `derives_from` |
 | `missing_default` | a declared name has no string in `i18n.default` |
 | `override_without_default` | a locale overrides a name `i18n.default` does not declare |
+| `option_mismatch` | an option's `default`, `enum` or bounds disagree with its own `type` |
+| `unknown_option` | a behaviour's `for` names a `duration` option the pack does not declare |
 
-Three of the twelve are schema failures *reclassified*, and the reason is the
+Three of the fourteen are schema failures *reclassified*, and the reason is the
 remedy. A term the vocabulary does not publish, a licence code outside the enum
 and a clause the current version retired are three different things for an author
 to do, so filing all three under `schema` would make the three distinctions the
 class list exists for invisible. Nothing else is reclassified: a structural
 failure stays `schema`, and its message names the JSON-Schema keyword that
 refused it.
+
+The last two are the one pair no schema can report, and that is the whole reason
+they are reasons here rather than keywords there. Every check behind them compares
+*two properties of one option* — a `default` against its `type`, an `enum` against
+its `type`, a `minimum` against a `maximum` — and JSON Schema is a static document
+that constrains one property at a time. `1.3.0` says so where it declares
+`options`, and the Python here is where that promise is kept.
 
 There is no `malformed_range` reason, and the absence is deliberate. The schema's
 `pattern` refuses a malformed range before the range check is reached, and
@@ -128,9 +170,11 @@ person wrote reproduces no row's expression and a clause on one is a claim about
 provenance that is false.
 
 The corpus bounds what can ground a derived pack, and the bound is measured rather
-than intended: 19 rows are `reusable` (10 `mit`, 9 `apache_2_0`) and 64 are
-`ideas_only` under `no_licence`. An `ideas_only` row may inform a hand-written
-pack; it may not be a source of reproduced expression.
+than intended: all 83 rows are `reusable` (30 `mit`, 29 `public_domain`, 24
+`apache_2_0`) and none is `ideas_only` under `no_licence`. The distinction still
+bears: an `ideas_only` row may inform a hand-written pack, and may not be a source
+of reproduced expression, so a corpus that grew one would narrow this mechanism's
+reach without changing a line of it.
 
 Licence compatibility is judged in the order `schemas/catalog/licenses.json`
 publishes — `public_domain`, `mit`, `apache_2_0`, `cc_by_nc_sa`, `no_licence`,
@@ -151,7 +195,7 @@ kind: module
 engine_api: ">=1.0.0 <2.0.0"
 license: mit
 requires_slots: [light_group, motion_sensor]
-optional_slots: [lux_sensor]
+optional_slots: [ambient_light_sensor]
 provides:
   - path: packs/example/evening_pack/evening_scene.yaml
     class: automation
@@ -177,6 +221,80 @@ The `provides` path names the artifact the pack confers and is not resolved here
 — `engine/sandbox.py` resolves it, requires it to stay inside the pack's own
 directory, and checks the file is of the class the entry declares. It is
 illustrative in this example because the pack is not shipped.
+
+## A device the catalog has no word for: the `slots` clause
+
+`catalog/slots.yaml` is the house's vocabulary, and it is deliberately closed: a
+vocabulary that grew a word every time a pack wanted one would stop being a
+vocabulary. But a pack's point is sometimes a device the catalog has no word for.
+"Warn me when the fridge has been open too long" needs a contact on the fridge
+door, and no room type provides one, because a fridge is not a room.
+
+So a manifest may declare its own devices, and three rules decide what a
+declaration *means*:
+
+- **A declared name the vocabulary already carries reuses that slot.** A pack that
+  declares `door_contact` asks for the room's own door contact -- the same device
+  every other pack naming `door_contact` gets. This is the default because it is
+  what a person means by "the contact sensor": one room, one front door, and a
+  second copy of it would be a device nobody has.
+- **A declared name the vocabulary does not carry joins the house's vocabulary**
+  for the houses that install the pack. `fridge_contact` becomes bindable in the
+  room the pack lands in, which is what makes the pack's own requirement fillable.
+- **`separate: true` gives the pack a device of its own.** It binds under a
+  pack-qualified key -- `fridge_guard__fridge_contact` -- so two packs may each
+  hold their own motion sensor while a third shares the room's. A pack asks for
+  this when sharing would be wrong: a pack watching one specific appliance does
+  not want the room's front door.
+
+```yaml
+name: fridge_guard
+version: "1.0.0"
+description: >-
+  Watches the fridge door and raises the alarm when it has been left open.
+kind: module
+engine_api: ">=1.0.0 <2.0.0"
+license: mit
+requires_slots: [light_group]
+slots:
+  - name: fridge_contact
+    accepts_domains: [binary_sensor]
+    required: true
+provides:
+  - path: packs/official/fridge_guard/fridge_open.yaml
+    class: automation
+behaviours:
+  - name: fridge_left_open
+    trigger: state
+    condition: state
+    action: service
+    priority: 30
+    services: [light.turn_on]
+    slots: [fridge_contact, light_group]
+i18n:
+  default:
+    pack: Fridge guard
+    description: Raises the alarm when the fridge has been left open.
+    fridge_left_open: The fridge has been open too long
+```
+
+**The name is the whole of it.** The clause carries no prose of its own: a
+declared name is what the device *is*, and the two rules above already make the
+name do the work twice over -- it is the identity two packs share, and it is the
+word the house's vocabulary gains. So a name that could mean two devices -- a
+`lux` reading that might be daylight or a lamp's brightness, a contact that might
+be the room's own door or the fridge's -- is a defect of the declaration, and the
+remedy is the name rather than a sentence beside it. `fridge_contact` is the one
+thing the device is, and it is read on the room's settings page as its own label.
+
+`required: true` puts the device in the pack's required set beside the names
+`requires_slots` carries, so the room's settings page shows one list and the
+install reports one set of missing slots. Left off -- the default -- the device is
+optional, which is what lets a pack offer a fridge contact and still run without
+one.
+
+This is the clause `packs/official/fridge-guard.yaml` ships to exercise, and it
+is the only shipped pack that declares a device of its own.
 
 ## A worked example: a derived pack
 

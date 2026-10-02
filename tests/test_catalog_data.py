@@ -46,7 +46,9 @@ CATALOG_CHECK = "catalog-schema"
 #: the schema pairing has to hold for, and that set does not care which task
 #: wrote one. `pack-policy` is Phase 2's and is no stub either: it is complete on
 #: the day it lands, like a golden file, and it is here for the same reason -- the
-#: pairing has to hold for it.
+#: pairing has to hold for it. `services` is Phase 2's too, for the same reason:
+#: the service-to-state table is complete on its first day, because a row is a
+#: judgement about a service rather than a measurement of a corpus.
 STUBS = (
     "behaviors",
     "edge_cases",
@@ -67,6 +69,7 @@ STUBS = (
     "repos",
     "room_types",
     "rooms",
+    "services",
     "slots",
 )
 

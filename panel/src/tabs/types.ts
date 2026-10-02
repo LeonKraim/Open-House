@@ -1,5 +1,9 @@
 /**
- * The tab registry: the eight screens, in the order spec.txt names them.
+ * The tab registry: the nine screens, in the order spec.txt names them.
+ *
+ * House sits beside Rooms because it is the same question one level up -- what
+ * is in this room, what is in the house -- and a person who has just bound a
+ * light in a room looks next at what that made available to the whole house.
  *
  * The order is not cosmetic. Overview first is the "is anything wrong" screen,
  * and Import/Export last is the "I am done" screen; the order in the spec is
@@ -34,6 +38,13 @@ export const TABS: readonly TabDefinition[] = [
     iconName: "mdi:floor-plan",
     adminOnly: false,
     tag: "open-house-tab-rooms",
+  },
+  {
+    id: "house",
+    label: "House",
+    iconName: "mdi:home-outline",
+    adminOnly: false,
+    tag: "open-house-tab-house",
   },
   {
     id: "modules",

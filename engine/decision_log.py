@@ -122,7 +122,7 @@ class DarkSource(StrEnum):
     """Which dark test decided a lighting evaluation.
 
     The closed set is two because `first-behaviours` names exactly two: the
-    room's bound `lux_sensor`, or the computed sun position when no lux sensor is
+    room's bound `ambient_light_sensor`, or the computed sun position when no lux sensor is
     bound. It is an enum rather than a bare string so a scenario asserting
     `dark_source: lux` is asserting against a value the engine cannot misspell,
     and so a third branch added later is a change to this set rather than a
@@ -166,6 +166,25 @@ class ModeReading:
 
     mode: str
     active: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ModeRequest:
+    """A mode a behaviour asked the house to enter, and whether the house took it.
+
+    The request half of what `ModeReading` is the gate half of. A behaviour that
+    *writes* a mode -- the bedtime pack's second act is the house entering Sleep,
+    which `pack-manifest/1.3.0`'s `mode` clause expresses -- reaches the house
+    through the engine rather than through an entity, so no `SlotRead` and no
+    `ProposedCommand` can carry it and the record would otherwise say only that
+    the lights went off. `taken` is `False` for a mode the house does not declare:
+    a manifest does not know which house it lands in, so the check happens when
+    the request meets one, and recording the refusal is what makes a pack that
+    enters nothing explainable rather than merely silent.
+    """
+
+    mode: str
+    taken: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,17 +258,19 @@ class Repair:
 #: What an evaluation consulted. Each member exists because a requirement names
 #: a fact the record has to carry: a read carries its reduction and its entities,
 #: a setting carries its deciding layer, a dark-source reading carries which
-#: branch decided and the value it read, a mode reading carries the gate, a
-#: presence reading carries the emptying and the rooms behind it, an override
-#: note carries the suppression or the release, a hazard reading carries the
-#: alarm a safety evaluation answered, and a repair carries the sensor that could
-#: not be read. A record that names them answers "why this value", "why now" and
-#: "why not" without the stack that produced any of the three.
+#: branch decided and the value it read, a mode reading carries the gate, a mode
+#: request carries the mode a behaviour asked the house to enter, a presence
+#: reading carries the emptying and the rooms behind it, an override note carries
+#: the suppression or the release, a hazard reading carries the alarm a safety
+#: evaluation answered, and a repair carries the sensor that could not be read. A
+#: record that names them answers "why this value", "why now" and "why not"
+#: without the stack that produced any of the three.
 Input = (
     SlotRead
     | ResolvedSetting
     | DarkSourceReading
     | ModeReading
+    | ModeRequest
     | HousePresence
     | OverrideNote
     | HazardReading
@@ -408,6 +429,8 @@ def _input_document(entry: Input) -> dict[str, object]:
         }
     if isinstance(entry, ModeReading):
         return {"kind": "mode", "mode": entry.mode, "active": entry.active}
+    if isinstance(entry, ModeRequest):
+        return {"kind": "mode_request", "mode": entry.mode, "taken": entry.taken}
     if isinstance(entry, HousePresence):
         return {
             "kind": "presence",

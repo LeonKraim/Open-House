@@ -31,10 +31,13 @@ but no binding to a button.
 
 **The interpreter reads no trigger.** `DeclaredBehaviour`'s facts are the
 manifest's and its field list does not include the trigger, so a declared
-behaviour is proposed on every evaluation rather than when its trigger fires --
-the engine-side half of "a trigger decides when one is evaluated" is not written
+behaviour is evaluated on every tick and its trigger decides nothing -- the
+engine-side half of "a trigger decides when one is evaluated" is not written
 either, and `engine/behaviours/declared.py` is an existing file this phase does
-not own.
+not own. `pack-manifest/1.3.0`'s `match` narrows *what a behaviour proposes when
+it is evaluated* (`start_cleaning` acts only while the vacuum reads `docked`),
+and that is a different question from *when it is evaluated*: a press is an event
+and the engine has no event stream to read one from.
 
 Each test therefore asserts a blocker, not a capability. A green run here means
 the gap is open, which is what the phase reports.
@@ -212,9 +215,35 @@ def test_the_declared_interpreter_keeps_no_trigger_among_its_facts() -> None:
         "pack",
         "name",
         "services",
+        # `states` is `services` projected through `catalog/services.yaml` -- what
+        # the port is asked to write rather than which service was declared -- and
+        # it is not a trigger: it says nothing about *when* the behaviour is
+        # evaluated. A trigger field is still what the press would need and is
+        # still absent.
+        "states",
         "slots",
         "required_slots",
         "optional_slots",
+        # `match` and `mode` are the *values* beside the `condition` and `action`
+        # kinds (`pack-manifest/1.3.0`), not a trigger: `match` says what the
+        # device must currently read and `mode` says which mode the house enters,
+        # and neither says *when* the behaviour is evaluated. A `trigger` field is
+        # still what a press would need and is still absent.
+        "match",
+        "mode",
+        # `for_option` is the third of the same family: the *value* beside the
+        # `for` clause, naming a `duration` option the behaviour's `match`
+        # reading must have held for. Like the other two it narrows what the
+        # behaviour does when it is evaluated, and like the other two it says
+        # nothing about *when* that evaluation happens -- a press is still an
+        # event the engine has no stream to read, so a `trigger` field is still
+        # what the physical-button half would need and is still absent.
+        "for_option",
+        # `options` is the pack's declarations rather than a trigger: it is what
+        # the panel's form is drawn from, and every behaviour of a pack carries
+        # the whole array because the clause belongs to the pack. A field naming
+        # a trigger is still absent.
+        "options",
         "priority",
         "scope",
         "corpus_rows",

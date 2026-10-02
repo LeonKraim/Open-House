@@ -12,6 +12,13 @@ import { OpenHouseElement, formatRelative } from "../base.ts";
 import type { HouseOverview, RoomSummary } from "../api/models.ts";
 
 export class OverviewTab extends OpenHouseElement {
+  static override properties = {
+    ...OpenHouseElement.properties,
+    overview: { state: true },
+    isLoading: { state: true },
+    error: { state: true },
+  };
+
   private overview: HouseOverview | null = null;
   private isLoading = true;
   private error: ReturnType<OpenHouseElement["toError"]> | null = null;

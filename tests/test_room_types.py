@@ -68,7 +68,7 @@ def _rooms_document(entries: list[tuple[str, str]]) -> str:
 def _room_types_document(
     types: list[dict[str, object]],
     house: bool = True,
-    house_slots: tuple[str, ...] = ("house_mode",),
+    house_slots: tuple[str, ...] = ("vacuum",),
 ) -> str:
     """A `room_types.yaml` from a terse description of each type.
 
@@ -114,7 +114,7 @@ def _commit(
     types: list[dict[str, object]] | None = None,
     room_entries: list[tuple[str, str]] | None = None,
     house: bool = True,
-    house_slots: tuple[str, ...] = ("house_mode",),
+    house_slots: tuple[str, ...] = ("vacuum",),
 ) -> None:
     write(root, ROOMS_PATH, _rooms_document(room_entries or _ROOMS))
     write(

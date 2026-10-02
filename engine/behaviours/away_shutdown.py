@@ -1,7 +1,7 @@
 """Away shutdown: interior lighting off when the house empties under away mode.
 
 Task 7.2, derived from `lighting.away_shutdown` (`scope: house`,
-`required_slots: [light_group, house_mode]`) with `modes.house_away` and
+`required_slots: [light_group]`) with `modes.house_away` and
 `presence.house_emptied` cited for the two gates. Both gates are required and
 neither is sufficient: a house that empties with nobody having set away mode is a
 house whose occupants are still expected back, and a house in away mode with
@@ -10,13 +10,14 @@ somebody in it is a mistake away mode should not act on.
 Three readings the requirement leaves to this module are settled here and stated
 because a reader would otherwise have to infer them:
 
-- **The mode is the engine's, not a device's.** `house_mode` is a required slot,
-  so the behaviour skips in a house that does not bind one, and it is read so the
-  binding appears in the record's inputs -- but the gate is `ctx.mode_is_active`,
-  which reads the `ModeSet` whose `exclusive_group` is what makes away exclusive
-  with home (`engine-core`, "House modes are mutually exclusive within an
-  exclusive group"). A gate read off an entity would let a stale `input_select`
-  disagree with the modes every other behaviour is gated on.
+- **The mode is the engine's, not a device's.** The home's state is the engine's
+  own variable, so this behaviour requires no slot for it and a house binds none:
+  the gate is `ctx.mode_is_active`, which reads the `ModeSet` whose
+  `exclusive_group` is what makes away exclusive with home (`engine-core`,
+  "House modes are mutually exclusive within an exclusive group"). Reading it off
+  an entity would let a stale `input_select` disagree with the modes every other
+  behaviour is gated on, and would make a person bind a device to say something
+  the engine already knows.
 - **Emptiness is derived from the rooms, not from a device.** No slot in the
   vocabulary reports a house's emptiness, so `ctx.house_is_empty()` is the
   engine's own claim about the rooms it observes, recorded as a `HousePresence`
@@ -65,7 +66,7 @@ class AwayShutdownBehaviour:
     id = "away_shutdown"
     corpus_rows = CORPUS_ROWS
     scope = BehaviourScope.HOUSE
-    required_slots = ("light_group", "house_mode")
+    required_slots = ("light_group",)
     optional_slots = ()
     #: Above motion lighting's: when both want the same light, the house being
     #: empty outranks somebody walking through it.
@@ -76,7 +77,6 @@ class AwayShutdownBehaviour:
 
     def evaluate(self, ctx: BehaviourContext) -> None:
         """Turn the house's lighting off, if it is empty and away and lit."""
-        ctx.read("house_mode", Reduction.ANY)
         lights = ctx.read("light_group", Reduction.ANY)
         ctx.matched(AWAY_SHUTDOWN)
 

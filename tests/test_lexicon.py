@@ -120,15 +120,14 @@ def test_the_lexicon_fixture_is_clean() -> None:
 #: matches it is our own regex over the role's tokens.
 ROLE_CASES: tuple[tuple[str, str, str], ...] = (
     ("climate_zone", "climate", "main_bedroom"),
-    ("contact_sensor", "binary_sensor", "basement_exterior_door"),
+    ("door_contact", "binary_sensor", "basement_exterior_door"),
     ("cover", "cover", "large_garage_door"),
     ("fan", "fan", "studio"),
-    ("house_mode", "input_select", "presence_mode"),
     ("humidity_sensor", "sensor", "bedroom_humidity"),
     ("leak_sensor", "binary_sensor", "kitchen_leak_sensor"),
     ("light_group", "light", "foyer_lights"),
     ("lock", "lock", "front_door"),
-    ("lux_sensor", "sensor", "kitchen_illuminance"),
+    ("ambient_light_sensor", "sensor", "kitchen_illuminance"),
     ("media_player", "media_player", "plex"),
     ("motion_sensor", "binary_sensor", "hlk_kuche_belegung"),
     ("scene_selector", "input_select", "scene"),
@@ -175,7 +174,7 @@ def test_a_reference_matching_two_rules_yields_both_candidates() -> None:
     that is also a leak sensor supports both, and picking one would need a
     precedence nothing in the corpus supplies."""
     found = lexicon.candidates("binary_sensor", "basement_exterior_door_leak_sensor")
-    assert "contact_sensor" in found
+    assert "door_contact" in found
     assert "leak_sensor" in found
 
 
@@ -196,15 +195,15 @@ def test_the_room_context_narrows_a_room_scoped_role_away() -> None:
 def test_an_omitted_context_returns_the_domain_and_pattern_matches() -> None:
     """Stage A's scope is coarse, so a caller without one still gets candidates;
     the room context refines the answer and is not a precondition for it."""
-    assert lexicon.candidates("input_select", "house") == ("house_mode",)
-    assert lexicon.candidates("input_select", "house", "house") == ("house_mode",)
-    assert lexicon.candidates("input_select", "house", "room") == ()
+    assert lexicon.candidates("vacuum", "roomba") == ("vacuum",)
+    assert lexicon.candidates("vacuum", "roomba", "house") == ("vacuum",)
+    assert lexicon.candidates("vacuum", "roomba", "room") == ()
 
 
 def test_scope_for_reports_the_context_stage_a_cannot() -> None:
-    """`house_mode` is house-scoped while stage A labels every `input_select` a
-    room's, and this is the answer 5.3 revisits that inference with."""
-    assert lexicon.scope_for("house_mode") == ("house",)
+    """`vacuum` is house-scoped while stage A's coarse reading is the domain
+    alone, and this is the answer 5.3 revisits that inference with."""
+    assert lexicon.scope_for("vacuum") == ("house",)
     assert lexicon.scope_for("motion_sensor") == ("room",)
 
 

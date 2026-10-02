@@ -244,6 +244,10 @@ class Fleet:
     topic_prefix: str = TOPIC_PREFIX
     #: The entity ids announced, filled by `announce` and driven by `serve`.
     _advertised: list[str] = field(default_factory=list[str])
+    #: entity id -> (device identifier, device name), built once from the rooms.
+    _owners: Mapping[str, tuple[str, str]] | None = field(default=None, repr=False)
+    #: entity id -> the area its room is filed under, built once from the rooms.
+    _areas: Mapping[str, str] | None = field(default=None, repr=False)
 
     @property
     def adapter(self) -> FakeHouseAdapter:
@@ -287,7 +291,9 @@ class Fleet:
         """
         self.client.subscribe(f"{self.topic_prefix}/+/set")
 
-    def serve(self, *, timeout: float = 1.0, refresh: float = 5.0) -> None:
+    def serve(
+        self, *, timeout: float = 1.0, refresh: float = 5.0, ping: float = 20.0
+    ) -> None:
         """Apply commands until the broker stops answering.
 
         Reads with a short timeout so the loop can republish on a cadence: the
@@ -298,16 +304,31 @@ class Fleet:
         deliberately a poll rather than a publication the port would emit: the
         port has no change notification, so a fleet that waited to be told would
         never be told.
+
+        **`ping` is why this loop survives at all.** The client writes its
+        keepalive into CONNECT (`Client.keepalive`, 60 seconds) and the broker
+        drops a connection that has said nothing for one and a half of them --
+        so a fleet that only listened was disconnected about ninety seconds
+        after it announced, taking every device in the house offline mid-run.
+        `Client.ping` exists and says in its own docstring that "the caller's
+        loop decides when"; this is that loop, and until this argument existed
+        nobody decided. The interval is a third of the keepalive, which leaves
+        two chances to be late without being disconnected.
         """
-        deadline = time.monotonic() + refresh
+        refresh_at = time.monotonic() + refresh
+        ping_at = time.monotonic() + ping
         while True:
             message = self.client.poll(timeout=timeout)
             if message is not None:
                 self.handle(message)
-            if time.monotonic() >= deadline:
+            now = time.monotonic()
+            if now >= ping_at:
+                self.client.ping()
+                ping_at = now + ping
+            if now >= refresh_at:
                 for entity_id in self._advertised:
                     self._publish_state(entity_id)
-                deadline = time.monotonic() + refresh
+                refresh_at = now + refresh
 
     def handle(self, message: Message) -> str | None:
         """Apply one inbound message; return the entity it changed, or `None`.
@@ -351,6 +372,71 @@ class Fleet:
         """
         return f"openhouse_{entity_id.replace('.', '_')}"
 
+    def _device(self, entity_id: str) -> dict[str, object]:
+        """The Home Assistant device an entity belongs to: one per room.
+
+        Not one device for the whole fleet, which is what this used to publish
+        and what it cost. Home Assistant files an *entity* under an area only
+        through its **device**, and the panel's device picker proposes only
+        entities filed under the room's own area
+        (`custom_components/open_house/views.py`'s `candidates` ->
+        `async_entries_for_area`). A house announced as one device is therefore a
+        house whose every entity can only ever be filed into one area, and a room
+        set up against it can bind nothing at all -- every slot answers "No
+        match" and the reason is invisible from the panel.
+
+        A real house has a device per room, so this one does too: the room a
+        binding names owns the device its entities appear on, and anything the
+        house binds nowhere stays on a fleet-level device of its own.
+
+        `suggested_area` is what puts that device in the room rather than merely
+        naming it after one. Home Assistant reads it from a discovery payload and
+        files the device under an area of that name, creating the area if the
+        house has not made one -- which is how a real MQTT device arrives in the
+        right room, and the difference between a mock house a person can set up
+        and one where every slot answers "No match".
+        """
+        owner = self._owner_of().get(entity_id)
+        identifier, name = (
+            owner
+            if owner is not None
+            else ("openhouse_fleet", f"Open House mock fleet ({self.fixture.name})")
+        )
+        device: dict[str, object] = {
+            "identifiers": [identifier],
+            "name": name,
+            "manufacturer": "Open House",
+            "model": "sim",
+        }
+        area = self._area_of().get(entity_id)
+        if area is not None:
+            device["suggested_area"] = area
+        return device
+
+    def _area_of(self) -> Mapping[str, str]:
+        """entity id -> the name of the area its room is filed under."""
+        if self._areas is None:
+            areas: dict[str, str] = {}
+            for room in self.fixture.house.rooms:
+                for entity_id in room.bindings.values():
+                    areas.setdefault(entity_id, room.name)
+            self._areas = areas
+        return self._areas
+
+    def _owner_of(self) -> Mapping[str, tuple[str, str]]:
+        """entity id -> (device identifier, device name), from the house's rooms."""
+        if self._owners is None:
+            owners: dict[str, tuple[str, str]] = {}
+            for room in self.fixture.house.rooms:
+                owner = (
+                    f"openhouse_room_{room.id}",
+                    f"{room.name} ({self.fixture.name})",
+                )
+                for entity_id in room.bindings.values():
+                    owners.setdefault(entity_id, owner)
+            self._owners = owners
+        return self._owners
+
     def _config(self, domain: str, entity_id: str) -> dict[str, object]:
         """The discovery payload for one entity."""
         config: dict[str, object] = {
@@ -361,12 +447,7 @@ class Fleet:
             "availability_topic": f"{self.topic_prefix}/{entity_id}/availability",
             "payload_available": "online",
             "payload_not_available": "offline",
-            "device": {
-                "identifiers": ["openhouse_fleet"],
-                "name": f"Open House mock fleet ({self.fixture.name})",
-                "manufacturer": "Open House",
-                "model": "sim",
-            },
+            "device": self._device(entity_id),
         }
         config.update(_PAYLOADS.get(domain, {}))
         if domain in _COMMANDED:

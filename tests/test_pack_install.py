@@ -365,6 +365,11 @@ def test_the_enabling_act_is_separate_and_names_what_it_enables(
     is the *proposal* rather than the outcome: whether the command survives
     arbitration depends on what else wants the same light, and the gate is
     upstream of that.
+
+    The proposed action is the *state* (`on`) and not the service the manifest
+    declared (`light.turn_on`): `catalog/services.yaml` is the table that knows
+    one from the other, and the interpreter holds the resolved state rather than
+    the service name.
     """
     manifest = pack(tmp_path, "switched")
     unit = "switched.b0"
@@ -385,7 +390,7 @@ def test_the_enabling_act_is_separate_and_names_what_it_enables(
     full.advance_time(minutes=1)
     proposing = [record for record in _unit_records(full, unit) if record.commands]
     assert proposing != []
-    assert proposing[0].commands[0].action == "light.turn_on"
+    assert proposing[0].commands[0].action == "on"
 
 
 # -- 5.6  uninstall ---------------------------------------------------------
@@ -520,13 +525,13 @@ def test_a_refusal_reports_every_reason_the_check_found(
         "twice",
         edits=(
             ("    services: [light.turn_on]", "    services: [shell_command.rm]"),
-            (f"    slots: [{SLOT}]", "    slots: [lux_sensor]"),
+            (f"    slots: [{SLOT}]", "    slots: [ambient_light_sensor]"),
         ),
     )
     with pytest.raises(packs.PackError) as refusal:
         session.install_pack(str(manifest))
     assert "shell_command.rm" in refusal.value.reason
-    assert "lux_sensor" in refusal.value.reason
+    assert "ambient_light_sensor" in refusal.value.reason
 
 
 def test_no_check_writes_anything_when_it_refuses(

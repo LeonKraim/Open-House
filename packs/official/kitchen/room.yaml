@@ -7,6 +7,6 @@
 # the other direction of the same idea, a person reading the shipped set to see
 # what a kitchen hands over.
 #
-# Slots, not entities: `climate_zone, contact_sensor, light_group, lux_sensor, media_player, motion_sensor, temperature_sensor` are the placeholders a person binds their own
+# Slots, not entities: `climate_zone, door_contact, light_group, ambient_light_sensor, media_player, motion_sensor, temperature_sensor` are the placeholders a person binds their own
 # devices to, which is why no house, room or `domain.object_id` appears here.
-slots: [climate_zone, contact_sensor, light_group, lux_sensor, media_player, motion_sensor, temperature_sensor]
+slots: [climate_zone, door_contact, light_group, ambient_light_sensor, media_player, motion_sensor, temperature_sensor]

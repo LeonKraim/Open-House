@@ -137,14 +137,95 @@ export interface ProfileRef {
   active: boolean;
 }
 
-/** A pack installed into a room. */
+/** A pack installed into a room, or into the whole house. */
 export interface InstalledModule {
   pack: string;
   name: string;
   version: string;
+  /** The room it was put in, or `""` when it was put in the whole house. */
   room_id: string;
+  /**
+   * Whether the module was put in the whole house rather than in a room.
+   *
+   * A placement and not a scope: `room_id` is `""` for it. A module installed
+   * into a bedroom with a house-scoped atom is in the room and acts on the
+   * house, so the two facts are drawn separately.
+   */
+  house: boolean;
+  /** `house` when every behaviour the pack registered is house-scoped. */
+  scope: "room" | "house";
   enabled: boolean;
-  behaviours: { id: string; label: string; enabled: boolean }[];
+  /**
+   * Whether the room binds every slot the pack requires. False means the
+   * module is in the room and switched off, and cannot be switched on until
+   * `missing_slots` are bound: installation is allowed, activation is not.
+   */
+  satisfiable: boolean;
+  /** The required slots the room binds nothing to. Empty when satisfiable. */
+  missing_slots: string[];
+  /**
+   * The settings this module owns, in the option schema's key space.
+   *
+   * The join that lets a module be drawn as one subject: the schema a page
+   * receives is flat, so without this the panel would have to parse
+   * `module.<pack>.<key>` to know which setting belongs to which card -- a
+   * second copy of the key space, free to disagree with the server's. Keys the
+   * page's schema does not carry are skipped, which is the honest reading:
+   * a setting that does not resolve here is not a setting this page can set.
+   */
+  option_keys: string[];
+  /**
+   * The module's own settings, as the JSON Schema its card renders.
+   *
+   * The slice of the page's option form that belongs to this pack -- the server
+   * cuts it to `option_keys` -- so a card draws exactly its own settings with the
+   * same control per type the schema form draws anywhere. `null` when the pack
+   * declares no options, which is "nothing to configure here" rather than a form
+   * with no fields in it.
+   */
+  options_schema: JsonSchema | null;
+  /** The current values for `options_schema`'s keys. */
+  options: Record<string, unknown>;
+  behaviours: InstalledBehaviour[];
+}
+
+/** One atom of an installed pack, with its switch and its reach. */
+export interface InstalledBehaviour {
+  /** Pack-qualified, e.g. `bedtime.lights_off`. */
+  id: string;
+  label: string;
+  /**
+   * What switching this on actually does, in a sentence the server built from
+   * the behaviour's own declaration -- the device it watches, the reading it
+   * waits for, how long, and what it writes. A label alone ("The fridge has been
+   * open too long") does not answer the question a switch raises.
+   */
+  description: string;
+  enabled: boolean;
+  /**
+   * The rooms this atom actually runs in, in the house's own order.
+   *
+   * The engine's answer (`Engine.active_rooms`), not the panel's reading of the
+   * module's placement: a behaviour a pack declared room-scoped is *evaluated*
+   * in every room, and its enable flag is what decides which of them it runs in.
+   * So this is the reach control's tick set, and the rooms it omits are the ones
+   * the control exists to let somebody add. Empty for an atom that runs once for
+   * the whole house -- that is `scope`'s answer, not this one's.
+   */
+  active_rooms: string[];
+  /** The scope this atom runs in now; the declared one until somebody chose. */
+  scope: "room" | "house";
+  /** What the pack itself declared, which is what "reset" would return to. */
+  declared_scope: "room" | "house";
+  /**
+   * Whether `house` is available to this atom at all.
+   *
+   * False for an atom whose slots the house scope cannot resolve -- one reading
+   * a device only a room type provides -- where widening would put the atom on
+   * every tick as a refusal. The server decides this, so the panel draws no
+   * switch it could not honour.
+   */
+  widenable: boolean;
 }
 
 /**
@@ -185,6 +266,53 @@ export interface ModuleConflict {
   /** The range or slot that makes it a conflict. */
   detail: string;
   severity: "blocking" | "warning";
+}
+
+/** The House tab's whole answer: the house's own slots, its modules, its options. */
+export interface HouseScope {
+  name: string;
+  /** One row per role the house can be asked about, empty ones included. */
+  slots: HouseSlot[];
+  /**
+   * The house's own modules: those that reach a house-wide role wherever they
+   * sit, and those a person installed into the house itself.
+   */
+  modules: InstalledModule[];
+  /** The house's own high-level options, or null when nothing declares one. */
+  options_schema: JsonSchema | null;
+  options: Record<string, unknown>;
+}
+
+/** The reply to installing a module: the module, and the page it landed on. */
+export interface ModuleInstallReply {
+  installed: InstalledModule;
+  /** The room's page when the module went into a room. */
+  room?: RoomDetail | null;
+  /** The house's page when the module went into the house. */
+  house?: HouseScope | null;
+}
+
+/** The reply to removing a module: the room's page, or the house's. */
+export type ModuleUninstallReply = RoomDetail | { room_id: string; house: HouseScope };
+
+/**
+ * One role the whole house reads, bound once for every room.
+ *
+ * The same shape a room's binding row has, because it is the same kind of thing
+ * drawn by the same controls: a slot, the entity bound to it, and that entity's
+ * live status. What makes it the house's is that the entity is *the house's own*
+ * -- one global device standing in for the role in the house scope and in every
+ * room that bound none of its own -- rather than a summary of what the rooms
+ * happened to bind.
+ *
+ * A slot is only sent when an installed module reaches it; the server drops the
+ * roles nothing acts through, so a page of them is a page of real automations.
+ */
+export interface HouseSlot extends Omit<BindingStatus, "last_changed"> {
+  /** The rooms whose own binding this global one stands in front of. */
+  rooms: string[];
+  /** The installed modules that reach this role, by display name. */
+  modules: string[];
 }
 
 /** One line of the Activity tab, and the decision-log oracle's public shape. */

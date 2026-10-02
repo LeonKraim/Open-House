@@ -141,7 +141,7 @@ def _house(bindings: Mapping[str, str]) -> dict[str, object]:
                 },
             }
         ],
-        "house_scope": {"slots": ["house_mode", "light_group", "lock"]},
+        "house_scope": {"slots": ["light_group", "lock"]},
     }
 
 
@@ -199,7 +199,12 @@ def test_no_shipped_unit_can_propose_an_egress_action() -> None:
     auto-unlocks"; the runtime half is the refusals the next tests produce.
     """
     shipped = default_behaviours()
-    assert set(shipped) == {"away_shutdown", "motion_lighting", "override"}
+    assert set(shipped) == {
+        "away_shutdown",
+        "motion_lighting",
+        "override",
+        "safety_alert",
+    }
     egress_slots = {"lock", "cover"}
     for unit in shipped.values():
         reached = set(unit.required_slots) | set(unit.optional_slots)
@@ -353,8 +358,7 @@ def test_a_safety_alert_bypasses_every_suppression(vocabulary: Vocabulary) -> No
             {
                 "motion_sensor": "binary_sensor.hall_motion",
                 "light_group": "light.hall",
-                "lux_sensor": "sensor.hall_lux",
-                "house_mode": "input_select.house_mode",
+                "ambient_light_sensor": "sensor.hall_lux",
             }
         ),
         vocabulary=vocabulary,
@@ -372,7 +376,6 @@ def test_a_safety_alert_bypasses_every_suppression(vocabulary: Vocabulary) -> No
     assert session.read_entity("light.hall").state == "on"
 
     session.engine.modes.activate("away")
-    session.set_state("input_select.house_mode", "away")
     session.set_state("binary_sensor.hall_motion", "off")
     session.user_action("light.hall", "on")
     session.add_entity(
@@ -399,24 +402,29 @@ def test_a_safety_alert_bypasses_every_suppression(vocabulary: Vocabulary) -> No
 
 
 def test_a_smoke_alarm_raises_a_response(vocabulary: Vocabulary) -> None:
-    """An alarming detector must make the house do something -- and the product does not.
+    """An alarming detector makes the shipped product do something.
 
-    Red on purpose, and the message is the point. The alert exists as a unit --
-    `engine/behaviours/safety_alert.py`'s `SafetyAlertBehaviour` cites the corpus's
-    `security.smoke_alert` and `security.water_leak_alert` and proposes with
-    `safety=True` -- and every piece of the path it needs is built: `engine/safety.py`
-    classifies the detector, `Engine.hazards()` scans for it, and `BehaviourContext.hazards()`
-    hands it to a unit. What is missing is its *registration*: `default_behaviours()`
-    ships exactly the three Phase 1 units, so the registry the integration composes
-    (`ha_adapter/composition.py`) has nothing that answers a hazard and a person's
-    smoke alarm can be shrieking while the house does precisely nothing -- the
-    opposite of `spec.txt:98`.
+    The claim is about the *registry a household installs*, not about a unit
+    somewhere in the tree: `default_behaviours()` is what `ha_adapter/composition.py`
+    composes, so a hazard-answering unit that existed and was not in it would be a
+    person's smoke alarm shrieking while the house did precisely nothing.
+
+    Red before `SafetyAlertBehaviour` was registered. The two halves are asserted
+    separately because they fail for different reasons: the first says a shipped
+    unit answers the corpus's alert rows, and the second says a real alarm reaches
+    the house through it.
     """
+    cited = {row for unit in default_behaviours().values() for row in unit.corpus_rows}
+    assert not cited.isdisjoint(ALERT_ROWS), (
+        "no shipped unit cites an alert row, so nothing in the registry the "
+        "integration composes could answer a hazard"
+    )
+
     session = open_session(
         house=_house({"light_group": "light.hall"}),
         vocabulary=vocabulary,
         started_at=NIGHT,
-        house_settings={"behaviour.motion_lighting.enabled": True},
+        house_settings={"behaviour.safety_alert.enabled": True},
     )
     session.add_entity(
         "binary_sensor.smoke_alarm", "on", attributes={"device_class": "smoke"}
@@ -428,21 +436,26 @@ def test_a_smoke_alarm_raises_a_response(vocabulary: Vocabulary) -> None:
     mark = len(session.get_decision_log())
     session.advance_time(minutes=1)
     acted = _acted(_since(session, mark))
-
-    # The gap, as data: no shipped unit cites an alert row, so the record asserted
-    # for below has nothing that could produce it.
-    cited = {row for unit in default_behaviours().values() for row in unit.corpus_rows}
-    assert cited.isdisjoint(ALERT_ROWS)
     assert acted != [], (
-        "an alarming smoke detector produced no response from the shipped "
-        "product. A hazard-answering unit exists -- `engine/behaviours/"
-        "safety_alert.py`'s `SafetyAlertBehaviour` cites `security.smoke_alert` "
-        "and `security.water_leak_alert` and proposes with `safety=True` -- but "
-        "it is not in `default_behaviours()`, which ships exactly the three "
-        "Phase 1 units (`engine/behaviours/__init__.py`) and is what the "
-        "integration composes (`ha_adapter/composition.py`). The gap is the "
-        "alert's wiring into the shipped registry, not a missing mechanism."
+        "an alarming smoke detector produced no response from the shipped product"
     )
+
+
+def test_the_alert_ships_off_and_is_the_only_thing_that_answers_a_hazard() -> None:
+    """Registered is not enabled, and that is the policy rather than an oversight.
+
+    A module ships off and a household opts in, with no always-on tier -- so a
+    smoke alarm reaching the registry must not make a fresh house act. The
+    second assertion is the one that would catch the alert being *replaced*: a
+    registry that answered hazards with some other unit would leave this alarm
+    unreachable, which is the failure the registration was for.
+    """
+    units = default_behaviours()
+    assert units["safety_alert"].enabled is False
+    answerings = [
+        unit.id for unit in units.values() if set(unit.corpus_rows) & set(ALERT_ROWS)
+    ]
+    assert answerings == ["safety_alert"]
 
 
 # --------------------------------------------------------------------------
@@ -467,7 +480,6 @@ def test_a_dead_sensor_is_silence_and_not_an_empty_house(
             {
                 "motion_sensor": "binary_sensor.hall_motion",
                 "light_group": "light.hall",
-                "house_mode": "input_select.house_mode",
             }
         ),
         vocabulary=vocabulary,
@@ -479,7 +491,6 @@ def test_a_dead_sensor_is_silence_and_not_an_empty_house(
     )
     session.set_state("light.hall", "on")
     session.engine.modes.activate("away")
-    session.set_state("input_select.house_mode", "away")
     session.set_availability("binary_sensor.hall_motion", False)
 
     mark = len(session.get_decision_log())
@@ -495,7 +506,9 @@ def test_a_dead_sensor_is_silence_and_not_an_empty_house(
     assert [repair.entity_id for repair in repairs] == ["binary_sensor.hall_motion"]
 
 
-def test_a_dead_lux_sensor_falls_back_to_the_sun(vocabulary: Vocabulary) -> None:
+def test_a_dead_ambient_light_sensor_falls_back_to_the_sun(
+    vocabulary: Vocabulary,
+) -> None:
     """A lux sensor that stops reporting hands the dark test to the sun.
 
     `catalog/edge_cases.yaml` names "a luminance sensor that stops reporting", and
@@ -511,7 +524,7 @@ def test_a_dead_lux_sensor_falls_back_to_the_sun(vocabulary: Vocabulary) -> None
             {
                 "motion_sensor": "binary_sensor.hall_motion",
                 "light_group": "light.hall",
-                "lux_sensor": "sensor.hall_lux",
+                "ambient_light_sensor": "sensor.hall_lux",
             }
         ),
         vocabulary=vocabulary,

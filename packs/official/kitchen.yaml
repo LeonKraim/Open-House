@@ -38,7 +38,7 @@ description: >-
 kind: room-template
 engine_api: ">=1.0.0 <2.0.0"
 license: mit
-requires_slots: [climate_zone, contact_sensor, light_group, lux_sensor, media_player, motion_sensor, temperature_sensor]
+requires_slots: [climate_zone, door_contact, light_group, ambient_light_sensor, media_player, motion_sensor, temperature_sensor]
 provides:
   - path: packs/official/kitchen/room.yaml
     class: other

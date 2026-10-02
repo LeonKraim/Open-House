@@ -1,5 +1,5 @@
 /**
- * The panel root: the sidebar entry, its eight tabs, and the admin boundary.
+ * The panel root: the sidebar entry, its nine tabs, and the admin boundary.
  *
  * Home Assistant's `panel_custom` creates this element with `embed_iframe:
  * false` and assigns `hass`, `narrow`, `route` and `panel` before the first
@@ -25,6 +25,7 @@ import { TABS, tabsFor, type TabDefinition, type TabId } from "../tabs/types.ts"
 // Import for their side effect: each registers its own element.
 import "../tabs/overview.ts";
 import "../tabs/rooms.ts";
+import "../tabs/house.ts";
 import "../tabs/modules.ts";
 import "../tabs/profiles.ts";
 import "../tabs/store.ts";
@@ -37,6 +38,23 @@ import "../components/dialog.ts";
 import "../components/schema-form.ts";
 
 export class OpenHousePanel extends OpenHouseElement {
+  /**
+   * Which tab is showing, and the room another tab asked Rooms to open.
+   *
+   * Both are Lit *state* rather than plain fields, and that is the fix for a
+   * defect that made the panel unusable: as plain fields they were written by
+   * `selectTab`/`onNavigate` without anything scheduling a re-render, so a click
+   * on the tab bar changed a property nothing observed and the screen stayed on
+   * Overview for ever. Declaring them reactive is what makes the assignment the
+   * re-render, rather than relying on some later, unrelated `hass` update to
+   * carry the change to the DOM.
+   */
+  static override properties = {
+    ...OpenHouseElement.properties,
+    activeTab: { state: true },
+    navigateRoomId: { state: true },
+  };
+
   private activeTab: TabId = "overview";
   private capabilities: Capabilities | null = null;
   private capabilityError: ReturnType<OpenHouseElement["toError"]> | null = null;
@@ -187,7 +205,19 @@ export class OpenHousePanel extends OpenHouseElement {
     </button>`;
   }
 
+  /**
+   * The tab body, or nothing until there is a client to render it with.
+   *
+   * The client is assigned in `updated`, which runs *after* the first render,
+   * so a tab element mounted on that first pass is constructed with `client:
+   * null` -- and every screen loads its data in `connectedCallback`, which has
+   * already run by the time the client arrives. The result was a panel whose
+   * every tab showed "open-house panel element has no client" and never
+   * retried. Withholding the element until the client exists means the first
+   * one constructed is constructed with it.
+   */
   private renderActiveTab(): TemplateResult {
+    if (!this.client) return html``;
     const tab = TABS.find((entry) => entry.id === this.activeTab) ?? TABS[0]!;
     const roomId =
       tab.id === "rooms" && this.navigateRoomId ? this.navigateRoomId : "";
@@ -219,6 +249,11 @@ export class OpenHousePanel extends OpenHouseElement {
           .narrow=${common.narrow}
           .initialRoomId=${roomId}
         ></open-house-tab-rooms>`;
+      case "open-house-tab-house":
+        return html`<open-house-tab-house
+          .client=${common.client}
+          .admin=${common.admin}
+        ></open-house-tab-house>`;
       case "open-house-tab-modules":
         return html`<open-house-tab-modules
           .client=${common.client}

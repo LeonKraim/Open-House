@@ -1,0 +1,7 @@
+name: security
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/derived/security.yaml
+sha256: sha256:4ecf7a3910491d90401f1832513587b995f1792f7738e5df5bc1272af7db8c63
+tier: official

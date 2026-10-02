@@ -20,7 +20,7 @@ import {
   type HassLike,
   type UnsubscribeFunc,
 } from "./connection.ts";
-import { COMMANDS } from "./protocol.ts";
+import { COMMANDS, REFUSALS } from "./protocol.ts";
 import type {
   ActivityStreamEvent,
   BindingSuggestion,
@@ -28,9 +28,12 @@ import type {
   DecisionLogEntry,
   HealthIssue,
   HouseOverview,
+  HouseScope,
   ImportPreview,
   InstalledModule,
+  ModuleInstallReply,
   ModuleOffer,
+  ModuleUninstallReply,
   ProfileRef,
   RoomDetail,
   RoomSummary,
@@ -42,6 +45,14 @@ import type { ExportDocument } from "../types/generated.ts";
 interface ListResponse<T> {
   [key: string]: T[] | undefined;
 }
+
+/**
+ * How long to wait before asking again, in order, with no entry for the last
+ * attempt. Spread rather than fixed because the reload that causes this is
+ * short in the common case and occasionally not short at all; the total is
+ * under three seconds, which is inside the time a person reads a screen.
+ */
+const RETRY_DELAYS_MS = [250, 700, 1800];
 
 export class OpenHouseClient {
   private readonly hass: HassLike;
@@ -55,14 +66,37 @@ export class OpenHouseClient {
     return new OpenHouseClient(hass);
   }
 
+  /**
+   * One command, with the reload window retried rather than reported.
+   *
+   * The retry is here, under every screen, instead of in each screen that might
+   * be open when a reload lands -- `rooms` after adding a room, `room` when that
+   * list then opens the new room's settings, `capabilities` on the next poll.
+   * A screen that read the answer once and stopped rendered it as fact: the
+   * settings page of a room that had just been created said "Room not found --
+   * This room is no longer in the house", and the panel header said the house had
+   * never been set up. Neither was true; both were a reload being read as an
+   * absence.
+   *
+   * Only `not_ready` is retried. `not_found`, `unauthorized` and `invalid_format`
+   * are answers about the request, and asking the same question again would only
+   * delay telling the person what is actually wrong.
+   */
   private async call<T>(
     type: string,
     payload: Record<string, unknown> = {},
   ): Promise<T> {
-    try {
-      return await sendMessage<T>(this.hass, { type, ...payload });
-    } catch (error) {
-      throw asPanelError(error);
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await sendMessage<T>(this.hass, { type, ...payload });
+      } catch (error) {
+        const refusal = asPanelError(error);
+        const delay: number | undefined = RETRY_DELAYS_MS[attempt];
+        if (refusal.code !== REFUSALS.notReady || delay === undefined) {
+          throw refusal;
+        }
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
     }
   }
 
@@ -89,8 +123,13 @@ export class OpenHouseClient {
     return this.call<RoomDetail>(COMMANDS.roomGet, { room_id: roomId });
   }
 
-  createRoom(name: string, type: string): Promise<RoomDetail> {
-    return this.call<RoomDetail>(COMMANDS.roomCreate, { name, type });
+  createRoom(name: string, roomType: string): Promise<RoomDetail> {
+    // `room_type`, not `type`: `type` is the websocket discriminator and the
+    // server's schema reserves it. See the schema in `websocket_api.py`.
+    return this.call<RoomDetail>(COMMANDS.roomCreate, {
+      name,
+      room_type: roomType,
+    });
   }
 
   updateRoom(roomId: string, name: string): Promise<RoomDetail> {
@@ -164,15 +203,26 @@ export class OpenHouseClient {
     return response.offers ?? [];
   }
 
-  installModule(
-    roomId: string,
-    pack: string,
-  ): Promise<{ installed: InstalledModule; room: RoomDetail }> {
-    return this.call(COMMANDS.moduleInstall, { room_id: roomId, pack });
+  /**
+   * Install a pack into a room, or into the whole house.
+   *
+   * `roomId` is the placement: a room id, or `""` for the house. The reply
+   * carries the page the module landed on -- `room` for a room, `house` for the
+   * house -- so a caller re-renders the screen it acted on.
+   */
+  installModule(roomId: string, pack: string): Promise<ModuleInstallReply> {
+    return this.call<ModuleInstallReply>(COMMANDS.moduleInstall, {
+      room_id: roomId,
+      pack,
+    });
   }
 
-  uninstallModule(roomId: string, pack: string): Promise<RoomDetail> {
-    return this.call<RoomDetail>(COMMANDS.moduleUninstall, {
+  /** Remove a pack, answering with the room's page or the house's. */
+  uninstallModule(
+    roomId: string,
+    pack: string,
+  ): Promise<ModuleUninstallReply> {
+    return this.call<ModuleUninstallReply>(COMMANDS.moduleUninstall, {
       room_id: roomId,
       pack,
     });
@@ -188,6 +238,73 @@ export class OpenHouseClient {
       pack,
       enabled,
     });
+  }
+
+  /**
+   * Turn one behaviour of a pack on or off in one room.
+   *
+   * `behaviour` is the `InstalledModule.behaviours[].id` from the listing --
+   * pack-qualified, e.g. `bedtime.lights_off`. The answer is the whole module,
+   * because turning one atom off makes the pack's own chip read "not fully on"
+   * and the caller should not have to recompute that rule.
+   */
+  setModuleBehaviourEnabled(
+    roomId: string,
+    pack: string,
+    behaviour: string,
+    enabled: boolean,
+  ): Promise<InstalledModule> {
+    return this.call<InstalledModule>(COMMANDS.moduleSetBehaviourEnabled, {
+      room_id: roomId,
+      pack,
+      behaviour,
+      enabled,
+    });
+  }
+
+  /**
+   * Choose which rooms one behaviour of a pack runs for.
+   *
+   * `"room"` narrows a house-wide atom to the room its module sits in, `"house"`
+   * widens a room's atom to every room. The answer is the whole module, for the
+   * reason `setModuleBehaviourEnabled` gives: the module's own scope chip is
+   * derived from its behaviours'.
+   */
+  setModuleBehaviourScope(
+    roomId: string,
+    pack: string,
+    behaviour: string,
+    scope: "room" | "house",
+  ): Promise<InstalledModule> {
+    return this.call<InstalledModule>(COMMANDS.moduleSetBehaviourScope, {
+      room_id: roomId,
+      pack,
+      behaviour,
+      scope,
+    });
+  }
+
+  /**
+   * The house's own page: its collected slots and its house-scoped modules.
+   *
+   * Not filtered by room, because there is no room to filter by -- "all the
+   * lights" is every room's, and the members carry the room each one is in.
+   */
+  houseScope(): Promise<HouseScope> {
+    return this.call<HouseScope>(COMMANDS.houseScope, {});
+  }
+
+  /**
+   * Write the house's own high-level options.
+   *
+   * The same command a room's form uses, with the house as the placement
+   * (`room_id: ""`): the house is a target like a room, so its options are set
+   * through the same door and the two forms cannot diverge.
+   */
+  setHouseOptions(
+    values: Record<string, unknown>,
+  ): Promise<{ schema: unknown; values: Record<string, unknown> }> {
+    return this.call(COMMANDS.roomOptionsSet, { room_id: "", values });
   }
 
   async modules(): Promise<InstalledModule[]> {

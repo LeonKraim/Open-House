@@ -21,7 +21,7 @@ refs:
   repo: ccostan
   scope: room
   naming_convention: opaque_fixture_ids
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.garage_phyn_leak_alert
   repo: ccostan
@@ -45,7 +45,7 @@ refs:
   repo: ccostan
   scope: room
   naming_convention: opaque_fixture_ids
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.home_water_problem
   repo: ccostan
@@ -63,7 +63,7 @@ refs:
   repo: ccostan
   scope: room
   naming_convention: opaque_fixture_ids
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: climate.downstairs
   repo: ccostan
@@ -477,43 +477,43 @@ refs:
   repo: fwartner
   scope: room
   naming_convention: german_compounded
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.aqara_contact_balkontur_contact
   repo: fwartner
   scope: room
   naming_convention: german_compounded
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.aqara_contact_kinderzimmer_contact
   repo: fwartner
   scope: room
   naming_convention: german_compounded
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.aqara_contact_kuhlschrank_contact
   repo: fwartner
   scope: room
   naming_convention: german_compounded
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.aqara_contact_schlafzimmer_contact
   repo: fwartner
   scope: room
   naming_convention: german_compounded
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.aqara_contact_wohnungstur_contact
   repo: fwartner
   scope: room
   naming_convention: german_compounded
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.aqara_contact_wohnzimmer_contact
   repo: fwartner
   scope: room
   naming_convention: german_compounded
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.hlk_flur_belegung
   repo: fwartner
@@ -543,13 +543,13 @@ refs:
   repo: fwartner
   scope: room
   naming_convention: german_compounded
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.openuv_schutzfenster
   repo: fwartner
   scope: room
   naming_convention: german_compounded
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.presence_couch
   repo: fwartner
@@ -688,12 +688,6 @@ refs:
   scope: room
   naming_convention: german_compounded
   slot: fan
-  constant: null
-- entity_ref: input_select.presence_mode
-  repo: fwartner
-  scope: room
-  naming_convention: german_compounded
-  slot: house_mode
   constant: null
 - entity_ref: light.alle_lampen
   repo: fwartner
@@ -927,7 +921,7 @@ refs:
   repo: fwartner
   scope: room
   naming_convention: german_compounded
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.bambu_lab_a1_druckbetttemperatur
   repo: fwartner
@@ -951,13 +945,13 @@ refs:
   repo: fwartner
   scope: room
   naming_convention: german_compounded
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.mi_light_sensor_wohnzimmer_illuminance
   repo: fwartner
   scope: room
   naming_convention: german_compounded
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.openweathermap_temperature
   repo: fwartner
@@ -993,7 +987,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.backyard_northwest_motion_2
   repo: johnkoht
@@ -1029,13 +1023,13 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.basement_exterior_door_leak_sensor
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.basement_motion_sensor
   repo: johnkoht
@@ -1065,7 +1059,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.cristina_presence
   repo: johnkoht
@@ -1119,7 +1113,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.family_room_ble_occupancy
   repo: johnkoht
@@ -1131,13 +1125,13 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.family_room_left_door
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.family_room_motion_sensor
   repo: johnkoht
@@ -1161,7 +1155,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.first_floor_any_room_presence
   repo: johnkoht
@@ -1209,13 +1203,13 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.front_door_camera_animal_detected
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.front_door_camera_motion
   repo: johnkoht
@@ -1227,13 +1221,13 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.front_door_camera_vehicle_detected
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.front_door_person_occupancy
   repo: johnkoht
@@ -1245,13 +1239,13 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.furnace_pan_leak_sensor_moisture
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.g4_bullet_motion
   repo: johnkoht
@@ -1293,13 +1287,13 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.gianlucas_door_sensor_status
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.hue_outdoor_motion_sensor_1_motion
   repo: johnkoht
@@ -1311,7 +1305,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.joe_presence
   repo: johnkoht
@@ -1323,7 +1317,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.john_presence
   repo: johnkoht
@@ -1335,7 +1329,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.katia_presence
   repo: johnkoht
@@ -1353,13 +1347,13 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.kitchen_fridge_door_status
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.kitchen_motion_sensor_main_motion_detection
   repo: johnkoht
@@ -1401,7 +1395,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.kitchen_presence_sensor
   repo: johnkoht
@@ -1425,25 +1419,25 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.kitchen_window_sensor
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.kitchen_window_west_middle_sensor
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.kitchen_windows
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.laundry_room_leak_sensor
   repo: johnkoht
@@ -1467,13 +1461,13 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.leak_sensor_hvac_moisture
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.leak_sensors
   repo: johnkoht
@@ -1497,13 +1491,13 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.main_bathroom_leak_sensor_moisture
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.main_bathroom_motion_sensor_occupancy
   repo: johnkoht
@@ -1533,7 +1527,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.main_bedroom_motion_sensor
   repo: johnkoht
@@ -1581,7 +1575,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.motion_basement_east
   repo: johnkoht
@@ -1593,7 +1587,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.mudroom_bathroom_motion
   repo: johnkoht
@@ -1623,13 +1617,13 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.ninos_door_sensor_status
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.nonna_presence
   repo: johnkoht
@@ -1653,19 +1647,19 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.office_door_right_status
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.office_doors
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.office_presence
   repo: johnkoht
@@ -1677,7 +1671,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.playroom_entry_motion_sensor_motion
   repo: johnkoht
@@ -1695,7 +1689,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.playroom_motion
   repo: johnkoht
@@ -1737,19 +1731,19 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.playroom_window_west_left_opening
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.pool_main_gate_opening
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.pool_motion_east_entry_occupancy
   repo: johnkoht
@@ -1773,13 +1767,13 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.powder_room_door
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.screek_human_sensor_l12_73d3d8_presence
   repo: johnkoht
@@ -1857,13 +1851,13 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.upstairs_hallway_bathroom_leak_sensor_moisture
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.upstairs_hallway_motion
   repo: johnkoht
@@ -1893,13 +1887,13 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.windows
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: climate.ac
   repo: johnkoht
@@ -2225,53 +2219,11 @@ refs:
   naming_convention: domain_room_function
   slot: fan
   constant: null
-- entity_ref: input_select.air_quality_state
-  repo: johnkoht
-  scope: room
-  naming_convention: domain_room_function
-  slot: house_mode
-  constant: null
-- entity_ref: input_select.cristina_sleep_state
-  repo: johnkoht
-  scope: room
-  naming_convention: domain_room_function
-  slot: house_mode
-  constant: null
 - entity_ref: input_select.gianluca_scene
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
   slot: scene_selector
-  constant: null
-- entity_ref: input_select.gianluca_sleep_state
-  repo: johnkoht
-  scope: room
-  naming_convention: domain_room_function
-  slot: house_mode
-  constant: null
-- entity_ref: input_select.house
-  repo: johnkoht
-  scope: room
-  naming_convention: domain_room_function
-  slot: house_mode
-  constant: null
-- entity_ref: input_select.john_focus_mode
-  repo: johnkoht
-  scope: room
-  naming_convention: domain_room_function
-  slot: house_mode
-  constant: null
-- entity_ref: input_select.john_sleep_state
-  repo: johnkoht
-  scope: room
-  naming_convention: domain_room_function
-  slot: house_mode
-  constant: null
-- entity_ref: input_select.nino_sleep_state
-  repo: johnkoht
-  scope: room
-  naming_convention: domain_room_function
-  slot: house_mode
   constant: null
 - entity_ref: input_select.office_scene
   repo: johnkoht
@@ -2913,13 +2865,13 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.garage_motion_sensor_illuminance
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.gianluca_bedroom_awair_humidity
   repo: johnkoht
@@ -3003,25 +2955,25 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.kitchen_motion_sensor_main_illuminance
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.kitchen_motion_sensor_table_illuminance
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.laundry_room_motion_sensor_illuminance
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.main_bathroom_humidity
   repo: johnkoht
@@ -3033,7 +2985,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.main_bathroom_temperature
   repo: johnkoht
@@ -3069,13 +3021,13 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.main_bedroom_motion_sensor_entry_illuminance
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.main_bedroom_temperature
   repo: johnkoht
@@ -3105,7 +3057,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.mudroom_motion_sensor_air_temperature
   repo: johnkoht
@@ -3117,7 +3069,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.nas_volume_1_average_disk_temp
   repo: johnkoht
@@ -3165,7 +3117,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.office_awair_humidity
   repo: johnkoht
@@ -3213,7 +3165,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.playroom_feels_like_temperature
   repo: johnkoht
@@ -3225,7 +3177,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.playroom_temperature
   repo: johnkoht
@@ -3267,7 +3219,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.tempest_humidity
   repo: johnkoht
@@ -3279,7 +3231,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sensor.tempest_temperature
   repo: johnkoht
@@ -3297,7 +3249,7 @@ refs:
   repo: johnkoht
   scope: room
   naming_convention: domain_room_function
-  slot: lux_sensor
+  slot: ambient_light_sensor
   constant: null
 - entity_ref: sun.sun
   repo: johnkoht
@@ -3345,7 +3297,7 @@ refs:
   repo: renemarc
   scope: room
   naming_convention: room_function_descriptive
-  slot: contact_sensor
+  slot: door_contact
   constant: null
 - entity_ref: binary_sensor.kiosk_motion
   repo: renemarc

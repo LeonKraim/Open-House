@@ -4,7 +4,7 @@
 makes those rooms *do* something. It builds the one `Engine` the whole project
 has -- the same class the simulator builds, deciding through the same
 `HouseAdapter` port -- and points it at a running Home Assistant through
-`HAAdapter`, so that a room's bound `motion_sensor` and `lux_sensor` drive its
+`HAAdapter`, so that a room's bound `motion_sensor` and `ambient_light_sensor` drive its
 bound `light_group` on Home Assistant's own terms rather than through a second,
 integration-shaped implementation of the rules. A second implementation is the
 failure the port exists to prevent (`design.md` D1): the simulator and the live
@@ -31,8 +31,9 @@ engine's house-scope gate resolves a behaviour's required slot by name and
 (`engine/binding.py`'s `resolve_slot`), before it can notice the slot is merely
 unbound. A document that declared only the slots some room happens to bind would
 therefore crash the tick of any house-scoped unit whose slot is unbound -- which
-is exactly the ordinary case, since `away_shutdown` requires a `house_mode` no
-room of a lighting-only setup binds. Declaring the vocabulary's `house_slots`
+is exactly the ordinary case, since a house-scoped unit such as `away_shutdown`
+requires `light_group` from the house scope, and a house need not have bound it.
+Declaring the vocabulary's `house_slots`
 instead makes an unbound house slot resolve *empty*, which is the engine's own
 way of saying "skip this behaviour", and it is why the document is built from the
 vocabulary rather than from the rooms.
@@ -70,6 +71,7 @@ from engine.solar import Location
 from engine.vocabulary import Vocabulary
 
 from .adapter import HAAdapter
+from .declared_units import installed_units, with_declared_slots
 from .transport import HaTransport
 
 __all__ = [
@@ -277,7 +279,9 @@ def build_live_house(
     location: Location,
     clock: Clock | None = None,
     house_settings: Mapping[str, object] | None = None,
+    house_bindings: Mapping[str, str] | None = None,
     installed: InstalledSet | None = None,
+    module_rooms: Mapping[str, str] | None = None,
     profiles: ProfileSet | None = None,
     state: Mapping[str, object] | None = None,
     adapter: HAAdapter | None = None,
@@ -308,6 +312,20 @@ def build_live_house(
     unavailable entity into an entity with no history -- which is a different
     house from the one that was running a moment ago, and would make the engine
     read a device that dropped out as a device that never existed.
+
+    `module_rooms` is the placement of each installed pack, and it is handed to
+    the engine because a module narrowed to a room has to know *which* room --
+    the one the person put it in. It is configuration the live path already keeps
+    (`ha_adapter.live.LiveSession.module_rooms`), and passing it here is what
+    makes a rebuild preserve the narrowing rather than resolve every module to
+    the house default.
+
+    `house_bindings` is the house's own binding per house-scope slot: the global
+    entity a person bound once on the House tab, which fills the slot in the
+    house scope and in every room that bound none of its own
+    (`engine.binding.resolve_slot`). It is not in the house document the schema
+    freezes -- that document binds slots room by room -- so it travels as its own
+    argument, from the session that persists it.
     """
     if not rooms:
         raise LiveHouseError("a live house needs at least one room")
@@ -315,18 +333,52 @@ def build_live_house(
     if len(set(ids)) != len(ids):
         raise LiveHouseError(f"two rooms share the id {ids}")
 
-    vocabulary = Vocabulary.load(vocabulary_root)
+    # The catalog's vocabulary, and then the devices the installed packs brought
+    # with them. `engine/binding.py` refuses a room binding a slot the vocabulary
+    # does not carry, so a pack that declares a device of its own -- a fridge's
+    # contact, which no room type provides -- is bindable only if its name joins
+    # the vocabulary when the pack installs (`declared_units.with_declared_slots`).
+    # The extension comes from the same registry the units are built from, so a
+    # restart restores the same house: the binds a person made and the words they
+    # were allowed to make them under.
+    vocabulary = with_declared_slots(
+        vocabulary_root, installed, Vocabulary.load(vocabulary_root)
+    )
     document = house_document(house_name, rooms, vocabulary)
-    house = House.from_document(document, vocabulary=vocabulary)
+    house = House.from_document(
+        document,
+        vocabulary=vocabulary,
+        bindings=house_bindings,
+    )
     if adapter is None:
         adapter = HAAdapter(transport=transport)
+    # The four shipped units, and then the atoms the house actually installed.
+    #
+    # Until this merge, `behaviours=` was `default_behaviours()` alone and a pack
+    # installed through the panel reached the engine only as a *record*: it was
+    # stored, listed, flagged and enabled, and evaluated by nothing, so enabling
+    # a module in a live house wrote a flag no unit read. The declared units are
+    # built from the same registry the panel installs from (`declared_units`),
+    # which is what makes a restart restore the atoms a person installed.
+    #
+    # Both sets are keyed by `id` and merged, because the engine keys units that
+    # way and the two cannot collide: a declared unit's id is pack-qualified
+    # (`pack.behaviour`, `engine/behaviours/declared.py`), and no shipped unit's
+    # id contains a dot.
+    behaviours = {
+        **default_behaviours(),
+        **{
+            unit.id: unit
+            for unit in installed_units(vocabulary_root, installed, vocabulary)
+        },
+    }
     engine = Engine(
         adapter=adapter,
         house=house,
         clock=SystemClock() if clock is None else clock,
         location=location,
         modes=ModeSet(mode_documents(modes), vocabulary=vocabulary),
-        behaviours=default_behaviours().values(),
+        behaviours=behaviours.values(),
         house_settings=house_settings,
         room_settings={
             room.id: {
@@ -338,6 +390,7 @@ def build_live_house(
         profile_settings=None if profiles is None else profiles.effective_house(),
         profile_room_settings=None if profiles is None else profiles.effective_rooms(),
         installed=installed,
+        module_rooms=module_rooms,
         state=state,
     )
     live = LiveHouse(engine=engine, adapter=adapter)

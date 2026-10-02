@@ -33,7 +33,7 @@ export const COMMANDS = {
   /** `{ room_id }` -> `RoomDetail`. */
   roomGet: "open_house/rooms/get",
 
-  /** `{ name, type }` -> `RoomDetail`. */
+  /** `{ name, room_type }` -> `RoomDetail`. */
   roomCreate: "open_house/rooms/create",
 
   /** `{ room_id, name? }` -> `RoomDetail`. */
@@ -86,8 +86,53 @@ export const COMMANDS = {
   /** `{ room_id, pack, enabled }` -> `InstalledModule`. */
   moduleSetEnabled: "open_house/modules/set_enabled",
 
+  /**
+   * `{ room_id, pack, behaviour, enabled }` -> `InstalledModule`.
+   *
+   * The atom's own switch, and the reason the modules screen lists behaviours at
+   * all. A pack is a bag of atoms -- "bedtime" is lights off, plus the
+   * thermostat, plus the locks -- and a person who wants the lights and not the
+   * locks turns one of them off here rather than not installing the pack.
+   * `behaviour` is the `InstalledModule.behaviours[].id` the listing already
+   * carries, which is pack-qualified (`bedtime.lights_off`); the declared bare
+   * name is accepted too.
+   *
+   * It answers the whole `InstalledModule` rather than the one behaviour,
+   * because the pack's own `enabled` chip is derived from its behaviours -- turn
+   * one atom off and the pack is no longer fully on -- and a caller that had to
+   * recompute that from a partial answer would be re-implementing the server's
+   * rule.
+   */
+  moduleSetBehaviourEnabled: "open_house/modules/set_behaviour_enabled",
+
+  /**
+   * `{ room_id, pack, behaviour, scope }` -> `InstalledModule`.
+   *
+   * The atom's reach, beside the atom's switch. `scope: "room"` runs a
+   * house-wide atom in the one room its module was installed into; `scope:
+   * "house"` runs a room's atom for every room. The manifest's declared scope
+   * is what a house that has never been asked gets, so this is a preference and
+   * not a required choice.
+   *
+   * It answers the whole `InstalledModule`, for the reason
+   * `moduleSetBehaviourEnabled` does: the module's own `scope` chip is derived
+   * from its behaviours' scopes, and the atom rows carry `widenable` -- the
+   * server's verdict on whether "house" is available to that atom at all.
+   */
+  moduleSetBehaviourScope: "open_house/modules/set_behaviour_scope",
+
   /** `{}` -> `{ modules: InstalledModule[] }`. */
   modulesList: "open_house/modules/list",
+
+  /**
+   * `{}` -> `HouseScope`.
+   *
+   * The house's own slots -- every light, every door, every thermostat, as the
+   * rooms' bindings collected in room order -- and the modules that act at
+   * house scope. Read-only: a house slot is not bound, it is collected, so the
+   * only edit to "all the lights" is a light in a room.
+   */
+  houseScope: "open_house/house/scope",
 
   /** `{}` -> `{ profiles: ProfileRef[] }`. */
   profilesList: "open_house/profiles/list",
@@ -132,3 +177,27 @@ export type CommandName = (typeof COMMANDS)[keyof typeof COMMANDS];
 
 /** The `open_house/` domain every error code is read against. */
 export const API_DOMAIN = "open_house";
+
+/**
+ * The refusals a command answers with, spelled as the server spells them.
+ *
+ * `websocket_api.py` names each of these once for the same reason: a code
+ * compared as a string literal in ten places is ten places a typo hides, and a
+ * typo in a comparison is not a build error -- it is a branch that silently
+ * never runs. They are here, beside `COMMANDS`, because both are the same
+ * contract read from the same two files.
+ */
+export const REFUSALS = {
+  /** The caller is not an administrator. */
+  unauthorized: "unauthorized",
+  /** No house has ever been made; the setup flow has not been run. */
+  notSetup: "not_setup",
+  /** A house exists but is between loads. The one worth asking again. */
+  notReady: "not_ready",
+  /** The room, slot, pack or profile named does not exist. */
+  notFound: "not_found",
+  /** The request itself is malformed, or a value is refused on its merits. */
+  invalidFormat: "invalid_format",
+} as const;
+
+export type RefusalCode = (typeof REFUSALS)[keyof typeof REFUSALS];

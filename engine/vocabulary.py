@@ -48,6 +48,14 @@ from tools.catalog.schemas import current_version, load_versions
 _SLOTS_PATH = ("catalog", "slots.yaml")
 _ROOM_TYPES_PATH = ("catalog", "room_types.yaml")
 _PACK_POLICY_PATH = ("catalog", "pack-policy.yaml")
+
+#: The service-to-state table: for a `domain.service` a manifest may declare, the
+#: state the engine's port writes on the entity it acts through. Read separately
+#: from `Vocabulary` rather than as a seventh field of it, for the reason
+#: `BehaviourVocabulary` gives below: `Vocabulary` is what a *resolution* reads,
+#: and this answers a Phase 2 question -- what a declared behaviour's command
+#: means -- that no Phase 1 rule asks.
+_SERVICE_STATES_PATH = ("catalog", "services.yaml")
 _HOUSE_SCHEMA_PATH = ("schemas", "house", "1.0.0.json")
 _MODE_SCHEMA_PATH = ("schemas", "mode", "1.0.0.json")
 
@@ -279,6 +287,48 @@ def load_behaviour_vocabulary(root: Path) -> BehaviourVocabulary:
             for axis in _BEHAVIOUR_VOCABULARY_FIELDS
         }
     )
+
+
+def load_service_states(root: Path) -> Mapping[str, str]:
+    """`catalog/services.yaml`, as a service-to-state table under `root`.
+
+    The engine's port takes a state -- "the light is `on`" -- while a manifest
+    declares a service -- "call `light.turn_on`". This is the artifact that knows
+    the one from the other, and it is a *mapping* rather than a field of
+    `Vocabulary`, because `Vocabulary` is what a resolution reads and this is what
+    the pack interpreter reads (`engine/behaviours/declared.py`).
+
+    A service with no row is absent from the table rather than mapped to itself.
+    The caller's job is to propose nothing for it: the port cannot perform a
+    service that writes no state, and writing the service's own name as a state
+    is what this table exists to stop.
+
+    Shape is checked here -- a row must have a string `service` and a non-empty
+    string `state` -- and *content* is the schema's business, the same division
+    `_pack_policy` draws: `oh-catalog validate` holds the file to
+    `schemas/catalog/services.json`, and re-deciding here which service names are
+    well formed would be a second definition of that schema.
+    """
+    path = root.joinpath(*_SERVICE_STATES_PATH)
+    document = _load_yaml(root, _SERVICE_STATES_PATH)
+    rows = document.get("services")
+    if not _is_list(rows):
+        raise MalformedArtifactError(path, "`services` list")
+    table: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise MalformedArtifactError(path, "service row")
+        service = row.get("service")
+        state = row.get("state")
+        if not isinstance(service, str) or not isinstance(state, str) or not state:
+            raise MalformedArtifactError(path, "service row's `service` and `state`")
+        if service in table:
+            # A duplicate is a fault and not a later-wins: two states for one
+            # service is a question this table answers twice, and which answer a
+            # reader got would depend on the file's order rather than on a rule.
+            raise MalformedArtifactError(path, f"one row for {service!r}")
+        table[service] = state
+    return table
 
 
 def _published_terms(

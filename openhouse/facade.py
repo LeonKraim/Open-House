@@ -20,7 +20,7 @@ ten act on rather than adding a verb none of the other faces would carry.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -32,9 +32,10 @@ from engine import sandbox as pack_sandbox
 from engine import vocabulary as engine_vocabulary
 from engine.adapter import ChangeContext, Fault, UnknownEntityError
 from engine.behaviours import default_behaviours
-from engine.behaviours.declared import DeclaredBehaviour
+from engine.behaviours.declared import DeclaredBehaviour, declared_units
 from engine.binding import House, HouseScope, resolve_slot
 from engine.decision_log import DecisionRecord, Outcome, ProposedCommand
+from engine.declared_slots import grow_vocabulary
 from engine.engine import Engine
 from engine.modes import ModeSet
 from engine.profiles import (
@@ -138,6 +139,22 @@ class OpenHouse:
     #: The current `schemas/profile/` document, kept so a profile added later is
     #: validated against the same version the set was built with.
     profile_schema: Mapping[str, object]
+    #: The vocabulary the session was opened with, before any pack's declared
+    #: devices joined it. The house's vocabulary is grown *onto this* and never
+    #: onto itself, because growth is not the only direction: uninstalling the
+    #: pack that brought `fridge_contact` has to take the word back out of the
+    #: house, or the room settings page goes on offering a device nothing
+    #: declares. `None` only ever on a session assembled by hand -- `open_session`
+    #: always passes it -- and then the house's own vocabulary is the base.
+    vocabulary: engine_vocabulary.Vocabulary | None = None
+    #: The manifest document of each installed pack, by pack name. Kept because a
+    #: declared slot joins the house's vocabulary by being *read from a
+    #: manifest*, and this session is where those manifests came from: the live
+    #: path reads them out of the registry by name, and a simulator install is
+    #: handed a file, so the file's document is what this session has to keep.
+    #: Ordered by pack name when read, so a slot two packs declare is the same
+    #: pack's on every run.
+    pack_documents: dict[str, Mapping[str, object]] = field(default_factory=dict)
     #: The rule-driven activator, when the session has one. `None` until
     #: `set_profile_rules` gives it rules.
     activator: ProfileActivator | None = None
@@ -259,22 +276,28 @@ class OpenHouse:
 
         The three checks are ordered by what each is a statement about, which is
         also the order a reader can act on them. Schema first: whether the file
-        is a pack at all. The slots against the house second: whether it is a
-        pack *for this house* -- the one question Phase 1 could answer and the
-        first one whose answer is a fact about a house rather than a file. The
-        sandbox third: whether what it declares is permitted anywhere, which is
-        about the repository and its policy rather than about who is asking.
-        Resolution last, because it is the only step that needs the packs already
-        in, and so the only one that can refuse a pack nothing is wrong with.
+        is a pack at all. The slots against the house second, which refuses a
+        slot name no vocabulary declares and *returns* the names this house
+        binds nowhere. The sandbox third: whether what it declares is permitted
+        anywhere, which is about the repository and its policy rather than about
+        who is asking. Resolution last, because it is the only step that needs
+        the packs already in, and so the only one that can refuse a pack nothing
+        is wrong with.
+
+        A slot this house binds nowhere is not a refusal here either: the record
+        carries it against an empty tuple, and that empty binding is what a later
+        reader -- and the live path's enable gate -- reads as "installed, not yet
+        wired". Refusing would have made the wiring unreachable on the live path,
+        where the room's configurable devices are the modules' own slots.
 
         The order between the house check and the sandbox is not arbitrary and is
         not free: the sandbox refuses a declared slot no vocabulary defines, and
-        so would the house check's second branch, and whichever runs second never
-        reaches that branch for a *required* slot. `packs.check_slots` runs first
-        because it is Phase 1's and its wording -- the distinction between a slot
-        no house can supply and one this house does not -- is the one the surface
-        has always reported. The sandbox keeps its own branch reachable through
-        the case the house check does not read: an *optional* slot no vocabulary
+        so does the house check, and whichever runs second never reaches that
+        branch for a *required* slot. `packs.check_slots` runs first because it
+        is Phase 1's and its wording -- the distinction between a slot no house
+        can supply and one this house does not -- is the one the surface has
+        always reported. The sandbox keeps its own branch reachable through the
+        case the house check does not read: an *optional* slot no vocabulary
         defines.
 
         The result grows beyond Phase 1's three keys, and that is a deliberate
@@ -341,10 +364,35 @@ class OpenHouse:
         record = resulting.packs[arrival.name]
         registered = {**self.behaviours, **{unit.id: unit for unit in units}}
         self.behaviours = registered
+        self.pack_documents[arrival.name] = loaded.document
+        self._regrow()
         self.engine = self._rebuild(
             self.simulation, state=self._state_holding(resulting, registered)
         )
         return _install_result(record)
+
+    def _regrow(self) -> None:
+        """Rebuild the house's vocabulary from the packs this session installed.
+
+        A pack that brings a device brings a *word*: `engine/binding.py` raises
+        when a room binds a slot no vocabulary carries, and `slots.yaml` has no
+        word for the button a bedtime pack declares or the contact a fridge pack
+        declares. So the declared names join the house's vocabulary for the
+        houses that install the pack, which is what makes the pack's own
+        requirement fillable -- and it is why this is a rebuild and not an
+        insertion: the merge is onto the session's *opening* vocabulary, so an
+        uninstall takes the word back out with the pack.
+
+        Rebuilt rather than mutated because the vocabulary is frozen and the
+        engine holds it: the house handed to the engine is the one whose
+        vocabulary the bindings were resolved against, and replacing a field
+        under a live engine would leave the two disagreeing about which words
+        the house has.
+        """
+        base = self.vocabulary if self.vocabulary is not None else self.house.vocabulary
+        grown = grow_vocabulary(base, tuple(sorted(self.pack_documents.items())))
+        if grown != self.house.vocabulary:
+            self.house = replace(self.house, vocabulary=grown)
 
     def uninstall_pack(self, name: str) -> Mapping[str, object]:
         """Remove a pack, its behaviours and its record, refusing to strand a dependent.
@@ -370,6 +418,8 @@ class OpenHouse:
             if unit not in removed
         }
         self.behaviours = registered
+        self.pack_documents.pop(name, None)
+        self._regrow()
         self.engine = self._rebuild(
             self.simulation, state=self._state_holding(resulting, registered)
         )
@@ -423,26 +473,20 @@ class OpenHouse:
     ) -> tuple[DeclaredBehaviour, ...]:
         """The pack's behaviours, as units the engine can evaluate while disabled.
 
-        The declared priority is the manifest's or the published default, and the
-        default is read from `catalog/pack-policy.yaml` rather than from a
-        constant here, because "two authors comparing packs compare a stated
-        number" is only true if the number a silent pack takes is published.
+        The projection itself is `engine.behaviours.declared.declared_units`, which
+        the live path calls too: this method is the simulator's call site rather
+        than a second builder, because two builders would be two answers to "what
+        does this pack do" and the live house would give the different one. What
+        is added here is the two artifacts the builder needs -- the published
+        default priority, read from `catalog/pack-policy.yaml` rather than from a
+        constant, and the service-to-state table, read from `catalog/services.yaml`
+        so a declared service becomes the state the port writes.
         """
-        fallback = self.house.vocabulary.pack_policy.default_priority
-        document = loaded.document
-        required = _names(document.get("requires_slots"))
-        optional = _names(document.get("optional_slots"))
-        return tuple(
-            DeclaredBehaviour(
-                pack=loaded.name,
-                name=name,
-                services=_names(row.get("services")),
-                slots=_names(row.get("slots")),
-                required_slots=required,
-                optional_slots=optional,
-                priority=_priority(row.get("priority"), fallback),
-            )
-            for name, row in _behaviour_rows(document)
+        return declared_units(
+            loaded.name,
+            loaded.document,
+            default_priority=self.house.vocabulary.pack_policy.default_priority,
+            service_states=engine_vocabulary.load_service_states(self.root),
         )
 
     def _bound(
@@ -462,9 +506,16 @@ class OpenHouse:
         rule keeps its single statement in `resolve_slot`; a room slot is
         collected across the rooms in the order `House.rooms` lists them, which
         is the same order the house scope collects in.
+
+        The key and not the written name, because that is what the record is
+        joined against and what a unit reads (`engine/declared_slots.py`): a
+        declaration the pack asked to hold separately reaches the house under a
+        pack-qualified key, and a record keyed by the name the manifest wrote
+        would answer "the house supplied nothing" for a device it had bound.
         """
         return tuple(
-            (slot, self._reached(slot)) for slot in sorted(projected.declared_slots)
+            (projected.bound_key(slot), self._reached(projected.bound_key(slot)))
+            for slot in sorted(projected.declared_slots)
         )
 
     def _reached(self, slot: str) -> tuple[str, ...]:
@@ -917,55 +968,6 @@ def _references(
     return tuple(references)
 
 
-def _behaviour_rows(
-    document: Mapping[str, object],
-) -> tuple[tuple[str, Mapping[str, object]], ...]:
-    """The manifest's behaviours, each with the name it is registered under.
-
-    The rows are read from the document rather than taken off the sandbox's
-    projection because one clause the projection deliberately drops is needed
-    here: `priority`, which arbitration ranks by and which only the manifest
-    states. The list is filtered the way `engine/manifest.py` filters its own
-    rows, so the two agree about which behaviours exist.
-    """
-    rows = document.get("behaviours")
-    if not isinstance(rows, list):
-        return ()
-    seen: list[tuple[str, Mapping[str, object]]] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        name = row.get("name")
-        if isinstance(name, str):
-            seen.append((name, row))
-    return tuple(seen)
-
-
-def _names(value: object) -> tuple[str, ...]:
-    """A clause that is a list of strings, or nothing when it is not one.
-
-    The sandbox reads the same clauses through its own projection; this is the
-    facade's reading for the fields a behaviour unit carries, and each entry the
-    schema typed as a string is kept as one.
-    """
-    if not isinstance(value, list):
-        return ()
-    return tuple(item for item in value if isinstance(item, str))
-
-
-def _priority(value: object, fallback: int) -> int:
-    """The declared priority, or the published default when none was stated.
-
-    `isinstance(value, int)` alone would admit `True`, which is an `int` and is
-    not a rank -- and the schema says `integer` and the vocabulary publishes an
-    `int`, so a boolean here is unreachable past validation rather than a
-    priority to rank by.
-    """
-    if isinstance(value, bool) or not isinstance(value, int):
-        return fallback
-    return value
-
-
 def _install_result(record: pack_install.InstalledPack) -> Mapping[str, object]:
     """What `install_pack` reports: the pack, and the facts that explain it.
 
@@ -1081,6 +1083,7 @@ def open_session(
         house=built,
         simulation=simulation,
         engine=engine,
+        vocabulary=built.vocabulary,
         source=source,
         root=where_root,
         seed=seed,

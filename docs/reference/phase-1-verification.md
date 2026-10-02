@@ -352,8 +352,8 @@ exists to surface.
   fixture: "motion in a dark room, then stillness advanced 299 s and then 1 s more -- the quiet-timeout boundary"
 - spec: first-behaviours
   requirement: The dark test is a lux reading when bound and the sun when not
-  test: tests/test_engine_tick.py::test_the_dark_test_falls_back_to_the_sun_when_no_lux_sensor_is_bound
-  fixture: "a room that binds no `lux_sensor`, with motion present -- the sun branch must decide and be named in the record"
+  test: tests/test_engine_tick.py::test_the_dark_test_falls_back_to_the_sun_when_no_ambient_light_sensor_is_bound
+  fixture: "a room that binds no `ambient_light_sensor`, with motion present -- the sun branch must decide and be named in the record"
 - spec: first-behaviours
   requirement: Behaviour timing is measured on the virtual clock
   test: tests/test_engine_tick.py::test_advancing_by_zero_takes_no_tick

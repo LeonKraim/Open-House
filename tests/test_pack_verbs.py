@@ -14,7 +14,7 @@ by nothing, and the module's stance is that nothing absent is reported as a pass
 `PackTestReport.untested`, and `ok` is false whenever it holds.
 
 **A failure carries its author.** Four classes and not one "failed": a scenario
-that will not load is the corpus's to fix, a house refusing the pack is the
+that will not load is the corpus's to fix, a pack the installation refuses is the
 pack's, and a run that disagreed with its own assertions is the scenario's. The
 suite asserts the class and not only that something failed, because the class is
 what tells a reader who fixes it.
@@ -37,6 +37,8 @@ from openhouse import pack_verbs
 from openhouse import scenarios as openhouse_scenarios
 from tools.catalog import paths
 
+from .packfactory import pack as generated_pack
+
 #: The shipped packs' own scenarios, which are the `test` verb's subject and sit
 #: beside the phase-1 corpus rather than in it -- see the directory's README.
 PACK_SCENARIOS = paths.ROOT / "scenarios" / "packs"
@@ -49,9 +51,10 @@ PACK_SCENARIOS = paths.ROOT / "scenarios" / "packs"
 #: resolves it, and a temporary manifest could not pin a file the sandbox finds.
 EXAMPLE_PACK = paths.PACKS / "official" / "example-pack.yaml"
 
-#: A pack the `minimal` fixture cannot hold: it requires the `fan` slot, which no
-#: room in that house binds, so installation refuses it before the first step.
-UNBINDABLE_PACK = paths.PACKS / "official" / "bathroom_fan.yaml"
+#: A pack the `minimal` fixture cannot hold *yet*: it requires the `fan` slot,
+#: which no room in that house binds. Installation accepts it -- a module lands
+#: unwired and disabled -- so this is a pack whose scenarios still run.
+UNWIRED_PACK = paths.PACKS / "official" / "bathroom_fan.yaml"
 
 #: The scenario every test but the corpus one runs: the light is set and then
 #: asserted, with no time advanced so no behaviour can move it between the step
@@ -158,22 +161,45 @@ def test_a_scenario_that_does_not_load_is_a_fixture_error(tmp_path: Path) -> Non
     assert "broken.yaml" in report.outcomes[0].message
 
 
-def test_a_pack_the_house_cannot_hold_is_a_pack_error_and_not_a_failure(
+def test_a_pack_no_house_could_hold_is_a_pack_error_and_not_a_failure(
     tmp_path: Path,
 ) -> None:
-    """A house refusing the pack is the pack's failure, before any step runs.
+    """A refusal at install is the pack's failure, before any step runs.
 
     Falsified by an install refusal reported as a failed run, or by the refusal
-    escaping: the `bathroom_fan` pack requires the `fan` slot the `minimal` house
-    binds nowhere, and no step of the scenario was ever reached, so crediting the
-    scenario with the failure would send its author to the wrong file.
+    escaping: the generated pack names a slot no vocabulary declares, which is a
+    name no house could ever supply, and no step of the scenario was ever
+    reached -- so crediting the scenario with the failure would send its author to
+    the wrong file.
+
+    **A pack this house has not wired yet is not this case.** A module whose
+    slots no room binds installs disabled and unsatisfiable and its scenarios run,
+    which is the rule below: the room's configurable devices are the modules' own
+    slots, so the module has to be in before the slot it wants can be filled.
     """
+    refused = generated_pack(tmp_path, "unbindable", requires=("nowhere_defined",))
     report = pack_verbs.test_pack(
-        UNBINDABLE_PACK, scenarios=[_scenario(tmp_path, "holds", "on")]
+        refused, scenarios=[_scenario(tmp_path, "holds", "on")]
     )
     assert _outcomes(report) == ["pack_error"]
     assert not report.ok
-    assert "fan" in report.outcomes[0].message
+    assert "nowhere_defined" in report.outcomes[0].message
+
+
+def test_a_pack_the_house_has_not_wired_yet_still_runs(tmp_path: Path) -> None:
+    """Installing is not activating, and an unwired module is not a refusal.
+
+    Falsified by the older rule that refused a pack whose required slots a room
+    binds nowhere: that refusal would make the wiring unreachable, because the
+    room's configurable devices are the modules' own slots and the module has to
+    be in before the slot it wants can be filled. `bathroom_fan` requires `fan`
+    and no room in the `minimal` fixture binds it, so this is exactly that case.
+    """
+    report = pack_verbs.test_pack(
+        UNWIRED_PACK, scenarios=[_scenario(tmp_path, "holds", "on")]
+    )
+    assert _outcomes(report) == ["passed"]
+    assert report.ok
 
 
 # -- one session per scenario, in the order named ----------------------------

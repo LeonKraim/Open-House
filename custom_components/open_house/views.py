@@ -50,7 +50,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 from homeassistant.core import HomeAssistant
@@ -59,7 +59,9 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.util import dt as dt_util
 
 from engine.adapter import domain_of
+from engine.declared_slots import optional_keys, required_keys
 from ha_adapter.composition import mode_name
+from ha_adapter.live import HOUSE
 from ha_adapter.setup_flow import (
     Candidate,
     load_room_types,
@@ -68,7 +70,12 @@ from ha_adapter.setup_flow import (
 )
 
 from .const import DOMAIN
-from .host import OpenHouseHost, RoomRef
+from .host import (
+    OpenHouseHost,
+    RoomRef,
+    entity_ids_house,
+    entity_ids_in_area,
+)
 from .repairs import NO_OCCUPANCY_SENSOR, OCCUPANCY_SENSOR_UNAVAILABLE, issue_id
 from .runtime import RoomRuntime
 
@@ -252,7 +259,7 @@ def room_summary(
     wants every room's count and the rooms tab wants every room, so computing
     them per row would be the same registry scan a quadratic number of times.
     """
-    provided = host.catalog.room_types.get(room.type, ())
+    provided = _configurable_slots(host, room)
     statuses = binding_statuses(hass, host, room)
     runtime = host.runtime_room(room.id)
     room_issues = health_issues(hass, host) if issues is None else issues
@@ -300,10 +307,25 @@ def room_detail(
         "bindings": list(binding_statuses(hass, host, room)),
         "options_schema": schema,
         "options": dict(values),
+        # The modules this room's page draws a card for, and the rule is
+        # `reaches_room` -- the *same* rule the schema above is built with. The
+        # two have to agree: the form carries a key for every pack that reaches
+        # the room, and each card claims the keys of its own pack
+        # (`pack_option_keys`), so a pack the form carries keys for and the list
+        # does not name leaves those keys with no card to sit under, and the
+        # panel collects them into one "Other settings" lump. That lump was the
+        # bug: another module's switches drawn anonymously at the bottom of the
+        # page, unsegregated and unattributable.
+        #
+        # A pack *placed in this room* is listed whether or not it reaches it --
+        # a module installed here with none of its roles bound still has to be
+        # switchable and removable -- and a pack placed elsewhere is listed when
+        # the room binds the roles it acts through. The card says where such a
+        # module lives, so the page never claims a module is in a room it is not.
         "modules": [
             module
             for module in live_modules.installed_modules(host.session)
-            if module["room_id"] in ("", room_id)
+            if module["room_id"] == room_id or _reaches_room(host, module, room_id)
         ],
         "active_profiles": selection,
         "mode": _room_mode(host.runtime_room(room_id)),
@@ -311,30 +333,115 @@ def room_detail(
     }
 
 
+def _reaches_room(
+    host: OpenHouseHost, module: Mapping[str, object], room_id: str
+) -> bool:
+    """Whether `room_id`'s settings form carries `module`'s settings.
+
+    `live_profiles.reaches_room` and nothing restated here: it is the rule the
+    room's schema is built with, and the room's module list has to use the same
+    one or the two disagree about which packs the room has.
+    """
+    from ha_adapter.live_profiles import reaches_room
+
+    record = host.session.engine.installed.get(str(module["pack"]))
+    return record is not None and reaches_room(host.session, record, room_id)
+
+
 def _room_mode(runtime: RoomRuntime | None) -> str:
     """A room's mode, as the select entity holds it, or empty when it has none."""
     return "" if runtime is None else str(runtime.mode or "")
 
 
+def _room_module_slots(
+    host: OpenHouseHost, room_id: str
+) -> tuple[frozenset[str], frozenset[str]]:
+    """The slots the modules installed in this room act through, and the ones they require.
+
+    Under `Modules` on the room's settings page, and nothing else: a device a
+    room has no module for is a device nobody has asked the room to hold, and
+    listing the whole published catalog -- or the room type's own shape -- put
+    fifteen rows of empty slots in front of a person who had installed one
+    module. The list is scoped to the room the pack was installed into, and a
+    pack installed at house scope carries the empty room id and counts for every
+    room, which is the same filter `room_detail` uses to list a room's modules.
+
+    Both halves come out of one pass because they are one question asked twice:
+    which slots are on the page, and which of them the room owes a device for. A
+    pack's `required: true` declaration is a requirement of the rooms holding the
+    pack, so `fridge_contact` is required in the room that installed the fridge
+    guard and is not a missing device anywhere else.
+
+    Keys, not written names: a declaration written `separate: true` binds under a
+    pack-qualified key (`engine/declared_slots.py`), and a list of written names
+    would offer the page a slot no binding can fill.
+    """
+    from ha_adapter import live_modules
+
+    slots: set[str] = set()
+    required: set[str] = set()
+    for module in live_modules.installed_modules(host.session):
+        if module["room_id"] not in ("", room_id):
+            continue
+        name = str(module["pack"])
+        document = host.catalog.manifests.get(name)
+        if document is None:
+            continue
+        slots.update(required_keys(name, document))
+        slots.update(optional_keys(name, document))
+        required.update(required_keys(name, document))
+    return frozenset(slots), frozenset(required)
+
+
+def _configurable_slots(host: OpenHouseHost, room: RoomRef) -> tuple[str, ...]:
+    """The slots this room can be given a device for.
+
+    The *installed modules'* slots and not the room type's, which is the rule the
+    whole "add any module to any room" behaviour rests on: a module may be
+    installed into any room, so the devices a room can hold are whatever a module
+    the room actually holds could act through, and a room type is a label rather
+    than a shape. The room's own bindings are unioned in as well, so a device the
+    room was given before the module that needed it was removed -- or before this
+    rule changed -- still shows rather than hiding behind a rule it predates; a
+    binding a person cannot see is a binding a person cannot unbind.
+
+    Sorted, because the list is room-independent and the two sources' orders
+    would otherwise be concatenated rather than merged.
+    """
+    provided, _ = _room_module_slots(host, room.id)
+    return tuple(sorted({*provided, *room.bindings}))
+
+
 def binding_statuses(
     hass: HomeAssistant, host: OpenHouseHost, room: RoomRef
 ) -> tuple[Mapping[str, object], ...]:
-    """Every slot the room's type provides, in the catalog's order.
+    """Every slot the room may bind, in slot-name order.
 
-    The slot list is the *type's*, not the room's bindings: a room's settings
-    page has to be able to show a slot that is empty, and a list built from the
-    bindings would be a list of the slots someone already filled.
+    The slot list is the installed modules' and the room's own bindings', not the
+    room *type*'s (`_configurable_slots`), and it is not only the bindings
+    either: a room's settings page has to be able to show a slot that is empty,
+    and a list built from the bindings alone would be a list of the slots someone
+    already filled.
+
+    `required` is the module's verdict with the catalog's set behind it: a slot
+    an installed pack requires is required, and a slot the catalog marks required
+    that happens to be on the page for another reason still reads that way. What
+    is gone is the catalog's mark on a slot no installed module needs -- it is
+    not on the page at all, and a room cannot be short of a device nothing asked
+    it for.
     """
     catalog = host.catalog
     entities = er.async_get(hass)
+    _, module_required = _room_module_slots(host, room.id)
     result: list[Mapping[str, object]] = []
-    for slot in catalog.room_types.get(room.type, ()):
+    for slot in _configurable_slots(host, room):
         entity_id = room.bindings.get(slot)
         accepted = tuple(catalog.slot_domains.get(slot, ()))
         status: Mapping[str, object] = {
             "slot": slot,
             "label": label(slot),
-            "required": catalog.slot_required.get(slot, False),
+            "required": slot in module_required
+            or catalog.slot_required.get(slot, False),
             "accepts_domains": list(accepted),
             "entity_id": None,
             "registry_id": None,
@@ -396,6 +503,32 @@ def _status_of(state: Any, domain: str, accepted: tuple[str, ...]) -> str:
     return "ok"
 
 
+def house_scope(host: OpenHouseHost) -> Mapping[str, object]:
+    """The House tab's answer, with the catalog's domains joined in.
+
+    `live_modules.house_scope` builds the rows -- the global binding, its live
+    state, the modules that reach the role -- from the engine's own vocabulary,
+    which deliberately carries no domains (`engine/vocabulary.py`). The slot
+    *rows* need them: the bind picker says what a slot accepts, and a house slot
+    drawn without that says "any device" for a role that only takes lights. The
+    catalog is Home Assistant's half (`host.catalog`), so the join happens here,
+    the same place a room's bindings get theirs.
+    """
+    from ha_adapter import live_modules
+
+    scope = dict(live_modules.house_scope(host.session))
+    catalog = host.catalog
+    rows = cast("Sequence[Mapping[str, object]]", scope["slots"])
+    scope["slots"] = tuple(
+        {
+            **row,
+            "accepts_domains": list(catalog.slot_domains.get(str(row["slot"]), ())),
+        }
+        for row in rows
+    )
+    return scope
+
+
 def candidates(
     hass: HomeAssistant,
     host: OpenHouseHost,
@@ -412,16 +545,25 @@ def candidates(
     exists but is filed elsewhere is a device the room has not been told about,
     and proposing it would quietly move a device into a room by binding it.
 
+    `room_id` may be `HOUSE`, for a global slot, which belongs to no room: its
+    candidate set is every entity the house holds (`entity_ids_house`), because
+    "the house's lights" is a role the whole house can fill and narrowing it to
+    one area would be picking a room on the person's behalf.
+
     The ordering is `rank_candidates`', the same call the setup flow's guess is
     the winner of, so the picker a person is shown ranks the way the flow would
     have guessed.
     """
-    room = host.require_room(room_id)
     domains = host.catalog.slot_domains.get(slot, ())
+    entity_ids = (
+        entity_ids_house(hass)
+        if room_id == HOUSE
+        else entity_ids_in_area(hass, host.require_room(room_id).area_id)
+    )
     ranked: tuple[Candidate, ...] = rank_candidates(
         slot=slot,
         domains=domains,
-        entity_ids=_area_entity_ids(hass, room.area_id),
+        entity_ids=entity_ids,
         names=_friendly_names(hass),
         query=query,
         limit=limit,
@@ -441,12 +583,6 @@ def candidates(
         }
         for candidate in ranked
     )
-
-
-def _area_entity_ids(hass: HomeAssistant, area_id: str) -> tuple[str, ...]:
-    """Every entity Home Assistant files under an area, sorted for determinism."""
-    entries = er.async_entries_for_area(er.async_get(hass), area_id)
-    return tuple(sorted(entry.entity_id for entry in entries))
 
 
 def _friendly_names(hass: HomeAssistant) -> Mapping[str, str]:
@@ -707,6 +843,10 @@ class Catalog:
 
     room_types: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     slot_domains: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    #: Slot name -> whether `catalog/slots.yaml` marks it required. Read behind
+    #: the installed modules rather than in front of them: a room's page lists
+    #: the slots its modules act through (`_room_module_slots`) and this only
+    #: says which of those the catalog also calls required.
     slot_required: Mapping[str, bool] = field(default_factory=dict)
     #: The registry index's entries, in the file's order.
     records: tuple[Mapping[str, Any], ...] = ()

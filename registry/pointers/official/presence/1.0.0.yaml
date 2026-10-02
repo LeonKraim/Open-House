@@ -1,0 +1,7 @@
+name: presence
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/derived/presence.yaml
+sha256: sha256:9e617274b0594d5a025cecaef4d0b6ff506c63761e4a5b49e9e244eef8e47214
+tier: official

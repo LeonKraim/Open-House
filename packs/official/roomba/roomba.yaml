@@ -3,7 +3,9 @@
 #
 # Documentation rather than input, and the class is read off the file. The
 # vacuum is reached by the slot the manifest declares and never by a device id,
-# which is why no `domain.object_id` appears here.
+# which is why no `domain.object_id` appears here. The state each act answers is
+# the manifest's `match` clause -- this file shows the act and the slot, and the
+# readings are the pack's, checked against the schema's strings.
 alias: Roomba button
 trigger:
   - platform: state

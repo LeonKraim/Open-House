@@ -16,6 +16,19 @@ import { OpenHouseElement } from "../base.ts";
 import type { ImportDiffRow, ImportPreview } from "../api/models.ts";
 
 export class ImportExportTab extends OpenHouseElement {
+  static override properties = {
+    ...OpenHouseElement.properties,
+    exportPreview: { state: true },
+    preview: { state: true },
+    pending: { state: true },
+    fileLabel: { state: true },
+    relinkChoice: { state: true },
+    isLoading: { state: true },
+    busy: { state: true },
+    error: { state: true },
+    notice: { state: true },
+  };
+
   private exportPreview = "";
   private preview: ImportPreview | null = null;
   private pending: unknown = null;

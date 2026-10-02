@@ -97,7 +97,7 @@ def _hall() -> LiveRoom:
         type="hallway",
         bindings={
             "motion_sensor": HALL_MOTION,
-            "lux_sensor": HALL_LUX,
+            "ambient_light_sensor": HALL_LUX,
             "light_group": HALL_LIGHT,
         },
     )
@@ -197,7 +197,7 @@ def test_the_export_describes_the_house_the_engine_is_deciding_for() -> None:
     ]
     assert rooms[0]["bindings"] == {
         "light_group": {"registry_id": "hall", "entity_id": HALL_LIGHT},
-        "lux_sensor": {"registry_id": "hall_lux", "entity_id": HALL_LUX},
+        "ambient_light_sensor": {"registry_id": "hall_lux", "entity_id": HALL_LUX},
         "motion_sensor": {"registry_id": "hall_motion", "entity_id": HALL_MOTION},
     }
 
@@ -225,7 +225,7 @@ def test_the_export_carries_the_modes_the_session_gates_on() -> None:
 def test_an_entity_with_no_registry_id_keeps_the_derived_one() -> None:
     document = live_export.export_document(_session(), registry_ids={})
     rooms = cast("list[Mapping[str, object]]", document["rooms"])
-    written = cast("Mapping[str, object]", rooms[0]["bindings"])["lux_sensor"]
+    written = cast("Mapping[str, object]", rooms[0]["bindings"])["ambient_light_sensor"]
     assert cast("Mapping[str, object]", written)["registry_id"] == "hall_lux"
 
 
@@ -539,7 +539,7 @@ def test_the_reason_is_plain_language_built_from_the_records_own_fields() -> Non
         Outcome.ACTED,
         inputs=(
             SlotRead(
-                slot="lux_sensor",
+                slot="ambient_light_sensor",
                 entities=(HALL_LUX,),
                 reduction=Reduction.ANY,
             ),
@@ -559,7 +559,7 @@ def test_the_reason_is_plain_language_built_from_the_records_own_fields() -> Non
     reason = cast("str", entry["reason"])
     assert reason.startswith("motion_lighting acted.")
     assert "motion.light_on" in reason
-    assert "lux_sensor" in reason
+    assert "ambient_light_sensor" in reason
     assert HALL_LUX in reason
     assert "The home mode was active." in reason
     assert f"It changed {HALL_LIGHT} from 'off' to 'on'." in reason

@@ -3,10 +3,12 @@
 Five properties hold this module together, and each is a way the derivation could
 report a set it did not earn.
 
-**The bound is counted, not restated.** The requirement says nineteen reusable
-rows against sixty-four `ideas_only` ones, and a derivation that printed those two
-numbers would keep printing them after the corpus changed. The report counts them,
-and the count is asserted here, so the derived set's size is a consequence of
+**The bound is counted, not restated.** The requirement named nineteen reusable
+rows against sixty-four `ideas_only` ones, and a derivation that printed those
+two numbers would keep printing them after the corpus changed -- as it since has,
+when the `fwartner` and `johnkoht` authors granted unrestricted reuse on
+2026-10-02 and every row became reusable. The report counts them, and the count
+is asserted here, so the derived set's size is a consequence of
 `catalog/behaviors.yaml` and not of a constant.
 
 **Every row is accounted for, emitted or skipped.** `accounted` is asserted
@@ -30,7 +32,14 @@ The four tests that need a corpus the committed one does not hold -- an
 `ideas_only` row that is otherwise emittable, a reusable row licensed
 `no_licence`, a row whose expression names a banned service -- write a corpus into
 a temporary directory and point `tools.catalog.paths.CATALOG` at it. They are the
-tests that make three of the four skip reasons reachable rather than declared.
+tests that make three of the six skip reasons reachable rather than declared.
+
+**The act decides which slot the pack commands.** A derived behaviour's `slots`
+are the row's own list and the slots its acts name, and the file the pack pins
+targets those slots. Both come from `catalog/slots.yaml`'s `accepts_domains`,
+which is the authority the vocabulary check already compares every hand-written
+slot against -- so `light.turn_off` happening through `light_group` is the
+vocabulary's claim and not a second list kept in the derivation.
 """
 
 from __future__ import annotations
@@ -54,11 +63,13 @@ ROOT = paths.ROOT
 DERIVED = ROOT / "packs" / "derived"
 OFFICIAL = ROOT / "packs" / "official"
 
-#: The row the committed corpus can ground a pack from, and the pack it grounds.
-#: Named rather than searched for, so a derivation that started grounding a
-#: different row fails here instead of passing over a set of the right size.
+#: A row the committed corpus grounds a behaviour from, and the module it lands
+#: in. Named rather than searched for, so the tests about a module's shape -- its
+#: `provides` entries, its `derives_from` -- agree on one exemplar. The module is
+#: the row's own namespace, because a pack is a family of rows and not a row.
 SOURCE_ROW = "lighting.outdoor_landscape"
-DERIVED_NAME = "lighting_outdoor_landscape"
+SOURCE_BEHAVIOUR = "outdoor_landscape"
+DERIVED_NAME = "lighting"
 
 #: The catalog files a fixture project has to carry beside its own corpus: the
 #: slot vocabulary, the room types the house scope is read off, and the policy
@@ -131,28 +142,75 @@ def corpus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 # -- 8.1: the derivation over the corpus ------------------------------------
 
 
-def test_the_derived_set_is_the_one_pack_the_corpus_can_ground() -> None:
-    """The committed corpus grounds one pack, and the report says why not more.
+def test_the_derived_set_is_every_row_the_corpus_can_ground() -> None:
+    """The committed corpus grounds fifty-nine behaviours in ten modules.
 
-    Falsified by a derivation that emits a pack per reusable row: eighteen of the
-    nineteen carry no `expression`, and a pack built from one of them would be a
-    behaviour the corpus does not hold -- the "hand-written pack under a derived
-    label" task 8.1 forbids for an `ideas_only` row and forbids here for the same
-    reason. Falsified too by a report that hard-codes the bound: the counts are
+    The report counts both numbers, so neither the derived set's size nor the
+    shape it is gathered into is a constant this module asserts on its own.
+
+    The corpus held sixty-four `ideas_only` rows against nineteen reusable ones
+    until the `fwartner` and `johnkoht` authors granted unrestricted reuse on
+    2026-10-02; every row is now reusable and carries an authored `expression`.
+    Two gates still stand between a reusable row and a pack, and both are the
+    corpus's own word about the row rather than a rule this derivation invented:
+    one row is classified `discard`, which the corpus's own requirement keeps for
+    the audit and excludes from the shipped set, and twenty-three do nothing but
+    flip an `input_boolean` or an `input_select` -- a helper, which is state a
+    house keeps rather than a device it has, so the row is the machinery behind a
+    state the engine already models for itself and there is nothing to install.
+
+    Falsified by a derivation that skips a row it could ground -- `reasons()`
+    would then carry a non-zero count while `accounted` still summed to the
+    corpus -- and by a report that hard-codes the bound, since the counts are
     read off the corpus and asserted against it.
     """
     report = pack_verbs.derive_packs(write=False)
 
     assert report.bound.rows == 83
-    assert report.bound.reusable == 19
-    assert report.bound.ideas_only == 64
-    assert report.bound.licences == {"apache_2_0": 9, "mit": 10}
+    assert report.bound.reusable == 83
+    assert report.bound.ideas_only == 0
+    assert report.bound.licences == {"apache_2_0": 24, "mit": 30, "public_domain": 29}
 
-    assert [pack.row for pack in report.emitted] == [SOURCE_ROW]
-    assert report.reasons()["no_expression"] == 18
-    assert report.reasons()["ideas_only"] == 64
-    assert report.reasons()["licence_too_restrictive"] == 0
-    assert report.reasons()["refused"] == 0
+    rows = [
+        row["id"]
+        for row in yaml.safe_load(
+            (ROOT / "catalog" / "behaviors.yaml").read_text(encoding="utf-8")
+        )["behaviors"]
+    ]
+    emitted = [identifier for pack in report.emitted for identifier in pack.rows]
+    skipped = {row.row for row in report.skipped}
+
+    assert report.reasons() == {
+        "ideas_only": 0,
+        "licence_too_restrictive": 0,
+        "discarded": 1,
+        "helper_act": 23,
+        "no_expression": 0,
+        "refused": 0,
+    }
+    # Emitted rows are the corpus's rows less the ones a gate took, so the set's
+    # size is read off the corpus rather than pinned -- and the order is the
+    # families' because that is what a report and a Store listing show, with each
+    # family's own rows in the corpus's order.
+    assert sorted(emitted) == sorted(row for row in rows if row not in skipped)
+    for pack in report.emitted:
+        assert list(pack.rows) == [row for row in rows if row in set(pack.rows)]
+    assert len(emitted) == 59
+    # And the rows are gathered into one module per id namespace, which is the
+    # shape a Store card has: ten ideas, not fifty-nine cards.
+    assert len(report.emitted) == 10
+    assert sorted(pack.name for pack in report.emitted) == [
+        "cleaning",
+        "climate",
+        "laundry",
+        "lighting",
+        "media",
+        "modes",
+        "notifications",
+        "presence",
+        "security",
+        "system",
+    ]
 
 
 def test_the_report_names_every_row_and_caps_nothing() -> None:
@@ -170,7 +228,9 @@ def test_the_report_names_every_row_and_caps_nothing() -> None:
             (ROOT / "catalog" / "behaviors.yaml").read_text(encoding="utf-8")
         )["behaviors"]
     }
-    named = {pack.row for pack in report.emitted} | {row.row for row in report.skipped}
+    named = {identifier for pack in report.emitted for identifier in pack.rows} | {
+        row.row for row in report.skipped
+    }
 
     assert report.accounted == report.bound.rows == len(rows)
     assert named == rows
@@ -192,9 +252,10 @@ def test_no_pack_is_derived_from_an_ideas_only_row() -> None:
     report = pack_verbs.derive_packs(write=False)
 
     for pack in report.emitted:
-        assert rows[pack.row]["reuse_status"] == "reusable"
+        for identifier in pack.rows:
+            assert rows[identifier]["reuse_status"] == "reusable"
         document = yaml.safe_load(pack.manifest_text)
-        assert document["derives_from"] == [pack.row]
+        assert document["derives_from"] == list(pack.rows)
     for skipped in report.skipped:
         if skipped.reason == "ideas_only":
             assert rows[skipped.row]["reuse_status"] == "ideas_only"
@@ -223,40 +284,53 @@ def test_an_emitted_pack_validates_under_the_current_schema() -> None:
 
 
 def test_the_emitted_pack_pins_a_file_inside_its_own_directory() -> None:
-    """The pack confers a file, and the file is inside the pack and is what it says.
+    """The module confers one file per behaviour, each inside the module's directory.
 
     Falsified by a `provides` path that resolves anywhere else -- the escaping
     path the sandbox refuses -- or by a pinned file whose class the entry
-    misdeclares, and by a pinned file that does not exist at all.
+    misdeclares, and by a pinned file that does not exist at all. One pinned file
+    per behaviour is the claim: a module that conferred one file for fifteen
+    behaviours would install fifteen switches over one automation.
     """
     manifest = engine_manifest.load_manifest(DERIVED / f"{DERIVED_NAME}.yaml")
     entries = manifest.document["provides"]
+    behaviours = manifest.document["behaviours"]
     assert isinstance(entries, list)
-    [entry] = entries
-    assert isinstance(entry, dict)
-    pinned = ROOT / str(entry["path"])
+    assert isinstance(behaviours, list)
+    assert len(entries) == len(behaviours) == len(manifest.document["derives_from"])
 
-    assert pinned.is_file()
-    assert pinned.parent == DERIVED / DERIVED_NAME
-    assert sandbox.file_class(pinned) == entry["class"] == "automation"
+    names: list[str] = []
+    for entry in entries:
+        assert isinstance(entry, dict)
+        pinned = ROOT / str(entry["path"])
+        assert pinned.is_file()
+        assert pinned.parent == DERIVED / DERIVED_NAME
+        assert sandbox.file_class(pinned) == entry["class"] == "automation"
+        names.append(pinned.stem)
+    assert SOURCE_BEHAVIOUR in names
 
 
-def test_the_emitted_pack_declares_the_row_it_derives_from() -> None:
-    """A derived pack's licence is one its row's grant supports, and it says so.
+def test_the_emitted_pack_declares_every_row_it_derives_from() -> None:
+    """A module's licence is one every row's grant supports, and it says which.
 
-    Falsified by a pack whose `derives_from` names nothing, or names a row it did
-    not come from, or claims a licence narrower than the source grants -- the
-    three claims `engine.manifest`'s derivation gate exists to judge.
+    Falsified by a module whose `derives_from` names nothing, or names a row it
+    did not come from, or claims a licence narrower than any one of its sources
+    grants -- the three claims `engine.manifest`'s derivation gate exists to
+    judge. The licence is checked against *every* row rather than the first,
+    because a module is the widest of its rows' grants and a check that read one
+    row would pass a module that borrowed another row's narrower terms.
     """
     artifacts = load_manifest_artifacts(ROOT)
     manifest = engine_manifest.load_manifest(DERIVED / f"{DERIVED_NAME}.yaml")
     declared = manifest.document["derives_from"]
+    assert isinstance(declared, list)
 
-    assert declared == [SOURCE_ROW]
-    row = artifacts.corpus[SOURCE_ROW]
-    assert not artifacts.licences.more_restrictive(
-        str(manifest.document["license"]), row.license
-    )
+    assert SOURCE_ROW in declared
+    for identifier in declared:
+        row = artifacts.corpus[str(identifier)]
+        assert not artifacts.licences.more_restrictive(
+            str(manifest.document["license"]), row.license
+        )
 
 
 # -- 8.2 and 8.4: the report, and reproducibility ---------------------------
@@ -275,8 +349,8 @@ def test_two_runs_produce_byte_identical_packs() -> None:
     assert [(pack.name, pack.manifest_text) for pack in first.emitted] == [
         (pack.name, pack.manifest_text) for pack in second.emitted
     ]
-    assert [pack.artefact_text for pack in first.emitted] == [
-        pack.artefact_text for pack in second.emitted
+    assert [pack.artefacts for pack in first.emitted] == [
+        pack.artefacts for pack in second.emitted
     ]
 
 
@@ -292,9 +366,9 @@ def test_the_committed_tree_is_the_derivations_own_output() -> None:
         path.relative_to(ROOT).as_posix(): path.read_text(encoding="utf-8")
         for path in DERIVED.rglob("*.yaml")
     }
-    rendered = {pack.manifest_path: pack.manifest_text for pack in report.emitted} | {
-        pack.artefact_path: pack.artefact_text for pack in report.emitted
-    }
+    rendered = {pack.manifest_path: pack.manifest_text for pack in report.emitted}
+    for pack in report.emitted:
+        rendered.update(pack.artefacts)
 
     assert written == rendered
 
@@ -313,7 +387,8 @@ def test_the_derivation_writes_only_inside_its_destination(tmp_path: Path) -> No
     assert report.written
     for pack in report.emitted:
         assert (tmp_path / pack.manifest_path).is_file()
-        assert (tmp_path / pack.artefact_path).is_file()
+        for path, _ in pack.artefacts:
+            assert (tmp_path / path).is_file()
     assert pack_verbs.validate_directory(destination, root=tmp_path).ok
     assert not (tmp_path / "packs" / "official").exists()
 
@@ -337,13 +412,13 @@ def test_the_derivation_sweeps_its_own_earlier_output_and_nothing_else(
     note = destination / "notes.md"
     note.write_text("A person wrote this.\n", encoding="utf-8")
 
-    pack_verbs.derive_packs(destination, root=tmp_path)
+    report = pack_verbs.derive_packs(destination, root=tmp_path)
 
     assert not stale.exists()
     assert note.is_file()
-    assert sorted(path.name for path in destination.glob("*.yaml")) == [
-        f"{DERIVED_NAME}.yaml"
-    ]
+    assert sorted(path.name for path in destination.glob("*.yaml")) == sorted(
+        f"{pack.name}.yaml" for pack in report.emitted
+    )
 
 
 def test_a_destination_outside_the_tree_is_a_usage_error(tmp_path: Path) -> None:
@@ -551,7 +626,7 @@ def test_a_reproducible_row_is_emitted_with_the_terms_its_expression_names(
                     "condition": ["state"],
                     "action": ["light.turn_on"],
                 },
-                optional_slots=["lux_sensor"],
+                optional_slots=["ambient_light_sensor"],
             )
         ],
     )
@@ -560,15 +635,19 @@ def test_a_reproducible_row_is_emitted_with_the_terms_its_expression_names(
     assert report.ok
     [pack] = report.emitted
     document = yaml.safe_load(pack.manifest_text)
-    assert document["name"] == "fixture_lights"
+    assert document["name"] == "fixture"
     assert document["license"] == "mit"
-    assert document["kind"] == "behavior"
-    assert document["requires_slots"] == ["light_group"]
-    assert document["optional_slots"] == ["lux_sensor"]
+    assert document["kind"] == "module"
+    # Nothing is required and everything the module can read is optional, so a
+    # room missing the light still installs the module and the behaviour that
+    # wanted it is inert rather than the module being uninstallable.
+    assert document["requires_slots"] == []
+    assert document["optional_slots"] == ["light_group", "ambient_light_sensor"]
     assert document["derives_from"] == ["fixture.lights"]
     assert document["behaviours"] == [
         {
             "name": "lights",
+            "scope": "room",
             "trigger": "sun",
             "condition": "state",
             "action": "service",

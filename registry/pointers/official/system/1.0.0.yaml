@@ -1,0 +1,7 @@
+name: system
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/derived/system.yaml
+sha256: sha256:dd9e0838185af93606da699d0275ba6cbe02709d2bc7f5459562bd542eeed65b
+tier: official

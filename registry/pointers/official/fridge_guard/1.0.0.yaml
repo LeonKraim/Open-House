@@ -1,0 +1,7 @@
+name: fridge_guard
+version: 1.0.0
+repo: .
+commit: 56bb1339db12bc800d40147e2e98df4d721fbf13
+path: packs/official/fridge-guard.yaml
+sha256: sha256:8db9c4e7e3305bba1c3177b4816537d9b293e0bc4e13746cd422ac11aa257659
+tier: official

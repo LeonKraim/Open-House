@@ -350,10 +350,22 @@ def test_the_committed_corpus_is_free_of_withheld_identifiers(real_root: Path) -
     assert report.ok, report.render()
 
 
-def test_the_gate_actually_has_rows_to_judge(real_root: Path) -> None:
-    """A gate that judged nothing would pass the test above by accident."""
+def test_the_gate_actually_has_rows_to_judge(fake_root: Path) -> None:
+    """A gate that judged nothing would pass the cleanliness check by accident.
+
+    Built on a fixture because no committed repo withholds any more: the
+    `fwartner` and `johnkoht` authors granted unrestricted reuse on 2026-10-02,
+    every committed record is now `reusable`, and a guard asserting a withholding
+    row in the committed corpus would assert something it no longer holds. The
+    fixture supplies the withholding repo the guard needs.
+    """
     from tools.catalog import behaviors, licenses
 
+    _setup(
+        fake_root,
+        [_row(id="lighting.withheld", source_repos=["johnkoht"])],
+        [_record("johnkoht_a_yaml", [BORROWED])],
+    )
     statuses = {rec.repo: rec.reuse_status_code for rec in licenses.load_licences()}
     rows = behaviors.load_behaviors()
     withheld = [

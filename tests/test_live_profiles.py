@@ -93,7 +93,7 @@ def _room(name: str = "hall") -> LiveRoom:
         type="hallway",
         bindings={
             "motion_sensor": "binary_sensor.hall_motion",
-            "lux_sensor": "sensor.hall_lux",
+            "ambient_light_sensor": "sensor.hall_lux",
             "light_group": "light.hall",
         },
     )
@@ -385,3 +385,78 @@ def test_activating_a_profile_for_an_unknown_room_is_refused() -> None:
     session = _session(profiles_=_profile_set((_room_profile("evening", "lighting"),)))
     with pytest.raises(LiveSessionError, match="no room 'kitchen'"):
         activate(session, room_id="kitchen", axis="lighting", profile="evening")
+
+
+# --------------------------------------------------------------------------
+# The roles a module addresses
+# --------------------------------------------------------------------------
+
+
+def _declared_installed() -> InstalledSet:
+    """The committed example pack, as an installed record names it.
+
+    The real published manifest rather than a fixture: `installed_units` reads
+    the pack's text through `registry/index.json`, so a hand-written dictionary
+    here would test a document no live house ever builds a unit from. Its one
+    behaviour declares `slots: [motion_sensor, light_group]`, and the action slot
+    -- the last -- is what the reach controls are derived from.
+    """
+    record = InstalledPack(
+        name="example_pack",
+        version="1.0.0",
+        digest="sha256:example",
+        slots=(
+            ("light_group", ("light.hall",)),
+            ("motion_sensor", ("binary_sensor.hall_motion",)),
+        ),
+        # The unit id, not the manifest's bare behaviour name: a declared unit is
+        # keyed by the pack and the name together (`behaviour_id`), which is why
+        # the record's `behaviours` and the engine's registry are one spelling.
+        behaviours=("example_pack.motion_turns_on_light",),
+    )
+    return InstalledSet({record.name: record})
+
+
+def test_a_declared_packs_action_role_is_a_checkbox_in_the_rooms_options() -> None:
+    """The chain from a manifest's `slots` to the field a person unticks.
+
+    Three links have to hold at once and each has its own way of failing
+    silently: the unit has to be built from the *published* manifest (a registry
+    root that cannot load the pack contributes nothing, and the symptom is an
+    empty form), the action slot has to be the one the services write through
+    (the last declared slot, so `light_group` and not `motion_sensor`), and the
+    key has to be the one the engine resolves under, because a checkbox whose
+    name the behaviour never reads is a control that changes nothing.
+    """
+    schema, values = options(_session(installed=_declared_installed()), room_id="hall")
+
+    assert schema is not None
+    key = "module.example_pack.reach.light_group"
+    node = schema["properties"][key]
+    assert node["type"] == "boolean"
+    assert node["default"] is True
+    assert node["title"] == "Act on light group"
+    assert values[key] is True
+    # The watched slot is not a role the module addresses, so it draws nothing:
+    # a control per *slot* rather than per action slot would offer a checkbox that
+    # no behaviour reads.
+    assert "module.example_pack.reach.motion_sensor" not in schema["properties"]
+
+
+def test_unticking_a_role_writes_the_room_override_the_engine_reads() -> None:
+    """The field is a setting, not an announcement: the value resolves back.
+
+    `set_option` is the same one write every other field on the page makes, so
+    the assertion is on the *layer* -- the override, which outranks the pack's
+    default and the room's own -- because a checkbox that appeared to save and
+    wrote nothing would read back as `True` and look correct.
+    """
+    session = _session(installed=_declared_installed())
+    key = "module.example_pack.reach.light_group"
+
+    _schema, values = set_option(session, room_id="hall", key=key, value=False)
+
+    assert values[key] is False
+    resolved = session.engine.settings.resolve(key, RoomScope("hall"))
+    assert resolved.value is False
+    assert resolved.layer is Layer.OVERRIDE

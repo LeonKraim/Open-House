@@ -1,0 +1,7 @@
+name: bathroom_fan
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/official/bathroom_fan.yaml
+sha256: sha256:9328073960113cfce89b3ed65e5d99b1d0044d4b7b7decf7c2459a8c6470cde8
+tier: official

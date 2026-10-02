@@ -106,7 +106,7 @@ def test_a_room_row_requiring_a_slot_no_room_type_provides_is_named(
     fake_root: Path,
 ) -> None:
     """A room is instantiated from a type, so its slots must be that type's."""
-    _room_types(fake_root, [("bedroom", ["light_group"])], ["house_mode"])
+    _room_types(fake_root, [("bedroom", ["light_group"])], ["vacuum"])
     _behaviors(
         fake_root,
         [
@@ -130,7 +130,7 @@ def test_a_room_row_may_draw_its_slots_from_different_room_types(
     _room_types(
         fake_root,
         [("bedroom", ["light_group"]), ("foyer", ["lock"])],
-        ["house_mode"],
+        ["vacuum"],
     )
     _behaviors(
         fake_root,
@@ -141,29 +141,27 @@ def test_a_room_row_may_draw_its_slots_from_different_room_types(
 
 def test_the_room_scope_does_not_reach_the_house_slots(fake_root: Path) -> None:
     """The two supplies are different sets, or the distinction is decorative."""
-    _room_types(fake_root, [("bedroom", ["light_group"])], ["house_mode"])
+    _room_types(fake_root, [("bedroom", ["light_group"])], ["vacuum"])
     _behaviors(
         fake_root,
-        [_row(id="modes.room_mode", scope="room", required_slots=["house_mode"])],
+        [_row(id="modes.room_mode", scope="room", required_slots=["vacuum"])],
     )
 
     messages = _messages()
     assert "modes.room_mode" in messages
-    assert "house_mode" in messages
+    assert "vacuum" in messages
 
 
 def test_a_house_row_requiring_only_house_slots_validates(fake_root: Path) -> None:
     """The away shutdown the requirement names: house scope, house slots."""
-    _room_types(
-        fake_root, [("bedroom", ["light_group"])], ["house_mode", "light_group"]
-    )
+    _room_types(fake_root, [("bedroom", ["light_group"])], ["light_group"])
     _behaviors(
         fake_root,
         [
             _row(
                 id="lighting.away_shutdown",
                 scope="house",
-                required_slots=["light_group", "house_mode"],
+                required_slots=["light_group"],
             )
         ],
     )
@@ -174,16 +172,14 @@ def test_a_house_row_requiring_a_slot_the_house_scope_lacks_is_named(
     fake_root: Path,
 ) -> None:
     """A house behaviour is not forced through a room type, but it is bounded."""
-    _room_types(
-        fake_root, [("bedroom", ["light_group", "media_player"])], ["house_mode"]
-    )
+    _room_types(fake_root, [("bedroom", ["light_group", "media_player"])], ["vacuum"])
     _behaviors(
         fake_root,
         [
             _row(
                 id="media.away_media_off",
                 scope="house",
-                required_slots=["house_mode", "media_player"],
+                required_slots=["vacuum", "media_player"],
             )
         ],
     )
@@ -221,9 +217,7 @@ def test_a_room_type_offering_a_slot_outside_the_vocabulary_is_named(
 def test_the_house_scope_offering_a_slot_outside_the_vocabulary_is_named(
     fake_root: Path,
 ) -> None:
-    _room_types(
-        fake_root, [("bedroom", ["light_group"])], ["house_mode", "frobnicator"]
-    )
+    _room_types(fake_root, [("bedroom", ["light_group"])], ["vacuum", "frobnicator"])
     messages = _messages()
     assert "catalog/room_types.yaml:house" in messages
     assert "frobnicator" in messages
@@ -231,7 +225,7 @@ def test_the_house_scope_offering_a_slot_outside_the_vocabulary_is_named(
 
 def test_a_map_with_no_types_is_reported_once(fake_root: Path) -> None:
     """One absent map is one finding, not one per row it cannot supply."""
-    _room_types(fake_root, [], ["house_mode"])
+    _room_types(fake_root, [], ["vacuum"])
     _behaviors(fake_root, [_row(scope="room", required_slots=["light_group"])])
     assert len(_diagnostics()) == 1
 

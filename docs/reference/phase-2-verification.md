@@ -197,19 +197,22 @@ and the failure names the clause.
 ## The bound the derivation was supposed to report
 
 `official-packs`' derivation requirement has the corpus's own shape as its
-evidence: 83 rows, **19 `reusable`** (10 `mit`, 9 `apache_2_0`) against 64
-`ideas_only` with `no_licence`. The requirement fixes the gate and the report and
-deliberately asserts no count, so the count belongs to the derivation. Two facts
-about `catalog/behaviors.yaml` are worth recording here because they bound what
-that derivation can emit, and they are not the bound the requirement states:
+evidence: 83 rows, all `reusable` (30 `mit`, 29 `public_domain`, 24
+`apache_2_0`) and none `ideas_only`. The requirement fixes the gate and the
+report and deliberately asserts no count, so the count belongs to the
+derivation. Two facts about `catalog/behaviors.yaml` are worth recording here
+because they bound what that derivation can emit, and they are not the bound
+the requirement states:
 
-- Only **one** row in the corpus carries an `expression` --
-  `lighting.outdoor_landscape`, whose `expression` is a `sun` trigger and a
-  `light.turn_on` action. `expression` is populated only where every source's
-  *code* grant is `reusable`, and it is `null` on the other eighteen reusable
-  rows.
-- `catalog/slots.yaml` carries `house_mode` among its slots, and nine of the
-  nineteen reusable rows require it.
+- Every row carries an `expression`, but an expression names services, and a
+  service grounds a pack only where a slot accepts its domain or the act is one
+  the product models at all. Acts on a helper alone -- `input_boolean`,
+  `input_select` -- ground nothing a person can install, and they are the
+  largest of the reasons the derivation reports.
+- The home's state is no longer a slot. `house_mode` left `catalog/slots.yaml`
+  and the lexicon because that state is the engine's own `ModeSet` rather than a
+  device anybody binds, so no row requires it and the derivation demands nothing
+  of a person for it.
 
 So a derivation that reproduces a row's *expression* can ground a much smaller
 set than nineteen, and the requirement's own report distinguishes only two skip

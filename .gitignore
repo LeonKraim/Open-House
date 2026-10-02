@@ -44,3 +44,7 @@ build/
 # Node / panel
 node_modules/
 panel/dist/
+
+# The end-to-end run's screenshot: generated, written at the repository root by
+# `panel/scripts/browser-e2e.mjs`, and read by nobody.
+e2e-house.png

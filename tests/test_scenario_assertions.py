@@ -303,7 +303,7 @@ def test_matches_contains_on_inputs_and_compares_the_rest_exactly() -> None:
     }
     assert matches(record, {"inputs": [{"slot": "light_group"}]})
     assert matches(record, {"inputs": [{"kind": "setting"}, {"kind": "read"}]})
-    assert not matches(record, {"inputs": [{"slot": "lux_sensor"}]})
+    assert not matches(record, {"inputs": [{"slot": "ambient_light_sensor"}]})
     assert matches(record, {"outcome": "acted"})
     assert not matches(record, {"outcome": "declined"})
     assert not matches(record, {"actor": "away_shutdown"})

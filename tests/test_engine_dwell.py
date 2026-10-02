@@ -156,7 +156,7 @@ def test_a_zero_timeout_is_quiet_immediately_after_an_observation() -> None:
 def test_the_slot_is_part_of_the_key() -> None:
     """One room may be observed on two slots without one answer overwriting the other.
 
-    A falsifying implementation keyed by room alone would let a `contact_sensor`
+    A falsifying implementation keyed by room alone would let a `door_contact`
     observation silently replace a `motion_sensor` one, so a room whose door
     closed a minute ago would read as freshly occupied and a rule watching motion
     would decide from a reading nobody made.
@@ -164,10 +164,10 @@ def test_the_slot_is_part_of_the_key() -> None:
     registry = DwellRegistry()
     registry.observe("kitchen", _MOTION, active=True, at=_AT)
     registry.observe(
-        "kitchen", "contact_sensor", active=False, at=_AT + timedelta(hours=1)
+        "kitchen", "door_contact", active=False, at=_AT + timedelta(hours=1)
     )
     assert registry.since("kitchen", _MOTION) == _AT
-    assert registry.since("kitchen", "contact_sensor") == _AT + timedelta(hours=1)
+    assert registry.since("kitchen", "door_contact") == _AT + timedelta(hours=1)
     assert len(registry) == 2
 
 
@@ -220,7 +220,7 @@ def test_quiet_rooms_ignores_rooms_observed_on_a_different_slot() -> None:
     """
     registry = DwellRegistry()
     registry.observe("kitchen", _MOTION, active=False, at=_AT)
-    registry.observe("hall", "contact_sensor", active=False, at=_AT)
+    registry.observe("hall", "door_contact", active=False, at=_AT)
     assert registry.quiet_rooms(slot=_MOTION, at=_AT + _TIMEOUT, timeout=_TIMEOUT) == (
         "kitchen",
     )
@@ -247,12 +247,12 @@ def test_the_periods_come_back_ordered_by_room_then_slot() -> None:
     registry = DwellRegistry()
     for room_id, slot in (
         ("study", _MOTION),
-        ("kitchen", "contact_sensor"),
+        ("kitchen", "door_contact"),
         ("kitchen", _MOTION),
     ):
         registry.observe(room_id, slot, active=False, at=_AT)
     assert [(record.room_id, record.slot) for record in registry.records()] == [
-        ("kitchen", "contact_sensor"),
+        ("kitchen", "door_contact"),
         ("kitchen", _MOTION),
         ("study", _MOTION),
     ]

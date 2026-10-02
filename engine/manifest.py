@@ -79,6 +79,8 @@ REASONS: tuple[str, ...] = (
     "handwritten_derivation",
     "missing_default",
     "override_without_default",
+    "option_mismatch",
+    "unknown_option",
 )
 
 #: The clause `1.2.0` retired. Named here because the failure has to name it: a
@@ -359,10 +361,12 @@ def _is_licence(error: ValidationError) -> bool:
 def _semantic_failures(
     manifest: Manifest, artifacts: ManifestArtifacts, vocabulary: Vocabulary
 ) -> tuple[Failure, ...]:
-    """The four authorities' own checks, over a document the schema accepted.
+    """The five authorities' own checks, over a document the schema accepted.
 
     The document conforms, so the casts below are the schema's guarantees rather
-    than hopeful ones -- the same footing `engine/binding.py` validates on.
+    than hopeful ones -- the same footing `engine/binding.py` validates on. The
+    fifth, `_option_failures`, is the one clause whose rules are comparisons
+    *between* properties and so cannot live in a static schema at all.
     """
     document = manifest.document
     failures: list[Failure] = []
@@ -370,7 +374,155 @@ def _semantic_failures(
     failures.extend(_declaration_failures(document))
     failures.extend(_derivation_failures(manifest, artifacts))
     failures.extend(_i18n_failures(manifest))
+    failures.extend(_option_failures(document))
     return tuple(failures)
+
+
+#: What a `default` has to be for each option `type`, so the check below is a
+#: table lookup rather than a chain of branches. `bool` is tested before `int`
+#: everywhere a number is, because Python's `bool` *is* an `int` and a manifest
+#: writing `default: true` for an `integer` would otherwise pass as `1`.
+_OPTION_TYPES: Mapping[str, tuple[type, ...]] = {
+    "boolean": (bool,),
+    "integer": (int,),
+    "number": (int, float),
+    "string": (str,),
+    "enum": (str,),
+    "duration": (int,),
+}
+
+#: The option types a `minimum`/`maximum` pair means anything for, and so the
+#: types whose bounds are checked against each other.
+_RANGED_OPTION_TYPES = frozenset({"integer", "number", "duration"})
+
+
+def _option_failures(document: Mapping[str, object]) -> list[Failure]:
+    """The option clause's own checks, which a static schema cannot make.
+
+    Every one of these is a comparison *between* two properties, and the manifest
+    schema is a static document: it can say an option carries a `type` and a
+    `default`, and it cannot say the `default` is of that type. The repository
+    answers that kind of question in Python and says so where the schema would
+    have asked it (`$defs/i18n`'s coverage rule is the precedent), because the
+    alternative is a schema nobody can read.
+
+    Four checks, and each is a defect the panel would otherwise render:
+
+    - **The default is of the declared type.** An `integer` option defaulting to
+      `"5"` is a control that opens empty, because the value a person sees is the
+      one the resolver found and the resolver found a string.
+    - **An `enum` carries members and nothing else does.** A `type: enum` with no
+      `enum` admits no value; an `enum` beside a `boolean` is a clause nothing
+      reads and everybody copies.
+    - **A range is a range.** `minimum` above `maximum` admits nothing, and is
+      worth refusing here rather than rendering as a slider that cannot be moved.
+    - **A behaviour's `for` names a `duration` option.** The clause *is* the name
+      of an option; a name that is not declared, or is declared as something
+      other than a duration, is a behaviour whose reading would never hold --
+      which evaluates as a behaviour that silently never acts, the failure mode
+      hardest to notice from the outside.
+    """
+    options = _rows(document, "options")
+    failures: list[Failure] = []
+    durations: set[str] = set()
+    for index, option in enumerate(options):
+        key = option.get("key")
+        kind = option.get("type")
+        where = f"options[{index}]"
+        if isinstance(key, str) and kind == "duration":
+            durations.add(key)
+        failures.extend(_one_option_failures(option, where=where, kind=kind, key=key))
+    for index, behaviour in enumerate(_rows(document, "behaviours")):
+        named = behaviour.get("for")
+        if isinstance(named, str) and named not in durations:
+            failures.append(
+                Failure(
+                    reason="unknown_option",
+                    path=f"behaviours[{index}].for",
+                    message=(
+                        f"the behaviour {behaviour.get('name', '?')!r} waits on "
+                        f"{named!r}, which is not a `duration` option this pack "
+                        f"declares"
+                    ),
+                )
+            )
+    return failures
+
+
+def _one_option_failures(
+    option: Mapping[str, object], *, where: str, kind: object, key: object
+) -> list[Failure]:
+    """The four checks that need only one option to make."""
+    name = key if isinstance(key, str) else "?"
+    failures: list[Failure] = []
+    expected = _OPTION_TYPES.get(kind) if isinstance(kind, str) else None
+    if expected is not None and not _is_of_type(option.get("default"), expected):
+        failures.append(
+            Failure(
+                reason="option_mismatch",
+                path=f"{where}.default",
+                message=(
+                    f"the option {name!r} is of type {kind!r}, so its default must "
+                    f"be {_type_name(expected)}; the manifest gives "
+                    f"{option.get('default')!r}"
+                ),
+            )
+        )
+    members = option.get("enum")
+    if kind == "enum" and not (isinstance(members, list) and members):
+        failures.append(
+            Failure(
+                reason="option_mismatch",
+                path=f"{where}.enum",
+                message=(
+                    f"the option {name!r} is an enum, so it must list the members "
+                    f"it admits; the manifest lists none"
+                ),
+            )
+        )
+    if kind != "enum" and members is not None:
+        failures.append(
+            Failure(
+                reason="option_mismatch",
+                path=f"{where}.enum",
+                message=(
+                    f"the option {name!r} is of type {kind!r} and lists enum "
+                    f"members, which nothing reads"
+                ),
+            )
+        )
+    if isinstance(kind, str) and kind in _RANGED_OPTION_TYPES:
+        low = option.get("minimum")
+        high = option.get("maximum")
+        if _is_number(low) and _is_number(high) and low > high:
+            failures.append(
+                Failure(
+                    reason="option_mismatch",
+                    path=f"{where}.minimum",
+                    message=(
+                        f"the option {name!r} admits nothing: its minimum {low} is "
+                        f"above its maximum {high}"
+                    ),
+                )
+            )
+    return failures
+
+
+def _is_of_type(value: object, expected: tuple[type, ...]) -> bool:
+    """Whether `value` is one of `expected`, with `bool` kept apart from `int`."""
+    if isinstance(value, bool):
+        return bool in expected
+    return isinstance(value, expected)
+
+
+def _is_number(value: object) -> bool:
+    """Whether `value` is a real number and not a `bool`, which Python counts as one."""
+    return not isinstance(value, bool) and isinstance(value, (int, float))
+
+
+def _type_name(expected: tuple[type, ...]) -> str:
+    """The type's name for a message: the union spelled out when it is one."""
+    return " or ".join(sorted({member.__name__ for member in expected}))
 
 
 def _engine_api_failures(

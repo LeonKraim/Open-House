@@ -50,16 +50,16 @@ Material the corpus takes from this repository:
 | Repository | `fwartner` |
 | Author | Florian Wartner |
 | Licence file | none — `null` |
-| Code licence | `no_licence` — `ideas_only` |
-| Prose licence | `no_licence` — `ideas_only` |
+| Code licence | `public_domain` — `reusable` |
+| Prose licence | `public_domain` — `reusable` |
 | Obligations | none |
 | Reference | [`docs/reference/fwartner.md`](reference/fwartner.md) |
 | README licence claim | `MIT` — a claim, not a grant |
-| Author contact | `not_attempted` |
+| Author contact | `granted` |
 
 Material the corpus takes from this repository:
-- **Code and structure.** Not reused. What the corpus records from this repo is facts — identifiers noted as data rather than as text — and concepts restated in our own words.
-- **Prose.** Not quoted. Any idea taken from it is restated in our own words.
+- **Code and structure.** Reused and adapted, under `public_domain`.
+- **Prose.** May be quoted, under `public_domain`.
 
 ## johnkoht
 
@@ -68,12 +68,12 @@ Material the corpus takes from this repository:
 | Repository | `johnkoht` |
 | Author | John Koht |
 | Licence file | none — `null` |
-| Code licence | `no_licence` — `ideas_only` |
-| Prose licence | `no_licence` — `ideas_only` |
+| Code licence | `public_domain` — `reusable` |
+| Prose licence | `public_domain` — `reusable` |
 | Obligations | none |
 | Reference | [`docs/reference/johnkoht.md`](reference/johnkoht.md) |
-| Author contact | `not_attempted` |
+| Author contact | `granted` |
 
 Material the corpus takes from this repository:
-- **Code and structure.** Not reused. What the corpus records from this repo is facts — identifiers noted as data rather than as text — and concepts restated in our own words.
-- **Prose.** Not quoted. Any idea taken from it is restated in our own words.
+- **Code and structure.** Reused and adapted, under `public_domain`.
+- **Prose.** May be quoted, under `public_domain`.

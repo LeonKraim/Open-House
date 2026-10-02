@@ -25,7 +25,16 @@ description: >-
 kind: house-template
 engine_api: ">=1.0.0 <2.0.0"
 license: mit
-requires_slots: [contact_sensor, house_mode, leak_sensor, light_group, lock, media_player, scene_selector, vacuum]
+requires_slots:
+  - climate_zone
+  - door_contact
+  - leak_sensor
+  - light_group
+  - lock
+  - media_player
+  - scene_selector
+  - temperature_sensor
+  - vacuum
 provides:
   - path: packs/official/house_template/house.yaml
     class: other

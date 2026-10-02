@@ -1,0 +1,7 @@
+name: cleaning
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/derived/cleaning.yaml
+sha256: sha256:98da860b6a441d0660443dba715f88daf36002af0db588c9cc4e4c429538a43a
+tier: official

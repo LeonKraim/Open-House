@@ -1,0 +1,7 @@
+name: lighting
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/derived/lighting.yaml
+sha256: sha256:a195298687d61d8907ca29ab4b0bb3efaa2cbc55a67ee2d949be99306787f5ab
+tier: official

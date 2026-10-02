@@ -13,7 +13,11 @@ incompatibility.
 The corpus and the licence vocabulary are the committed ones, handed in through
 `engine/vocabulary.py`, so a test that would pass against a hand-built corpus
 fails here -- which is the point, because "the corpus is the source of the status,
-not the manifest" is only true if the corpus is the committed file.
+not the manifest" is only true if the corpus is the committed file. One row is
+spliced into that corpus for the tests that need a withholding source: no
+committed row is `ideas_only` since the `fwartner` and `johnkoht` authors granted
+unrestricted reuse on 2026-10-02, and the `ideas_only_source` refusal would
+otherwise be unreachable.
 
 `test_every_reason_is_reachable` is the section to check first if you doubt the
 suite covers the module: it produces one failure for every reason `REASONS`
@@ -25,6 +29,7 @@ from __future__ import annotations
 
 import ast
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -70,6 +75,29 @@ def _example() -> dict[str, object]:
     loaded = yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))
     assert isinstance(loaded, dict)
     return dict(loaded)
+
+
+#: A corpus row that withholds. The committed corpus held sixty-four of these
+#: until the `fwartner` and `johnkoht` authors granted unrestricted reuse on
+#: 2026-10-02, which left no shipped row that reaches `ideas_only_source`.
+WITHHOLDING_ROW = vocabulary.CorpusRow(
+    id="fixture.withheld", reuse_status="ideas_only", license="no_licence"
+)
+
+
+def _withholding(
+    artifacts: vocabulary.ManifestArtifacts,
+) -> vocabulary.ManifestArtifacts:
+    """The four authorities with one withholding row spliced into the corpus.
+
+    The corpus is the committed one plus this row: the gate reads the corpus and
+    nothing else, so a row the committed file no longer holds is the only way to
+    reach the refusal that row's status produces.
+    """
+    return replace(
+        artifacts,
+        corpus={**artifacts.corpus, WITHHOLDING_ROW.id: WITHHOLDING_ROW},
+    )
 
 
 def _validate(
@@ -324,17 +352,20 @@ def test_a_pack_over_reusable_rows_is_accepted(
 def test_a_pack_over_an_ideas_only_row_is_refused(
     inspected: tuple, tmp_path: Path
 ) -> None:
+    """The refusal a withholding row earns, on a corpus built to hold one.
+
+    Spliced in because no committed row is `ideas_only` any more, and the gate
+    reads the corpus rather than any list beside it.
+    """
     artifacts, engine = inspected
-    ideas = sorted(
-        row.id for row in artifacts.corpus.values() if row.reuse_status == "ideas_only"
-    )
+    artifacts = _withholding(artifacts)
     document = _example()
-    document["derives_from"] = ideas[:1]
+    document["derives_from"] = [WITHHOLDING_ROW.id]
 
     result = _validate(tmp_path, artifacts, engine, document, "ideas.yaml")
 
     assert _reasons(result) == ["ideas_only_source"]
-    assert ideas[0] in _messages(result)
+    assert WITHHOLDING_ROW.id in _messages(result)
     assert "ideas_only" in _messages(result)
     assert "hand-written" in result.failures[0].message
 
@@ -348,21 +379,21 @@ def test_the_corpus_is_the_source_of_the_status_not_the_manifest(
     gate reads `catalog/behaviors.yaml` and never the document's own account of
     its sources. So an attempt to carry one is refused by the schema's
     `additionalProperties: false` -- there is no clause to ignore -- and the
-    corpus's own `reuse_status` is what a derivation is judged against.
+    corpus's own `reuse_status` is what a derivation is judged against. The
+    withholding row is spliced in because no committed row carries that status
+    any more.
     """
     artifacts, engine = inspected
-    ideas = sorted(
-        row.id for row in artifacts.corpus.values() if row.reuse_status == "ideas_only"
-    )
+    artifacts = _withholding(artifacts)
     document = _example()
-    document["derives_from"] = ideas[:1]
+    document["derives_from"] = [WITHHOLDING_ROW.id]
     document["reuse_status"] = "reusable"
 
     result = _validate(tmp_path, artifacts, engine, document, "assert.yaml")
 
     assert _reasons(result) == ["schema"]
     assert "reuse_status" in _messages(result)
-    assert artifacts.corpus[ideas[0]].reuse_status == "ideas_only"
+    assert artifacts.corpus[WITHHOLDING_ROW.id].reuse_status == "ideas_only"
 
 
 def test_a_misspelled_row_id_is_refused(inspected: tuple, tmp_path: Path) -> None:
@@ -636,7 +667,7 @@ def test_the_two_range_clauses_take_the_same_grammar() -> None:
 
 def test_the_reasons_are_closed_and_distinct() -> None:
     assert len(set(manifest.REASONS)) == len(manifest.REASONS)
-    assert len(manifest.REASONS) == 12
+    assert len(manifest.REASONS) == 14
 
 
 def test_a_failure_carries_three_facts_and_no_class_of_its_own() -> None:
@@ -652,9 +683,14 @@ def test_every_reason_is_reachable(inspected: tuple, tmp_path: Path) -> None:
     """One failure for every reason the module declares.
 
     A reason no document can reach is a reason a caller handles for nothing, and
-    one whose check was reordered away would otherwise pass this suite.
+    one whose check was reordered away would otherwise pass this suite. The
+    corpus is the committed one with a withholding row spliced in, because no
+    shipped row is `ideas_only` since the `fwartner` and `johnkoht` authors
+    granted unrestricted reuse on 2026-10-02, and `ideas_only_source` would
+    otherwise be unreachable.
     """
     artifacts, engine = inspected
+    artifacts = _withholding(artifacts)
     reusable = sorted(
         row.id for row in artifacts.corpus.values() if row.reuse_status == "reusable"
     )
@@ -716,6 +752,22 @@ def test_every_reason_is_reachable(inspected: tuple, tmp_path: Path) -> None:
         },
     }
 
+    # An option whose default is not of its own declared type: the comparison a
+    # static schema cannot make, and the reason it is made here.
+    misdefaulted = _example()
+    misdefaulted["options"] = [
+        {
+            "key": "grace",
+            "type": "integer",
+            "default": "5",
+            "title": "Grace",
+        }
+    ]
+
+    # A behaviour waiting on a duration option the pack does not declare.
+    unwaited = _example()
+    unwaited["behaviours"] = [{**_example()["behaviours"][0], "for": "nosuchgrace"}]
+
     found: set[str] = set()
     found.update(reasons(retired, "r1.yaml"))
     found.update(reasons(broken, "r2.yaml"))
@@ -728,6 +780,8 @@ def test_every_reason_is_reachable(inspected: tuple, tmp_path: Path) -> None:
     found.update(reasons(narrow, "r9.yaml"))
     found.update(reasons(orphan, "r11.yaml"))
     found.update(reasons(defaultless, "r12.yaml"))
+    found.update(reasons(misdefaulted, "r13.yaml"))
+    found.update(reasons(unwaited, "r14.yaml"))
     found.update(
         _reasons(
             manifest.validate_manifest(
@@ -817,11 +871,12 @@ def test_the_document_names_every_reason_the_module_can_report() -> None:
     assert missing == [], missing
 
 
-def test_the_document_carries_both_worked_examples() -> None:
-    assert len(_examples()) == 2
+def test_the_document_carries_its_worked_examples() -> None:
+    """A hand-written module, a pack that declares a device, and a derived pack."""
+    assert len(_examples()) == 3
 
 
-@pytest.mark.parametrize("index", [0, 1])
+@pytest.mark.parametrize("index", [0, 1, 2])
 def test_each_worked_example_validates_as_written(
     index: int, inspected: tuple, tmp_path: Path
 ) -> None:

@@ -118,6 +118,86 @@ export function fieldOrder(schema: JsonSchema): string[] {
   return [...required, ...rest];
 }
 
+/**
+ * The same schema cut down to `keys`, so one module's settings can be drawn on
+ * their own.
+ *
+ * The page is handed one flat schema of every module's settings; a card for a
+ * single module needs the slice belonging to it and nothing else. Keys the
+ * schema does not declare are dropped rather than invented, because a field for
+ * a setting this page cannot set is a control that writes nothing. `null` when
+ * the slice is empty, which is the same "nothing to configure here" the whole
+ * schema answers with -- so a module with no settings simply has no form.
+ */
+export function schemaForKeys(
+  schema: JsonSchema | null,
+  keys: readonly string[],
+): JsonSchema | null {
+  const declared = schema?.properties ?? {};
+  const properties: Record<string, JsonSchema> = {};
+  for (const key of keys) {
+    const node = declared[key];
+    if (node !== undefined) properties[key] = node;
+  }
+  if (Object.keys(properties).length === 0) return null;
+  return {
+    type: "object",
+    title: schema?.title ?? undefined,
+    properties,
+    required: (schema?.required ?? []).filter((key) => key in properties),
+  };
+}
+
+/**
+ * The key shape of a module's derived reach-role switch: `module.<pack>.reach.<slot>`.
+ *
+ * Anchored at the end because that is where the slot name is: `reach.light_group`
+ * and not `reach.light_group.boost`, so a pack's own option that merely *starts*
+ * with the word is not caught by it.
+ */
+const REACH_ROLE_KEY = /\.reach\.[^.]+$/;
+
+/**
+ * A module's schema with its derived reach-role switches taken out.
+ *
+ * `reach.<slot>` options are not a pack's settings: the adapter derives one per
+ * role a pack's behaviours write through (`live_profiles.reach_properties`), so
+ * a module that dims lights and drops thermostats arrives with a "light group"
+ * switch and a "climate zone" switch whether or not its author ever thought
+ * about them. They answer the same question the reach control beside each
+ * behaviour answers -- what does this act on -- in the engine's vocabulary
+ * rather than a person's, so a card that drew both asked it twice, once in a
+ * language the person had to translate.
+ *
+ * Dropped from the *drawn* schema only. The key stays in the page's
+ * `option_keys`, so it is still claimed by its module and cannot fall through to
+ * the page's leftover bucket -- the "Other settings" card this rule exists to
+ * keep empty. A pack that declares the option itself is dropped with the derived
+ * one, which is right: it is the same switch under the same key.
+ *
+ * `null` when nothing is left, which is the same "this module has no settings"
+ * `schemaForKeys` answers with -- a card draws no form rather than a heading
+ * over an empty one.
+ */
+export function withoutReachRoles(schema: JsonSchema | null): JsonSchema | null {
+  const declared = schema?.properties;
+  if (schema == null || declared == null) return schema;
+  const properties: Record<string, JsonSchema> = {};
+  for (const [key, node] of Object.entries(declared)) {
+    if (!REACH_ROLE_KEY.test(key)) properties[key] = node;
+  }
+  if (Object.keys(properties).length === Object.keys(declared).length) return schema;
+  // Nothing left but the reach switches: the module has no settings of its own,
+  // which is the `null` a card draws as no form at all rather than a heading
+  // over an empty one.
+  if (Object.keys(properties).length === 0) return null;
+  return {
+    ...schema,
+    properties,
+    required: (schema.required ?? []).filter((key) => key in properties),
+  };
+}
+
 /** A value for a field that has none yet, from the schema's own `default`. */
 export function defaultValue(schema: JsonSchema): unknown {
   if (schema.default !== undefined) return schema.default;

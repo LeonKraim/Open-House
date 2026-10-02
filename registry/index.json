@@ -12,11 +12,51 @@
     },
     {
       "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "bathroom_fan",
+      "path": "packs/official/bathroom_fan.yaml",
+      "pointer": "pointers/official/bathroom_fan/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:9328073960113cfce89b3ed65e5d99b1d0044d4b7b7decf7c2459a8c6470cde8",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
       "name": "bedroom",
       "path": "packs/official/bedroom.yaml",
       "pointer": "pointers/official/bedroom/1.0.0.yaml",
       "repo": ".",
       "sha256": "sha256:dfef918295c84a55f5943d3ce399ab7a7f1c074329b27abaca8a22f8d873774a",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "bedtime",
+      "path": "packs/official/bedtime.yaml",
+      "pointer": "pointers/official/bedtime/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:cfa1cd7f97fe1125ac44c24b29f61632af398d2ca842c97a9db8cdb84dc401db",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "cleaning",
+      "path": "packs/derived/cleaning.yaml",
+      "pointer": "pointers/official/cleaning/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:98da860b6a441d0660443dba715f88daf36002af0db588c9cc4e4c429538a43a",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "climate",
+      "path": "packs/derived/climate.yaml",
+      "pointer": "pointers/official/climate/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:3f41786e78ea06026df736a96581737e63e152e9c64aa626f74bf49407f99119",
       "tier": "official",
       "version": "1.0.0"
     },
@@ -37,6 +77,16 @@
       "pointer": "pointers/official/example_pack/1.0.0.yaml",
       "repo": ".",
       "sha256": "sha256:28fc55df56157494eb9d99ff872104362ac2e7c9d506162b0701d371444c5157",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "56bb1339db12bc800d40147e2e98df4d721fbf13",
+      "name": "fridge_guard",
+      "path": "packs/official/fridge-guard.yaml",
+      "pointer": "pointers/official/fridge_guard/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:8db9c4e7e3305bba1c3177b4816537d9b293e0bc4e13746cd422ac11aa257659",
       "tier": "official",
       "version": "1.0.0"
     },
@@ -82,11 +132,101 @@
     },
     {
       "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "laundry",
+      "path": "packs/derived/laundry.yaml",
+      "pointer": "pointers/official/laundry/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:8de9e5e67bb4e1deabf06a34926856951efd7d44fe42cf278cd1c3d64caad1ba",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "lighting",
+      "path": "packs/derived/lighting.yaml",
+      "pointer": "pointers/official/lighting/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:a195298687d61d8907ca29ab4b0bb3efaa2cbc55a67ee2d949be99306787f5ab",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
       "name": "living_room",
       "path": "packs/official/living_room.yaml",
       "pointer": "pointers/official/living_room/1.0.0.yaml",
       "repo": ".",
       "sha256": "sha256:f30ee3fd921c00fd6ce2b05aade5994c053a89402f7422dc17ca47ee2b524248",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "media",
+      "path": "packs/derived/media.yaml",
+      "pointer": "pointers/official/media/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:475189d2153d06ff20ba5e6ba28d05b9569f747106e9bc8f8ce7e61b5706823a",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "modes",
+      "path": "packs/derived/modes.yaml",
+      "pointer": "pointers/official/modes/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:17e294161c0dbec43e5e9ceae2ea17e3c739efe7314f59f27daa8b975bdd0e31",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "notifications",
+      "path": "packs/derived/notifications.yaml",
+      "pointer": "pointers/official/notifications/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:b027f6f29f393a4e2fb01c67a5d65132b957cba4bf939e0b9315d09d1628e1fd",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "presence",
+      "path": "packs/derived/presence.yaml",
+      "pointer": "pointers/official/presence/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:9e617274b0594d5a025cecaef4d0b6ff506c63761e4a5b49e9e244eef8e47214",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "roomba",
+      "path": "packs/official/roomba.yaml",
+      "pointer": "pointers/official/roomba/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:4aa8067ea74b5a364f7cc9a102d75791220784a4f1d01d45442ed6717609569c",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "security",
+      "path": "packs/derived/security.yaml",
+      "pointer": "pointers/official/security/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:4ecf7a3910491d90401f1832513587b995f1792f7738e5df5bc1272af7db8c63",
+      "tier": "official",
+      "version": "1.0.0"
+    },
+    {
+      "commit": "196109250697f1c4877b7e4f98b643ae7fc74714",
+      "name": "system",
+      "path": "packs/derived/system.yaml",
+      "pointer": "pointers/official/system/1.0.0.yaml",
+      "repo": ".",
+      "sha256": "sha256:dd9e0838185af93606da699d0275ba6cbe02709d2bc7f5459562bd542eeed65b",
       "tier": "official",
       "version": "1.0.0"
     }

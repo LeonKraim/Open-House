@@ -46,8 +46,8 @@ if TYPE_CHECKING:
 EXPECTED_RECORDS: dict[str, tuple[str, str, str | None]] = {
     "ccostan": ("Carlo Costanzo", "mit", "LICENSE"),
     "renemarc": ("René-Marc Simard", "apache_2_0", "LICENSE.txt"),
-    "fwartner": ("Florian Wartner", "no_licence", None),
-    "johnkoht": ("John Koht", "no_licence", None),
+    "fwartner": ("Florian Wartner", "public_domain", None),
+    "johnkoht": ("John Koht", "public_domain", None),
 }
 
 DERIVATION_ROWS = [
@@ -171,14 +171,20 @@ def test_a_committed_record_states_what_the_spec_assigns(
     assert record.license_file == licence_file
 
 
-def test_the_two_unlicensed_repos_grant_neither_code_nor_prose(
+def test_the_two_directly_granted_repos_grant_code_and_prose(
     real_root: Path,
 ) -> None:
-    """The split that keeps the corpus honest, asserted on the shipped records."""
+    """The pair whose record moved together, asserted on the shipped records.
+
+    Both withheld code and prose until the authors granted unrestricted reuse on
+    2026-10-02; both records now carry `public_domain` for each, and the test is
+    the statement that the two halves of a record agree -- so a later edit that
+    moved one licence and not the other fails here.
+    """
     for repo in ("fwartner", "johnkoht"):
         record = next(r for r in licenses.load_licences() if r.repo == repo)
-        assert record.reuse_status_code == "ideas_only"
-        assert record.reuse_status_prose == "ideas_only"
+        assert record.reuse_status_code == "reusable"
+        assert record.reuse_status_prose == "reusable"
 
 
 def test_renemarc_grants_code_and_withholds_prose(real_root: Path) -> None:
@@ -192,10 +198,20 @@ def test_renemarc_grants_code_and_withholds_prose(real_root: Path) -> None:
 def test_a_hand_written_status_contradicting_the_table_is_reported(
     fake_root: Path,
 ) -> None:
-    """Task 2.2's failing case, naming the record and the licence value."""
+    """Task 2.2's failing case, naming the record and the licence value.
+
+    The record is built with `no_licence` on a fixture because the committed
+    `fwartner` record is `public_domain` since the author granted reuse on
+    2026-10-02, and the failing case needs a licence that still withholds.
+    """
     _seed(
         fake_root,
-        _record("fwartner", author_contact=dict(CONTACT), reuse_status_code="reusable"),
+        _record(
+            "fwartner",
+            license_code="no_licence",
+            author_contact=dict(CONTACT),
+            reuse_status_code="reusable",
+        ),
     )
 
     message = _only(_diagnostics(), "catalog/licenses.yaml:fwartner")

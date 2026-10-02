@@ -67,7 +67,7 @@ class SafetyAlertBehaviour:
     id = "safety_alert"
     corpus_rows = CORPUS_ROWS
     scope = BehaviourScope.HOUSE
-    required_slots = ("house_mode",)
+    required_slots = ()
     optional_slots = ("light_group",)
     #: Above every other unit's, for a reader's benefit only: the `safety` flag on
     #: the command is what actually outranks them, and this number is what this

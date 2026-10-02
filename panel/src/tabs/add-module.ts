@@ -29,10 +29,23 @@ export class AddModuleDialog extends OpenHouseElement {
     ...OpenHouseElement.properties,
     open: { type: Boolean },
     roomId: { type: String },
+    // The dialog's heading, because the same dialog serves a room and the house:
+    // the house is a placement a person can install into (`roomId` is `""`), and
+    // a form headed "Add module to room" over the House tab would name a room the
+    // person is not on.
+    heading: { type: String },
+    offers: { state: true },
+    isLoading: { state: true },
+    error: { state: true },
+    busyPack: { state: true },
+    // The filter is typed into, not fetched, so it has to be reactive or the
+    // list never narrows (see base.ts).
+    filter: { state: true },
   };
 
   declare open: boolean;
   declare roomId: string;
+  declare heading: string;
 
   private offers: ModuleOffer[] = [];
   private isLoading = false;
@@ -44,6 +57,7 @@ export class AddModuleDialog extends OpenHouseElement {
     super();
     this.open = false;
     this.roomId = "";
+    this.heading = "Add module to room";
   }
 
   override updated(changed: Map<string, unknown>): void {
@@ -67,7 +81,11 @@ export class AddModuleDialog extends OpenHouseElement {
   }
 
   private async install(offer: ModuleOffer): Promise<void> {
-    if (!offer.satisfiable || this.blocking(offer).length > 0) return;
+    // Unsatisfiable is installable. A module whose devices are not configured
+    // yet goes in and arrives disabled; that is what makes the room's devices
+    // configurable in the first place, since they are the modules' slots. Only
+    // a blocking conflict or a module already in the room stops an install.
+    if (this.blocking(offer).length > 0 || offer.already_installed) return;
     this.busyPack = offer.pack;
     this.error = null;
     try {
@@ -76,17 +94,31 @@ export class AddModuleDialog extends OpenHouseElement {
         new CustomEvent("module-installed", {
           detail: { pack: offer.pack },
           bubbles: true,
-          composed: true,
         }),
       );
       this.open = false;
-      this.dispatchEvent(new CustomEvent("closed", { bubbles: true, composed: true }));
+      // `add-module-closed`, not `closed`: the room's settings page is not the
+      // only ancestor that reads a bare `closed`, and the tab above it reads
+      // one as "leave the room". See `components/dialog.ts`.
+      this.dispatchEvent(new CustomEvent("add-module-closed", { bubbles: true }));
     } catch (error) {
       this.error = this.toError(error);
     } finally {
       this.busyPack = null;
       this.requestUpdate();
     }
+  }
+
+  /**
+   * Whether this dialog was opened on the house rather than a room.
+   *
+   * The same dialog serves both, and the house's placement is the empty room
+   * id -- the same spelling the whole module API uses for it. The copy that
+   * names the target ("in the room", "in the house") is derived from this
+   * rather than from a second flag, so the two cannot disagree.
+   */
+  private get isHouse(): boolean {
+    return this.roomId === "";
   }
 
   private blocking(offer: ModuleOffer): ModuleConflict[] {
@@ -98,19 +130,41 @@ export class AddModuleDialog extends OpenHouseElement {
   }
 
   protected override render(): TemplateResult {
-    const visible = this.offers.filter((offer) =>
+    // Modules and behaviours, and no other kind. `roomAvailableModules` answers
+    // with every published pack and carries each one's `kind` precisely so this
+    // screen can decide. A `module` does something in a room: it is plugged into
+    // the room's placeholders and carries the behaviours that act through them. A
+    // `behavior` is the same thing narrowed to one behaviour offered on its own --
+    // an atom a person adds to a room exactly as they add a module -- which is why
+    // it is offered here too. A `room-template` is not a thing a room can be
+    // given: it declares what a room *has* (its slots), never what it *does*, and
+    // the manifest schema refuses it a behaviour. Offered here under an Install
+    // button it was a trap -- five of the nine packs this house publishes are
+    // templates, so a person could install "Kitchen room", see it appear in the
+    // Modules list, and find that every Enable button did nothing, because
+    // `_enabled` is `False` for a pack that registered no behaviours and always
+    // will be. `house-template` and `profile-set` are the same trap one level up.
+    const modules = this.offers.filter(
+      (offer) => offer.kind === "module" || offer.kind === "behavior",
+    );
+    const visible = modules.filter((offer) =>
       this.filter.trim() === ""
         ? true
         : `${offer.name} ${offer.pack} ${offer.description}`
             .toLowerCase()
             .includes(this.filter.trim().toLowerCase()),
     );
+    // The same dialog serves a room and the house, so the copy that names the
+    // target has to be the target's. `this.roomId` is `""` for the house, which
+    // is the placement the whole module API spells the house with.
+    const where = this.isHouse ? "house" : "room";
+    const whereThe = this.isHouse ? "the house" : "this room";
     return html`<open-house-dialog
-      .heading=${"Add module to room"}
+      .heading=${this.heading || `Add module to ${where}`}
       .open=${this.open}
-      @closed=${() => {
+      @dialog-closed=${() => {
         this.open = false;
-        this.dispatchEvent(new CustomEvent("closed", { bubbles: true, composed: true }));
+        this.dispatchEvent(new CustomEvent("add-module-closed", { bubbles: true }));
       }}
     >
       ${this.errorBanner(this.error)}
@@ -125,12 +179,12 @@ export class AddModuleDialog extends OpenHouseElement {
         }}
       />
       ${this.isLoading
-        ? this.loading("Looking for modules the room can satisfy...")
+        ? this.loading(`Looking for modules ${whereThe} can satisfy...`)
         : visible.length === 0
           ? this.emptyState(
               "No modules",
-              this.offers.length === 0
-                ? "No pack in the house or the store offers anything this room can take yet."
+              modules.length === 0
+                ? `No pack in the house or the store offers anything ${whereThe} can take yet.`
                 : "No module matches that filter.",
             )
           : html`<div class="stack" style="margin-top:12px">
@@ -142,7 +196,7 @@ export class AddModuleDialog extends OpenHouseElement {
   private renderOffer(offer: ModuleOffer): TemplateResult {
     const blocked = this.blocking(offer);
     const warns = this.warnings(offer);
-    const installable = offer.satisfiable && blocked.length === 0 && !offer.already_installed;
+    const installable = blocked.length === 0 && !offer.already_installed;
     return html`<div class="card" data-pack=${offer.pack}>
       <div class="row spread wrap">
         <div class="grow">
@@ -208,11 +262,12 @@ export class AddModuleDialog extends OpenHouseElement {
             )}
           </div>`
         : null}
-      ${!offer.satisfiable && blocked.length === 0
+      ${!offer.satisfiable && blocked.length === 0 && !offer.already_installed
         ? html`<div class="banner warn">
-            This room is missing required slots:
-            ${offer.missing_slots.join(", ")}. Bind them on the room's settings
-            page first.
+            ${this.isHouse ? "This house" : "This room"} has not been given the devices
+            it needs yet: ${offer.missing_slots.join(", ")}. Install it anyway and
+            it arrives switched off; bind those devices on a room's settings page
+            to be able to switch it on.
           </div>`
         : null}
 
@@ -246,9 +301,10 @@ export class AddModuleDialog extends OpenHouseElement {
   }
 
   private reason(offer: ModuleOffer): string {
-    if (offer.already_installed) return "This module is already installed in the room.";
-    if (!offer.satisfiable) {
-      return `Missing required slots: ${offer.missing_slots.join(", ")}`;
+    if (offer.already_installed) {
+      return this.isHouse
+        ? "This module is already installed in the house."
+        : "This module is already installed in the room.";
     }
     return "A blocking conflict with an installed pack.";
   }

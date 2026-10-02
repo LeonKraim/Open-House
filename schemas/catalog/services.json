@@ -1,0 +1,38 @@
+{
+  "$id": "https://open-house.invalid/schemas/catalog/services.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Declared services and the states they write",
+  "description": "The service-to-state table: for a `domain.service` a pack may declare, the state that service writes on the entity it acts through. It exists because a pack declares a *service* (`light.turn_on`) and the engine's port takes a *state* (`on`), and until this artifact there was nothing in the repository that knew the one from the other -- `engine/behaviours/declared.py` proposed the service string as though it were a state, which is the gap that blocked Phase 2's exit criterion. It is an artifact rather than a table in engine code for the reason that module states: a service-to-state table is a vocabulary, and vocabularies belong in an artifact. Rows are keyed by service and the list is closed: a service with no row is not an actuation the port can perform, and a behaviour naming one proposes nothing through it rather than writing a service name as a state.",
+  "schema_version": "1.0.0",
+  "type": "object",
+  "required": [
+    "services"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "services": {
+      "type": "array",
+      "description": "One row per service the port can carry out, as the state it writes.",
+      "items": {
+        "type": "object",
+        "required": [
+          "service",
+          "state"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "service": {
+            "type": "string",
+            "description": "The `domain.service` a manifest's behaviour clause may name. The same shape the manifest schema's own `services` pattern admits, repeated because the two are read by different checkers and a row that could not be declared would be a row nothing reads.",
+            "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+          },
+          "state": {
+            "type": "string",
+            "description": "The state the port writes on the entity this service acts through. Deliberately not constrained to an enum here: the states are Home Assistant's, and the domain that owns each is the authority on its spelling rather than this schema.",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

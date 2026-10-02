@@ -109,7 +109,7 @@ def _house_with_an_egress() -> dict[str, object]:
                     "lock": {"entity_id": "lock.front_door"},
                     "light_group": {"entity_id": "light.foyer"},
                     "motion_sensor": {"entity_id": "binary_sensor.foyer_motion"},
-                    "contact_sensor": {"entity_id": "binary_sensor.front_door"},
+                    "door_contact": {"entity_id": "binary_sensor.front_door"},
                 },
             },
             {
@@ -724,23 +724,27 @@ def test_a_manifest_that_fails_its_schema_is_refused(
     assert "schema" in refusal.value.reason
 
 
-def test_a_manifest_requiring_a_slot_the_house_cannot_supply_is_refused(
+def test_a_manifest_requiring_a_slot_the_house_binds_nowhere_installs_unwired(
     tmp_path: Path, vocabulary: Vocabulary
 ) -> None:
-    """A required slot this house binds nowhere fails, naming the slot.
+    """A required slot this house binds nowhere is recorded, not refused.
 
-    Falsified by an `install_pack` that checked the slot vocabulary but not the
-    house: a pack for a house with a garage would install into one without.
+    The record carries the slot against an empty tuple, which is the fact a later
+    reader -- and the live path's enable gate -- reads as "installed, not yet
+    wired". Falsified by an `install_pack` that refused the pack: the module
+    would then be one a person cannot put in a room before wiring what it needs.
     """
     session = open_session(house="minimal", vocabulary=vocabulary)
     demanding = VALID_MANIFEST.replace(
         "requires_slots: [light_group, motion_sensor]",
         "requires_slots: [vacuum]",
     )
-    with pytest.raises(packs.PackError) as refusal:
-        session.install_pack(_manifest(tmp_path, demanding))
-    assert "vacuum" in refusal.value.reason
-    assert "binds nowhere" in refusal.value.reason
+    result = session.install_pack(_manifest(tmp_path, demanding))
+
+    assert result["installed"] is True
+    slots = result["slots"]
+    assert isinstance(slots, Mapping)
+    assert slots["vacuum"] == ()
 
 
 def test_a_manifest_requiring_a_slot_no_vocabulary_declares_is_refused(

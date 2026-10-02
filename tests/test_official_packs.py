@@ -38,7 +38,11 @@ from jsonschema.validators import Draft202012Validator
 
 from engine import sandbox
 from engine.manifest import Manifest, validate_manifest
-from engine.vocabulary import Vocabulary, load_manifest_artifacts
+from engine.vocabulary import (
+    Vocabulary,
+    load_manifest_artifacts,
+    load_service_states,
+)
 from openhouse.facade import open_session
 from tools.catalog import paths
 
@@ -246,3 +250,56 @@ def test_the_shipped_set_is_the_one_the_phase_names() -> None:
             "is empty or absent"
         )
     assert not missing, "the shipped set is incomplete: " + "; ".join(missing)
+
+
+# --------------------------------------------------------------------------
+# The services a shipped pack declares, and the state each one writes
+# --------------------------------------------------------------------------
+
+
+def _declared_services() -> tuple[str, ...]:
+    """Every `domain.service` any shipped manifest's behaviour clause names."""
+    found: set[str] = set()
+    for path in sorted(ROOT.joinpath("packs").rglob("*.yaml")):
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, Mapping):
+            continue
+        behaviours = loaded.get("behaviours")
+        if not isinstance(behaviours, list):
+            continue
+        for row in behaviours:
+            if not isinstance(row, Mapping):
+                continue
+            services = row.get("services")
+            if isinstance(services, list):
+                found.update(item for item in services if isinstance(item, str))
+    return tuple(sorted(found))
+
+
+def test_every_service_a_shipped_pack_declares_is_either_mapped_or_a_named_gap() -> (
+    None
+):
+    """`catalog/services.yaml` covers the shipped packs, and its gaps are the two.
+
+    The service-to-state table is what makes a declared atom *act*: a manifest
+    says `light.turn_on` and the port takes `on`, and a service with no row
+    contributes no state, so the atom declines. That is the right answer for a
+    service that writes no state -- and the wrong one for a service the project
+    ships and simply forgot to map.
+
+    So the assertion is an exact set rather than "no gaps": the gaps are named,
+    and each is named because it is not an actuation. `climate.set_temperature`
+    names a setpoint and `notify.send_message` raises an event; neither is a state
+    an entity can be in, and both need the port widened to carry a service *call*
+    rather than a state -- which is the change that retires this list. A third
+    name appearing here is a pack using a service nobody taught the engine, and
+    it fails with the name rather than with a light that quietly does nothing.
+    """
+    table = load_service_states(ROOT)
+    unmapped = [service for service in _declared_services() if service not in table]
+    assert unmapped == ["climate.set_temperature", "notify.send_message"], (
+        f"the shipped packs declare {unmapped!r}, which have no row in "
+        "`catalog/services.yaml`. A service that writes a state needs a row; a "
+        "service that writes none belongs in the gap list this test names, with "
+        "the reason it is not an actuation."
+    )

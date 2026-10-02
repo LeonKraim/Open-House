@@ -135,6 +135,39 @@ export const sharedStyles = css`
     font-size: var(--ha-font-size-s, 12px);
   }
 
+  /*
+   * A behaviour chip that is a switch.
+   *
+   * The atom toggles on the modules screens are chips because a pack is read as
+   * a row of its parts, and they are *buttons* rather than spans because a
+   * person turns one part off by clicking it. Only a few properties are
+   * restated -- the pill geometry the button rule would otherwise square off --
+   * and the ok/warn colours are repeated at this specificity because a single
+   * class like .chip.ok would lose to the button.chip rule below.
+   */
+  button.chip {
+    border: 1px solid transparent;
+    border-radius: 999px;
+    padding: 1px 10px;
+    font-size: var(--ha-font-size-s, 12px);
+    line-height: 1.6;
+    background: var(--secondary-background-color, rgba(0, 0, 0, 0.06));
+    color: var(--secondary-text-color);
+  }
+
+  button.chip:hover {
+    border-color: var(--divider-color);
+  }
+
+  button.chip.ok {
+    background: color-mix(in srgb, var(--success-color, #0f9d58) 18%, transparent);
+    color: var(--success-color, #0f9d58);
+  }
+
+  button.chip.ok:hover {
+    border-color: var(--success-color, #0f9d58);
+  }
+
   input,
   select,
   textarea {
@@ -315,6 +348,58 @@ export const sharedStyles = css`
     display: inline-flex;
     align-items: center;
     gap: 6px;
+  }
+
+  /*
+   * The reach control: a checkbox dropdown, so the places an atom applies to
+   * are named rather than translated into a boolean, and more than one can be
+   * chosen at once. The summary is the answer ("Kitchen, Hall +1"); the menu
+   * is one tick per place.
+   */
+  .reach {
+    position: relative;
+    display: inline-block;
+  }
+
+  .reach > summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 2px 10px;
+    border: 1px solid var(--divider-color);
+    border-radius: 999px;
+    font-size: 0.85em;
+    white-space: nowrap;
+    color: var(--secondary-text-color);
+  }
+
+  .reach > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .reach > summary::after {
+    content: " ▾";
+  }
+
+  .reach[open] > summary {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+  }
+
+  .reach-menu {
+    position: absolute;
+    z-index: 8;
+    margin-top: 4px;
+    min-width: 180px;
+    max-height: 260px;
+    overflow-y: auto;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border: 1px solid var(--divider-color);
+    border-radius: 8px;
+    background: var(--card-background-color, var(--primary-background-color));
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
   }
 
   .list {

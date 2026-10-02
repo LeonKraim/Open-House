@@ -4,18 +4,15 @@
 # left switched on long after the family is already back.
 #
 # Read this one against what Phase 1 can decide rather than against what the seed
-# asks for. The guard this seed records stores and restores the away timestamps
-# and reconciles a stale mode at startup. Phase 1 keeps modes in the engine's
-# `ModeSet` and the away gate reads that set -- and no operation activates a mode
-# except `restore`, which this scenario does not use. (A `restore` step accepts
-# an inline document, so a scenario *can* make away mode true; this one does not,
-# because the seed is about a restart and not about a document. See
-# `test_a_restored_away_mode_reaches_the_unit` for the route, pinned.) The
-# `house_mode` *entity* is not the gate; the behaviour reads it so the binding
-# appears in the record and then declines on the gate. So the scenario states the
-# provocation and asserts what is true of it: the mode entity is where the
-# house's startup condition puts it, and the away behaviour declined rather than
-# acted.
+# asks for. The home's state is the engine's own variable -- modes live in the
+# engine's `ModeSet` and no entity carries them, so there is nothing a restart can
+# leave switched on -- and no operation activates a mode except `restore`, which
+# this scenario does not use because the seed is about a restart and not about a
+# document. (A `restore` step accepts an inline document, so a scenario *can* make
+# away mode true; see `test_a_restored_away_mode_reaches_the_unit` for the route,
+# pinned.) So the stale-mode half of the seed is what is decided here: a house
+# that is empty and lit across a restart is not left in away mode by the restart,
+# and the away behaviour declines rather than acting.
 name: the house restarts mid-absence
 given:
   house: minimal
@@ -25,17 +22,23 @@ given:
     behaviour.away_shutdown.enabled: true
 when:
   - set_state:
-      entity_id: input_select.house_mode
-      state: "away"
+      entity_id: light.foyer
+      state: "on"
+  - set_state:
+      entity_id: light.living_room
+      state: "on"
   - advance_time:
-      minutes: 1
+      minutes: 30
   - restart: {}
+  - set_state:
+      entity_id: light.foyer
+      state: "on"
+  - set_state:
+      entity_id: light.living_room
+      state: "on"
   - advance_time:
-      minutes: 1
+      minutes: 30
 then:
-  - state:
-      entity_id: input_select.house_mode
-      is: "home"
   - log:
       because:
         rule: lighting.away_shutdown

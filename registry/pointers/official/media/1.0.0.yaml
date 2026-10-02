@@ -1,0 +1,7 @@
+name: media
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/derived/media.yaml
+sha256: sha256:475189d2153d06ff20ba5e6ba28d05b9569f747106e9bc8f8ce7e61b5706823a
+tier: official

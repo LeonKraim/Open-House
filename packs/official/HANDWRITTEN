@@ -32,6 +32,12 @@
 # The three module packs task 7.1-7.3 add -- the Bedtime button, the Roomba
 # button and the bathroom fan -- are listed with them. Each is a person's
 # writing, and each is a `module`, the kind the shipped set was three short of.
+#
+# The fridge guard is listed with them and is the one pack that declares a device
+# of its own: every other pack here names slots `catalog/slots.yaml` already
+# carries, and a fridge is not a room, so `fridge-guard.yaml` brings its
+# `fridge_contact` in its own `slots` clause. A person wrote it, so it belongs
+# here whatever it declares.
 example-house.yaml
 example-export.yaml
 example-pack.yaml
@@ -46,3 +52,4 @@ living_room.yaml
 bedtime.yaml
 roomba.yaml
 bathroom_fan.yaml
+fridge-guard.yaml

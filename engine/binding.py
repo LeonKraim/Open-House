@@ -9,7 +9,11 @@ normative and are the reason this module is more than a dictionary lookup:
   house schema (`schemas/house/1.0.0.json`) binds one `entity_id` per slot in a
   room, so a slot becomes plural exactly by being bound in more than one room and
   read at house scope -- a house-scoped `light_group` collects several rooms'
-  light groups behind the one role (`design.md` D4).
+  light groups behind the one role (`design.md` D4). A house may also bind a slot
+  *itself* (`House.bindings`), which makes the list singular again: the global
+  entity is the answer wherever the slot is asked for, so "all the lights" can be
+  one group a person picked rather than a collection of whatever the rooms
+  happened to bind.
 - **An unbound slot is a state, not an error.** A slot may be absent from a
   room's `bindings`, which is how it is left unbound, and what that means is the
   slot vocabulary's `required` flag rather than this module's opinion: a required
@@ -31,7 +35,7 @@ the vocabulary travels with the house so the two cannot be paired up wrongly.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, cast
 
@@ -203,27 +207,52 @@ class House:
     The only way to build one is `from_document`, so every `House` in existence
     has passed the frozen schema and named only controlled slots: this is what
     makes `resolve_slot` able to resolve a house without re-reading a document.
+
+    `bindings` is the house's *own* binding per house-scope slot, and it is not
+    part of the frozen house document: the schema binds slots per room and has no
+    top-level `bindings`, and a global slot is a fact the integration holds rather
+    than a fact a written-down house carries. It is the answer to "all the lights"
+    meaning *one* light group somebody chose, and to a room that binds no
+    `light_group` of its own still taking part in the house's automations: an
+    entity bound here fills the slot in any room that left it empty, and is what
+    the house scope resolves to ahead of the rooms it would otherwise collect.
     """
 
     name: str
     rooms: tuple[Room, ...]
     house_scope_slots: tuple[str, ...]
     vocabulary: Vocabulary
+    bindings: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_document(
-        cls, document: Mapping[str, object], *, vocabulary: Vocabulary
+        cls,
+        document: Mapping[str, object],
+        *,
+        vocabulary: Vocabulary,
+        bindings: Mapping[str, str] | None = None,
     ) -> House:
         """Validate `document` and project it, failing by naming what is wrong."""
         _validate(document, vocabulary)
         rooms = tuple(_room(row, vocabulary) for row in _rows(document, "rooms"))
         _require_distinct(rooms)
         house_scope_slots = tuple(_house_scope_slots(document, vocabulary))
+        declared = {} if bindings is None else dict(bindings)
+        for slot in declared:
+            # The same gate the rooms get, from the other direction: a house
+            # binding is a slot name the vocabulary must know, and a name it does
+            # not would resolve at house scope forever as an empty list rather
+            # than as the refusal a bad binding deserves.
+            if slot not in vocabulary.slots:
+                raise UnknownSlotError(
+                    "the house scope", slot, "no controlled vocabulary defines"
+                )
         return cls(
             name=cast("str", document["name"]),
             rooms=rooms,
             house_scope_slots=house_scope_slots,
             vocabulary=vocabulary,
+            bindings=declared,
         )
 
     def room(self, room_id: str) -> Room:
@@ -233,14 +262,33 @@ class House:
                 return room
         raise UnknownRoomError(room_id)
 
+    def has_room(self, room_id: str) -> bool:
+        """Whether a room with this id is in the house.
+
+        The question a caller holding an id from somewhere else -- a placement
+        recorded before the room was deleted, a name a person typed -- has to ask
+        before it can use `room`. Not `try: room() except UnknownRoomError`,
+        because a caller that expects a miss is not asking for a failure and an
+        exception caught to answer `bool` would be control flow dressed as error
+        handling.
+        """
+        return any(room.id == room_id for room in self.rooms)
+
 
 def resolve_slot(house: House, scope: Scope, slot: str) -> SlotBinding:
     """Resolve `slot` in `scope` to the entities bound to it.
 
-    A room scope returns that room's binding for the slot; a house scope returns
-    the slot's binding collected from every room of the house, in room order, so
-    a slot bound in two rooms resolves to two entities rather than to whichever
-    room the house happened to list first.
+    A room scope returns that room's binding for the slot, and falls back to the
+    house's own binding when the room has none; a house scope returns the house's
+    own binding when it has one, and otherwise the slot's binding collected from
+    every room of the house, in room order, so a slot bound in two rooms resolves
+    to two entities rather than to whichever room the house happened to list
+    first.
+
+    The house's own binding therefore wins in both directions, which is what
+    makes it *global*: one entity a person bound once, standing in for the slot
+    everywhere -- in the house scope, and in every room that did not bind one of
+    its own.
     """
     definition = house.vocabulary.slots.get(slot)
     if isinstance(scope, HouseScope):
@@ -254,6 +302,9 @@ def resolve_slot(house: House, scope: Scope, slot: str) -> SlotBinding:
                 slot,
                 "is not among the slots the house makes available at house scope",
             )
+        own = house.bindings.get(slot)
+        if own is not None:
+            return SlotBinding(slot=slot, entities=(own,), required=definition.required)
         return SlotBinding(
             slot=slot,
             entities=tuple(
@@ -269,6 +320,8 @@ def resolve_slot(house: House, scope: Scope, slot: str) -> SlotBinding:
         )
     room = house.room(scope.room_id)
     entity_id = room.bindings.get(slot)
+    if entity_id is None:
+        entity_id = house.bindings.get(slot)
     return SlotBinding(
         slot=slot,
         entities=() if entity_id is None else (entity_id,),

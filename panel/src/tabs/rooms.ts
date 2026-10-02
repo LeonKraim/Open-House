@@ -11,9 +11,20 @@ import { OpenHouseElement } from "../base.ts";
 import type { RoomSummary } from "../api/models.ts";
 
 export class RoomsTab extends OpenHouseElement {
+  // `selectedRoomId` and `creating` are clicks, not fetches: nothing else in
+  // this element changes when they do, so they have to be reactive themselves
+  // (see base.ts). As plain fields, "Add room" and a room's own name did
+  // nothing at all.
   static override properties = {
     ...OpenHouseElement.properties,
     initialRoomId: { type: String },
+    rooms: { state: true },
+    selectedRoomId: { state: true },
+    isLoading: { state: true },
+    error: { state: true },
+    creating: { state: true },
+    newRoomName: { state: true },
+    newRoomType: { state: true },
   };
 
   /**

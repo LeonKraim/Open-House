@@ -186,7 +186,12 @@ def test_the_registry_holds_exactly_the_shipped_units(
     behaviour no phase has reviewed; one that shipped two would leave a corpus
     concept this phase claims to implement unimplemented.
     """
-    assert sorted(units) == ["away_shutdown", "motion_lighting", "override"]
+    assert sorted(units) == [
+        "away_shutdown",
+        "motion_lighting",
+        "override",
+        "safety_alert",
+    ]
 
 
 def test_the_registry_is_ordered_by_id(units: Mapping[str, Behaviour]) -> None:

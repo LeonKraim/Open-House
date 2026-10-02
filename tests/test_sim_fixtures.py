@@ -22,8 +22,8 @@ scenario takes.
 
 A fourth reads `catalog/room_types.yaml` and asserts the invariant that makes a
 fixture a *house* rather than a bag of devices: every slot a room binds is one
-its type provides, or `house_mode` -- the one slot no type provides that the
-house holds at house scope. The plans copy the catalog's `provides_slots` rather
+its type provides, or a slot no type provides that the house declares at house
+scope. The plans copy the catalog's `provides_slots` rather
 than reading it, so the copy is checked rather than trusted.
 
 The reproducibility half is a property rather than an example: the same seed is
@@ -408,10 +408,13 @@ def test_a_room_binds_only_slots_its_type_provides_or_the_house_declares(
     the escape clause is what makes it load-bearing rather than decorative.
 
     A room may bind a slot its type provides. It may also bind a slot that **no
-    room type provides at all** and that the house declares at house scope --
-    which is `house_mode`, and only `house_mode`: a house-scope slot is
-    aggregated from the rooms, so a house that bound it at no room could not
-    resolve it, and no type offers it because it is not a room's slot.
+    room type provides at all** and that the house declares at house scope: a
+    house-scope slot is aggregated from the rooms, so a house that bound it at no
+    room could not resolve it, and a type that does not offer it cannot be what
+    supplies it. No shipped fixture needs the escape -- the home's state is the
+    engine's own and is no slot, so the only house slot every fixture declares,
+    `light_group`, is also provided by most types -- and the clause is kept
+    because it states the rule rather than the fixtures' current use of it.
 
     What the escape must *not* be is "any house-scope slot", and this is worth
     being explicit about because the wider reading is the natural one to write
@@ -606,25 +609,31 @@ def test_the_messy_fixture_strains_binding(vocabulary: Vocabulary) -> None:
     assert len(lights.views(messy.adapter)) == 2
     assert len(messy.house.rooms) == 2
     assert len(_unavailable(messy)) == 1
-    assert not any("lux_sensor" in room.bindings for room in messy.house.rooms)
-    assert "lux_sensor" not in messy.house.house_scope_slots
+    assert not any(
+        "ambient_light_sensor" in room.bindings for room in messy.house.rooms
+    )
+    assert "ambient_light_sensor" not in messy.house.house_scope_slots
 
 
-def test_the_no_lux_fixture_binds_no_lux_sensor(vocabulary: Vocabulary) -> None:
+def test_the_no_lux_fixture_binds_no_ambient_light_sensor(
+    vocabulary: Vocabulary,
+) -> None:
     """Nothing in the house measures light, at either scope.
 
     This is the sun fallback's own subject: a behaviour that would rather read a
     lux sensor than compute an elevation has no reading available here, and the
     fixture is where that is a property of the house rather than of the run.
 
-    Falsified by any room binding `lux_sensor`, and by the slot appearing at
+    Falsified by any room binding `ambient_light_sensor`, and by the slot appearing at
     house scope -- which the second assertion catches even though
     `house_scope.slots` is drawn from a list that does not contain it today.
     """
     no_lux = build_fixture(FixtureName.NO_LUX, vocabulary=vocabulary)
     assert no_lux.house.rooms
-    assert not any("lux_sensor" in room.bindings for room in no_lux.house.rooms)
-    assert "lux_sensor" not in no_lux.house.house_scope_slots
+    assert not any(
+        "ambient_light_sensor" in room.bindings for room in no_lux.house.rooms
+    )
+    assert "ambient_light_sensor" not in no_lux.house.house_scope_slots
 
 
 # --------------------------------------------------------------------------

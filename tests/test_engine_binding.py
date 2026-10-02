@@ -160,11 +160,11 @@ def test_a_house_scope_slot_the_vocabulary_does_not_offer_fails(
     """
     with pytest.raises(UnknownSlotError) as raised:
         House.from_document(
-            _document(_room("kitchen"), house_scope=("lux_sensor",)),
+            _document(_room("kitchen"), house_scope=("ambient_light_sensor",)),
             vocabulary=vocabulary,
         )
     assert raised.value.where == "the house scope"
-    assert raised.value.slot == "lux_sensor"
+    assert raised.value.slot == "ambient_light_sensor"
 
 
 def test_a_house_scope_slot_no_slot_file_defines_fails(vocabulary: Vocabulary) -> None:
@@ -237,7 +237,7 @@ def test_an_optional_slot_with_no_binding_resolves_empty_and_optional(
 ) -> None:
     """The optional case differs from the required one only in the flag."""
     house = _house(vocabulary, _room("kitchen"))
-    binding = resolve_slot(house, RoomScope("kitchen"), "lux_sensor")
+    binding = resolve_slot(house, RoomScope("kitchen"), "ambient_light_sensor")
     assert binding.entities == ()
     assert binding.required is False
 
@@ -284,13 +284,13 @@ def test_a_house_scope_read_of_a_slot_the_house_does_not_make_available_fails(
 ) -> None:
     """A controlled slot the house did not declare at house scope is refused.
 
-    `lux_sensor` is a slot the vocabulary defines and no house scope offers, so a
+    `ambient_light_sensor` is a slot the vocabulary defines and no house scope offers, so a
     falsifying implementation that checked only the slot name would resolve a
     house-scoped read against a scope the house never declared.
     """
     house = _house(vocabulary, _room("kitchen"))
     with pytest.raises(UnknownSlotError) as raised:
-        resolve_slot(house, HouseScope(), "lux_sensor")
+        resolve_slot(house, HouseScope(), "ambient_light_sensor")
     assert raised.value.where == "the house scope"
 
 
@@ -343,7 +343,7 @@ def test_an_empty_read_follows_the_reduction(vocabulary: Vocabulary) -> None:
     """
     house = _house(vocabulary, _room("kitchen"))
     adapter = _two_lights()
-    binding = resolve_slot(house, RoomScope("kitchen"), "lux_sensor")
+    binding = resolve_slot(house, RoomScope("kitchen"), "ambient_light_sensor")
     assert binding.read(Reduction.ANY).holds(adapter, _is_on) is False
     assert binding.read(Reduction.ALL).holds(adapter, _is_on) is True
 

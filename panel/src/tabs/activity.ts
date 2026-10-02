@@ -29,6 +29,18 @@ const OUTCOME_CHIP: Record<DecisionLogEntry["outcome"], string> = {
 };
 
 export class ActivityTab extends OpenHouseElement {
+  // The filters and the live toggle are clicks (see base.ts).
+  static override properties = {
+    ...OpenHouseElement.properties,
+    entries: { state: true },
+    isLoading: { state: true },
+    error: { state: true },
+    live: { state: true },
+    roomFilter: { state: true },
+    outcomeFilter: { state: true },
+    expanded: { state: true },
+  };
+
   private entries: DecisionLogEntry[] = [];
   private isLoading = true;
   private error: ReturnType<OpenHouseElement["toError"]> | null = null;

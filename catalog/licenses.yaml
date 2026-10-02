@@ -3,9 +3,12 @@
 # Schema: schemas/catalog/licenses.json. Validate with `oh-catalog validate`.
 #
 # One record per reference repo, split by artifact kind because a repo's code
-# and its prose can be under different licences. Two of the four grant nothing
-# at all, and the corpus is built on that being true rather than on it being
-# inconvenient.
+# and its prose can be under different licences. Two of the four once granted
+# nothing at all; both have since granted unrestricted reuse in a direct message,
+# so all four now donate. A grant is recorded under `author_contact` with the
+# date and the channel it came through, and the licence value it is recorded as
+# is the one the derivation table can rank -- never a paraphrase of what the
+# author said.
 #
 # `reuse_status_code`, `reuse_status_prose` and `obligations` are **derived**
 # from `license_code` and `license_prose` by `tools/catalog/licenses.py`, using
@@ -19,11 +22,14 @@
 # task 4.1 writes it; the full URL lives in that file's `repo_url`, so it is not
 # repeated here.
 #
-# `license_file` is null where no licence file exists, and null means
-# `no_licence` for both kinds whatever the README says -- a claim is not a
-# grant. Where a claim exists and the file does not, the discrepancy is recorded
-# beside it, because a claim with no recorded discrepancy is one a later reader
-# takes as settled.
+# `license_file` is null where no licence file exists. Null on its own means
+# `no_licence` for both kinds whatever the README says -- a claim is not a grant
+# -- and a record stays `no_licence` until a grant arrives some other way. A
+# grant that arrives as a message rather than a file is recorded in
+# `author_contact` and the licence value changes with it, which is the one path
+# by which a null `license_file` sits beside a `reusable` status. Where a claim
+# exists and the file does not, the discrepancy is recorded beside it, because a
+# claim with no recorded discrepancy is one a later reader takes as settled.
 
 repos:
   - repo: ccostan
@@ -49,45 +55,59 @@ repos:
 
   - repo: fwartner
     author: Florian Wartner
-    license_code: no_licence
-    license_prose: no_licence
+    license_code: public_domain
+    license_prose: public_domain
     license_file: null
-    reuse_status_code: ideas_only
-    reuse_status_prose: ideas_only
+    reuse_status_code: reusable
+    reuse_status_prose: reusable
     obligations: []
     readme_licence_claim: MIT
     licence_claim_discrepancy: >-
       The README's Licence section declares MIT and links to choosealicense.com,
-      but the repository ships no licence file. A README sentence is a statement
-      about the work, not a grant of rights in it, so no licence attaches to
-      either artifact kind and this record is `no_licence` for both. The claim is
-      kept because it is evidence of the author's intent and the starting point
-      for the contact ask in docs/reference/author-contact.md.
+      but the repository still ships no licence file, so the claim in the README
+      is still not the grant this record rests on. What the record rests on is
+      the grant below: the author granted unrestricted reuse in a direct message,
+      which is wider than the MIT the README claims -- MIT carries an
+      attribution condition and the grant names none -- so the value recorded is
+      `public_domain` and not `mit`. The claim is kept because it remains
+      evidence of the author's intent and the discrepancy between it and the
+      absent file is still a fact about the repository.
     author_contact:
-      channel: github-issue
-      attempted_on: null
-      outcome: not_attempted
+      channel: direct-message
+      attempted_on: "2026-10-02"
+      outcome: granted
       reason: >-
-        Making contact is an outward-facing action and requires the user's
-        explicit authorisation, which has not been given. Until it is, no
-        message has been sent and the repo remains `ideas_only` for code and
-        prose alike.
+        The author granted unrestricted reuse of the repository in a direct
+        message, reported by the project owner on 2026-10-02. The grant states no
+        licence name and no conditions -- permission to do anything with the
+        material -- so the record takes `public_domain`, the one published value
+        that incurs no obligation under the derivation table; `mit` would have
+        imposed an attribution the author did not ask for. No licence file has
+        been added to the repository, so `license_file` stays null and this
+        record rests on the message rather than on a filed grant. The message is
+        the evidence, and this sentence is where a later reader finds out that
+        the evidence is a message rather than a file.
 
   - repo: johnkoht
     author: John Koht
-    license_code: no_licence
-    license_prose: no_licence
+    license_code: public_domain
+    license_prose: public_domain
     license_file: null
-    reuse_status_code: ideas_only
-    reuse_status_prose: ideas_only
+    reuse_status_code: reusable
+    reuse_status_prose: reusable
     obligations: []
     author_contact:
-      channel: github-issue
-      attempted_on: null
-      outcome: not_attempted
+      channel: direct-message
+      attempted_on: "2026-10-02"
+      outcome: granted
       reason: >-
-        Making contact is an outward-facing action and requires the user's
-        explicit authorisation, which has not been given. This repo carries no
-        licence file and no README claim either, so there is not even a stated
-        intent to point at; absent a grant it stays `ideas_only` for code and
-        prose alike.
+        The author granted unrestricted reuse of the repository in a direct
+        message, reported by the project owner on 2026-10-02. The grant states no
+        licence name and no conditions, so the record takes `public_domain`, the
+        one published value that incurs no obligation under the derivation table.
+        This repository never carried a licence file and never made a README
+        claim, so there is no `readme_licence_claim` here and no discrepancy
+        field either -- there was no claim for a file to contradict. No licence
+        file has been added since, so `license_file` stays null and this record
+        rests on the message rather than on a filed grant; the message is the
+        evidence, and this sentence is where a later reader finds that out.

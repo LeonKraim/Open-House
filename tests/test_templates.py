@@ -59,7 +59,7 @@ ROOM_TYPES_PATH = "catalog/room_types.yaml"
 #: fixture with two is the smallest tree on which "one template per type, and no
 #: others" can be stated at all.
 _TYPES = {"kitchen": ("light_group", "motion_sensor"), "lounge": ("light_group",)}
-_HOUSE = ("house_mode", "vacuum")
+_HOUSE = ("light_group", "vacuum")
 
 
 def _room_types_document() -> str:
@@ -130,7 +130,7 @@ def _tree(
     root: Path,
     *,
     room_templates: dict[str, tuple[str, ...] | None] | None = None,
-    house: bool | tuple[str, ...] | None = ("house_mode", "vacuum"),
+    house: bool | tuple[str, ...] | None = ("light_group", "vacuum"),
 ) -> None:
     """A fixture tree carrying the map and the templates named.
 
@@ -474,7 +474,7 @@ def test_the_house_template_s_own_drift_is_named_in_both_directions(
     _tree(
         fake_root,
         room_templates=_every_room(),
-        house=("house_mode",),
+        house=("light_group",),
     )
     assert "does not declare the slot `vacuum`" in _messages()
 

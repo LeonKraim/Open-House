@@ -1,0 +1,7 @@
+name: notifications
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/derived/notifications.yaml
+sha256: sha256:b027f6f29f393a4e2fb01c67a5d65132b957cba4bf939e0b9315d09d1628e1fd
+tier: official

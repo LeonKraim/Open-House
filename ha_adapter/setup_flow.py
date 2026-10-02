@@ -26,14 +26,18 @@ both carry the reason they guessed so the review can say why.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
 import yaml
 
+from engine import manifest as pack_manifest
 from engine.adapter import domain_of
+from engine.declared_slots import declared_slots, key_of, slot_keys
+from tools.registry.errors import RegistryError
+from tools.registry.index import load_index
 
 __all__ = [
     "Area",
@@ -44,6 +48,7 @@ __all__ = [
     "RoomSuggestion",
     "SetupPlan",
     "SetupStep",
+    "load_module_slots",
     "load_room_types",
     "load_slot_domains",
     "plan_setup",
@@ -223,13 +228,99 @@ def load_room_types(root: Path) -> dict[str, tuple[str, ...]]:
     }
 
 
+def load_module_slots(root: Path) -> tuple[str, ...]:
+    """Every slot the published packs declare, required and optional, sorted.
+
+    **The devices a room can be given are the *modules'* slots and not the room
+    type's.** `catalog/room_types.yaml`'s `provides_slots` was the old answer --
+    a type's shape deciding what a room of that kind may hold -- and it is not
+    this one, because a module may be installed into any room and the slots to
+    fill are therefore whatever some module could act through, in whatever room.
+    A room type is still a *label* a person picks and still what the flow guesses
+    from the area's name; it just no longer decides which devices are
+    configurable.
+
+    A pack may also bring a device the catalog does not name -- `fridge_contact`
+    for a fridge-door module (`engine/declared_slots.py`) -- and that device is
+    one a room must be able to bind, or the module that declares it could never be
+    wired. So the pack's own `slots` clause is read here too, and every name comes
+    out as the *key* it binds under rather than as the name the manifest wrote: a
+    declaration written `separate: true` is bound by the room under a
+    pack-qualified key, and a list of written names would offer the panel a slot
+    no binding can ever fill.
+
+    Read from `registry/index.json` and the manifests it names -- the same two
+    artifacts `ha_adapter.live_modules` offers from -- so the slots a person can
+    bind are exactly the slots a pack can require, and the two cannot drift. A
+    manifest that will not load is skipped rather than raised: a catalog edited
+    into nonsense must not take the setup flow down with it, and the packs that
+    do load still name their slots.
+    """
+    named: set[str] = set()
+    for name, document in _published_manifests(root):
+        keys = slot_keys(name, document)
+        for clause in ("requires_slots", "optional_slots"):
+            named.update(keys.get(slot, slot) for slot in _names(document.get(clause)))
+        named.update(key_of(name, slot) for slot in declared_slots(document))
+    return tuple(sorted(named))
+
+
+def _names(value: object) -> tuple[str, ...]:
+    """A clause that is a list of names, or nothing when it is not one."""
+    if not isinstance(value, list):
+        return ()
+    return tuple(item for item in value if isinstance(item, str))
+
+
 def load_slot_domains(root: Path) -> dict[str, tuple[str, ...]]:
-    """Slot name -> the entity domains it accepts, from `catalog/slots.yaml`."""
+    """Slot name -> the entity domains it accepts.
+
+    The catalog's rows for every slot it names, and the packs' own declarations
+    for the slots it does not: a pack that declares `fridge_contact` states which
+    domains a fridge-door contact may come from, and without that row the panel's
+    device picker would have no domain to rank candidates by and would offer
+    nothing for the very slot the pack needs bound.
+
+    The catalog wins a name it carries, the same precedence
+    `ha_adapter.declared_units.with_declared_slots` applies to the vocabulary: a
+    pack declaring `door_contact` is reusing the room's own door contact, and
+    the catalog is the authority on what that name accepts. A pack that will not
+    load contributes nothing rather than failing the caller, for
+    `load_module_slots`' reason.
+    """
     document = yaml.safe_load((root / "catalog" / "slots.yaml").read_text("utf-8"))
+    declared: dict[str, tuple[str, ...]] = {}
+    for name, manifest in _published_manifests(root):
+        for slot in declared_slots(manifest):
+            declared.setdefault(key_of(name, slot), slot.accepts_domains)
     return {
-        entry["name"]: tuple(entry.get("accepts_domains", ()))
-        for entry in document["slots"]
+        **declared,
+        **{
+            entry["name"]: tuple(entry.get("accepts_domains", ()))
+            for entry in document["slots"]
+        },
     }
+
+
+def _published_manifests(
+    root: Path,
+) -> Iterable[tuple[str, Mapping[str, object]]]:
+    """Each published pack's name and manifest document, skipping what will not load.
+
+    The index and its manifests read once for every caller that wants the packs'
+    own clauses -- the declared slots here and in `load_module_slots` -- with the
+    same tolerance: a catalog edited into nonsense must not take the flow down.
+    """
+    try:
+        index = load_index(root / "registry")
+    except RegistryError:
+        return
+    for entry in index.entries:
+        try:
+            manifest = pack_manifest.load_manifest(root / entry.pointer.path)
+        except (OSError, pack_manifest.MalformedManifestError):
+            continue
+        yield manifest.name, manifest.document
 
 
 def _suggest_room_type(
@@ -393,6 +484,7 @@ def plan_setup(
     room_types: Mapping[str, tuple[str, ...]],
     slot_domains: Mapping[str, tuple[str, ...]],
     room_type_overrides: Mapping[str, str] | None = None,
+    slots: Sequence[str] | None = None,
 ) -> SetupPlan:
     """Assemble the whole plan from areas, people and the vocabulary.
 
@@ -403,9 +495,14 @@ def plan_setup(
 
     `room_type_overrides` is what the person changed on the room-types step: area
     id to the room type they confirmed. A type the person set replaces the guess
-    *and* drives the binding guess, because a room's slots are its type's slots --
-    re-guessing against the guess's type while recording the person's would bind
-    a room's devices to slots it does not have.
+    and is recorded as the room's type.
+
+    `slots` is the slot names a room is guessed against -- every room's, whatever
+    its type -- and it defaults to the room type's own `provides_slots` so a
+    caller that has not read the registry still gets a plan. The setup flow
+    passes `load_module_slots`: the devices a room may be given are the
+    *modules*' slots, because a module can be installed into any room, and a
+    room type is a label rather than a shape.
     """
     overrides = room_type_overrides or {}
     chosen: list[RoomSuggestion] = []
@@ -425,12 +522,15 @@ def plan_setup(
 
     bindings: list[BindingGuess] = []
     review: list[ReviewLine] = []
+    wanted = None if slots is None else tuple(slots)
     for room in rooms:
         area = by_area[room.area_id]
         domains = slot_domains
         room_bindings = [
             _guess_binding(area, slot, domains.get(slot, ()), room.room_type)
-            for slot in room_types.get(room.room_type, ())
+            for slot in (
+                room_types.get(room.room_type, ()) if wanted is None else wanted
+            )
         ]
         bindings.extend(room_bindings)
         review.append(_review_for(room, room_bindings))

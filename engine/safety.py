@@ -11,8 +11,8 @@ user's? -- and answers it before the command reaches the port.
 The second half of the module is the hazard classification the safety-audit task
 names: a smoke, CO or water-leak detector is an entity this module can recognise
 without a slot for it. There is deliberately no `smoke_sensor` slot in the
-vocabulary, and the corpus agrees -- `security.smoke_alert` requires only
-`house_mode` and takes `light_group` as an optional slot -- so a hazard is
+vocabulary, and the corpus agrees -- `security.smoke_alert` requires no slot at
+all and takes `light_group` as an optional one -- so a hazard is
 matched by what the device *is* (a `binary_sensor` whose `device_class` is one of
 the alert classes, reading `on`) rather than by what a house happened to bind it
 to. A house that bound a smoke detector to a slot could be reconfigured out of

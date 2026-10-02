@@ -20,6 +20,8 @@ import {
   fieldOrder,
   humanizeKey,
   isMissing,
+  schemaForKeys,
+  withoutReachRoles,
   type JsonSchema,
 } from "./schema-spec.ts";
 
@@ -107,4 +109,66 @@ test("missing means empty for the field's own kind", () => {
   // A boolean is never missing: `false` is a value a user chose.
   assert.equal(isMissing({ type: "boolean" }, false), false);
   assert.equal(isMissing({ type: "number" }, 0), false);
+});
+
+test("a schema cut to keys keeps only those keys, in the order asked", () => {
+  const schema: JsonSchema = {
+    type: "object",
+    title: "Options",
+    properties: { a: { type: "number" }, b: { type: "boolean" }, c: {} },
+    required: ["b", "c"],
+  };
+  const cut = schemaForKeys(schema, ["c", "a"]);
+  assert.deepEqual(Object.keys(cut?.properties ?? {}), ["c", "a"]);
+  // `b` is required but was not asked for, so it is not carried as required.
+  assert.deepEqual(cut?.required, ["c"]);
+  assert.equal(cut?.title, "Options");
+});
+
+test("a key the schema does not declare is dropped, not invented", () => {
+  const schema: JsonSchema = {
+    type: "object",
+    properties: { a: { type: "number" } },
+  };
+  assert.equal(schemaForKeys(schema, ["ghost"]), null);
+  assert.equal(schemaForKeys(null, ["a"]), null);
+  assert.equal(schemaForKeys(schema, []), null);
+});
+
+test("a module's derived reach-role switches are not drawn", () => {
+  const schema: JsonSchema = {
+    type: "object",
+    properties: {
+      "module.bedtime.reach.light_group": { type: "boolean" },
+      "module.bedtime.grace": { type: "number" },
+      // Not a role: the name merely starts with the word.
+      "module.bedtime.reach_boost": { type: "number" },
+    },
+    required: ["module.bedtime.reach.light_group", "module.bedtime.grace"],
+  };
+  const drawn = withoutReachRoles(schema);
+  assert.deepEqual(Object.keys(drawn?.properties ?? {}), [
+    "module.bedtime.grace",
+    "module.bedtime.reach_boost",
+  ]);
+  // A hidden key cannot stay required, or the form would demand a field it
+  // never drew.
+  assert.deepEqual(drawn?.required, ["module.bedtime.grace"]);
+});
+
+test("a module whose only settings were its reach roles draws no form", () => {
+  const schema: JsonSchema = {
+    type: "object",
+    properties: { "module.bedtime.reach.lock": { type: "boolean" } },
+  };
+  assert.equal(withoutReachRoles(schema), null);
+});
+
+test("a schema with no reach-role keys is returned unchanged", () => {
+  const schema: JsonSchema = {
+    type: "object",
+    properties: { "module.fan.boost": { type: "boolean" } },
+  };
+  assert.equal(withoutReachRoles(schema), schema);
+  assert.equal(withoutReachRoles(null), null);
 });

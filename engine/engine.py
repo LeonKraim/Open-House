@@ -67,7 +67,9 @@ from engine.behaviours.base import (
     enable_key,
     module_enable_key,
     priority_key,
+    scope_key,
 )
+from engine.behaviours.declared import option_key
 from engine.binding import (
     House,
     HouseScope,
@@ -94,6 +96,7 @@ from engine.decision_log import (
     HousePresence,
     Input,
     ModeReading,
+    ModeRequest,
     Outcome,
     OverrideNote,
     ProposedCommand,
@@ -161,6 +164,7 @@ class Engine:
         profile_settings: Mapping[str, object] | None = None,
         profile_room_settings: Mapping[str, Mapping[str, object]] | None = None,
         installed: InstalledSet | None = None,
+        module_rooms: Mapping[str, str] | None = None,
         state: Mapping[str, object] | None = None,
     ) -> None:
         self._adapter = adapter
@@ -169,6 +173,17 @@ class Engine:
         self._location = location
         self._modes = modes
         self._installed = InstalledSet() if installed is None else installed
+        #: Which room each installed pack was put in, by pack name. The installed
+        #: set says a pack is *in the house* and the rooms say which slots it
+        #: binds, and neither says where a person put it -- which is the one fact
+        #: a house-scoped behaviour narrowed to a room needs, because narrowing
+        #: means "the room the module sits in" and the button that fires it is
+        #: there. Empty is the honest answer for a caller that never placed one
+        #: (`openhouse.facade`, and any house built before this mapping existed),
+        #: and `_scopes` handles it.
+        self._module_rooms: Mapping[str, str] = (
+            {} if module_rooms is None else dict(module_rooms)
+        )
         self._behaviours: Mapping[str, Behaviour] = (
             _by_id(behaviours) if behaviours is not None else default_behaviours()
         )
@@ -381,6 +396,7 @@ class Engine:
         )
         drafts = self._evaluate(now)
         self._resolve(drafts, now)
+        self._enter_modes(drafts)
         records = tuple(draft.record() for draft in drafts)
         for record in records:
             self._log.append(record)
@@ -441,7 +457,9 @@ class Engine:
         The order is ascending `id`, then the house's own room order, so the
         records a tick appends are in the same sequence on every replay. A
         room-scoped unit is evaluated once per room because its required slots
-        are that room's; a house-scoped one is evaluated once.
+        are that room's; a house-scoped one is evaluated once. Both of those are
+        the unit's *declared* scope, and which scopes a unit actually runs in is
+        a setting -- `_scopes` is where the two are reconciled.
         """
         drafts: list[_Draft] = []
         for unit in self._behaviours.values():
@@ -450,9 +468,137 @@ class Engine:
         return drafts
 
     def _scopes(self, unit: Behaviour) -> tuple[Scope, ...]:
-        if unit.scope is BehaviourScope.HOUSE:
-            return (HouseScope(),)
-        return tuple(RoomScope(room.id) for room in self._house.rooms)
+        """The scopes this unit is evaluated in, chosen before it runs.
+
+        A unit's declared scope is what its pack is *about* and the resolver's
+        answer when nobody has said otherwise, so the two words are read through
+        `scope_key` rather than off the unit. The setting is the whole point: a
+        bedtime pack is one behaviour that dims the room it sits in and another
+        that shuts the house down, and which of the two a person wants is not
+        something the manifest can know.
+
+        Narrowing a house unit to `room` runs it in the one room its pack was
+        installed into, and nowhere else. The alternative -- running it in every
+        room -- would turn one house-wide act into a dozen room acts, when the
+        button that fired it lives in exactly one room and the person who
+        configured it meant *that* room. The room is not this engine's to guess:
+        `module_rooms` is the placement the live path records, and an engine
+        built without one falls back to the rooms the unit is switched on in,
+        which is the nearest thing the engine knows on its own. A narrowed unit
+        with neither runs nowhere, which is what "off" already means.
+
+        Widening a room unit to `house` is not symmetric with that, and is not
+        meant to be: the same rule runs once for the whole house, against the
+        house's collected bindings, so "the lights" become every room's lights.
+        That is a real thing to want ("when anyone comes home, light the house")
+        and it costs nothing to allow, because `resolve_slot` already answers at
+        house scope for any slot the house scope makes available.
+        """
+        chosen = self._settings.resolve_or(
+            scope_key(unit.id), HouseScope(), str(unit.scope)
+        ).text()
+        if chosen == BehaviourScope.HOUSE:
+            # A house unit runs at house scope because that is what it declared.
+            # A room unit runs there only when the house can resolve every slot it
+            # names; a setting asking for more than the house can answer is left
+            # unhonoured rather than honoured into a `resolve_slot` refusal, which
+            # would take the whole tick down over one line of configuration.
+            if unit.scope is BehaviourScope.HOUSE or self.reaches_house(unit.id):
+                return (HouseScope(),)
+            return tuple(RoomScope(room.id) for room in self._house.rooms)
+        if unit.scope is not BehaviourScope.HOUSE:
+            return tuple(RoomScope(room.id) for room in self._house.rooms)
+        return self._narrowed_rooms(unit)
+
+    def active_rooms(self, unit_id: str) -> tuple[str, ...]:
+        """The rooms a unit is actually switched on in, in the house's own order.
+
+        A different question from `_scopes`', and the one a person asking "where
+        does this apply" means. `_scopes` says where a unit is *evaluated* --
+        every room, for a unit its pack declared room-scoped -- and this says
+        which of those evaluations the enable flag lets through: a room whose
+        flag is off is `skipped: disabled` on every tick rather than run in, so a
+        control offering the evaluated rooms would offer rooms the engine never
+        acts in.
+
+        The scope setting is honoured because `_scopes` is what reads it: a unit
+        widened to `house` evaluates at house scope and answers no rooms at all,
+        which is the honest reading -- it runs once for the whole house and in
+        none of its rooms. The module's master flag is read first because the
+        gate reads it first: a pack switched off runs nowhere, whatever its
+        atoms' own flags say.
+
+        Asked of the engine by anything that has to draw the answer
+        (`ha_adapter.live_modules`'s module view) rather than recomputed there,
+        because "where does this run" is one question and a second answer to it
+        is free to drift from the first. The flag's fallback is the unit's own
+        declared `enabled`, which is what `_gate` falls back to -- not the
+        `False` `_flag` in the live layer uses, because this is the gate's
+        question and not the panel's.
+        """
+        unit = self._behaviours.get(unit_id)
+        if unit is None:
+            return ()
+        if unit.module is not None:
+            master = self._settings.resolve_or(
+                module_enable_key(unit.module), HouseScope(), False
+            )
+            if not master.flag():
+                return ()
+        return tuple(
+            scope.room_id
+            for scope in self._scopes(unit)
+            if isinstance(scope, RoomScope)
+            and self._settings.resolve_or(
+                enable_key(unit.id), scope, unit.enabled
+            ).flag()
+        )
+
+    def reaches_house(self, unit_id: str) -> bool:
+        """Whether unit `unit_id` can be evaluated at house scope at all.
+
+        House scope resolves each of a unit's slots by collecting it from every
+        room (`engine.binding.resolve_slot`), and a slot the house scope does not
+        make available -- a room type's own, or a device a pack declared to be
+        held separately -- has no such reading. So the question "may this
+        behaviour run for the whole house" is a question about its slots, and
+        this is that question asked once, by the engine, for the two callers that
+        need the same answer: `_scopes`, which must not be crashed by a setting a
+        hand-edited file wrote, and the panel, which must not offer a switch the
+        engine would refuse to honour.
+
+        Required slots are asked about as well as declared ones, because the gate
+        resolves the required list at the chosen scope before the behaviour ever
+        runs: widening a unit whose pack requires a room-only slot would skip it
+        with `unbound slot` on every tick rather than doing anything.
+        """
+        unit = self._behaviours.get(unit_id)
+        if unit is None:
+            return False
+        return all(
+            slot in self._house.house_scope_slots
+            for slot in (*unit.required_slots, *unit.slots)
+        )
+
+    def _narrowed_rooms(self, unit: Behaviour) -> tuple[Scope, ...]:
+        """Where a house-scoped unit runs once a person has narrowed it.
+
+        The module's own room when the engine was told it, and otherwise the
+        rooms the unit is enabled in. The second is not a second policy: it is
+        the same question -- "where does this run" -- answered from the flags
+        when the placement is unknown, so a house whose engine was built by the
+        simulator narrows to something rather than to nothing.
+        """
+        placed = None if unit.module is None else self._module_rooms.get(unit.module)
+        if placed is not None and self._house.has_room(placed):
+            return (RoomScope(placed),)
+        return tuple(
+            RoomScope(room.id)
+            for room in self._house.rooms
+            if self._settings.resolve_or(
+                enable_key(unit.id), RoomScope(room.id), unit.enabled
+            ).flag()
+        )
 
     def _evaluate_one(self, unit: Behaviour, scope: Scope, now: datetime) -> _Draft:
         """One unit in one scope: gate it, or run it, and never neither."""
@@ -468,6 +614,7 @@ class Engine:
             inputs=ctx.inputs,
             rule=ctx.rule,
             commands=ctx.commands,
+            modes=ctx.modes,
             priority=self._priority(unit),
         )
 
@@ -557,6 +704,26 @@ class Engine:
                 drafts[source[id(loser)]].fates.append(
                     (entity_id, Outcome.LOST_ARBITRATION)
                 )
+
+    def _enter_modes(self, drafts: Sequence[_Draft]) -> None:
+        """Put the house in the modes this tick's evaluations asked for.
+
+        After resolution rather than during it, because a mode is a fact about
+        the house rather than a write to a device and the two do not arbitrate
+        against each other: a behaviour that enters Sleep and a behaviour that
+        turns a lamp off are both satisfied, where two commands for one lamp
+        would not be. The order is `(priority, mode)` ascending, so a tick whose
+        two behaviours ask for different modes of one exclusive group settles the
+        way arbitration would -- the higher priority last, and so left active --
+        and two runs of one scenario enter them in the same sequence. A mode
+        requested twice is entered once, which is what `dict.fromkeys` is doing
+        here rather than a set: the order has to survive the deduplication.
+        """
+        requested = sorted(
+            (draft.priority, mode) for draft in drafts for mode in draft.modes
+        )
+        for _, mode in dict.fromkeys(requested):
+            self._modes.activate(mode)
 
     def _override_note(self, entity_id: str, outcome: Outcome) -> OverrideNote | None:
         """The override fact that explains `outcome` for `entity_id`, if any.
@@ -769,6 +936,11 @@ class _Draft:
     inputs: list[Input]
     rule: str | None
     commands: tuple[ProposedCommand, ...]
+    #: The modes this evaluation asked the house to enter. Carried on the draft
+    #: rather than applied from the context, so the request lands after the tick
+    #: has finished arbitrating: a mode applied mid-evaluation would change what
+    #: the behaviours evaluated later in the same tick read.
+    modes: tuple[str, ...] = ()
     priority: int = 0
     #: The outcome this draft reports when it proposed nothing: `declined` for an
     #: evaluation that reached a rule and chose not to command, or the skip that
@@ -897,6 +1069,7 @@ class _Evaluation(BehaviourContext):
         self._now = now
         self._inputs: list[Input] = []
         self._commands: list[ProposedCommand] = []
+        self._modes: list[str] = []
         self._rule: str | None = None
 
     # -- What the engine reads back ----------------------------------------
@@ -910,6 +1083,11 @@ class _Evaluation(BehaviourContext):
     def commands(self) -> tuple[ProposedCommand, ...]:
         """What this evaluation proposed."""
         return tuple(self._commands)
+
+    @property
+    def modes(self) -> tuple[str, ...]:
+        """The modes this evaluation asked the house to enter."""
+        return tuple(self._modes)
 
     @property
     def rule(self) -> str | None:
@@ -952,6 +1130,12 @@ class _Evaluation(BehaviourContext):
         self._inputs.append(resolved)
         return resolved
 
+    def enter_mode(self, name: str) -> None:
+        declared = name in self._engine.modes.declared
+        self._inputs.append(ModeRequest(mode=name, taken=declared))
+        if declared:
+            self._modes.append(name)
+
     def mode_is_active(self, name: str) -> bool:
         active = self._engine.modes.is_active(name)
         self._inputs.append(ModeReading(mode=name, active=active))
@@ -965,6 +1149,47 @@ class _Evaluation(BehaviourContext):
         return self._engine._dwell.quiet(
             self._scope.room_id, slot, at=self._now, timeout=timeout
         )
+
+    def held_for(self, slot: str, read: SlotRead) -> timedelta | None:
+        """How long the slot has held the reading `read` carries, observed now.
+
+        The reading is the one string a multi-entity slot can be held to: the
+        states of every member, sorted and joined, so "every lamp is off" and
+        "one lamp is on" are two different readings and a change in either order
+        of the same set is not a change at all. `active` is deliberately False --
+        the quiet period is the *motion* path's duration (`_observe_presence`),
+        and a reading observed here is asking a different question of a slot the
+        presence timer never looks at.
+        """
+        views = read.views(self._engine.house_adapter)
+        reading = "|".join(sorted(view.state for view in views))
+        self._engine._dwell.observe(
+            self._dwell_room(),
+            slot,
+            active=False,
+            at=self._now,
+            known=all(view.available for view in views),
+            reading=reading,
+        )
+        return self._engine._dwell.held_for(self._dwell_room(), slot, at=self._now)
+
+    def option(self, pack: str, key: str, default: object) -> ResolvedSetting:
+        resolved = self._engine.settings.resolve_or(
+            option_key(pack, key), self._scope, default
+        )
+        self._inputs.append(resolved)
+        return resolved
+
+    def _dwell_room(self) -> str:
+        """The room the duration registry keys this evaluation's slots under.
+
+        The empty string for a house-scoped evaluation: a house's slot is not any
+        room's, and inventing a room's key for it would let a house-scoped
+        behaviour's reading age against a room's and vice versa. The registry is
+        keyed by a pair, so `""` is a key no room can hold and both readings stay
+        separate facts.
+        """
+        return self._scope.room_id if isinstance(self._scope, RoomScope) else ""
 
     def house_is_empty(self) -> bool:
         rooms = self._engine.empty_rooms(self._now)

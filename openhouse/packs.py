@@ -10,10 +10,31 @@ resolution against the installed set (`engine/install.py`) and the record that
 survives a snapshot. `openhouse/facade.py`'s `install_pack` is where the four are
 ordered.
 
-`check_slots` reads only `requires_slots`, and that is deliberate rather than an
-omission: an *optional* slot no vocabulary declares is refused by the sandbox's
-own slot-claim rule, so the two checks each own a case the other does not read
-and neither is reachable only through the other.
+`check_slots` reads only the *required* half -- `required_keys`, which is
+`requires_slots` and the manifest's own declarations written `required: true` --
+and that is deliberate rather than an omission: an *optional* slot no vocabulary
+declares is refused by the sandbox's own slot-claim rule, so the two checks each
+own a case the other does not read and neither is reachable only through the
+other.
+
+**A slot the house binds nowhere does not refuse the install; it is the answer.**
+`check_slots` refuses exactly one thing -- a slot name no vocabulary declares,
+which no house could ever supply -- and *returns* the required slots this house
+binds nowhere, because a house that has not configured a device yet is a house
+that has not configured a device yet. The module installs disabled and cannot be
+enabled until those slots are bound (the live session's `set_enabled`), which is
+the same ordering a person performs by hand: put the module in, then wire what
+it needs, then switch it on. Refusing at install time would have made the second
+step unreachable -- the room's configurable devices are the modules' slots, so
+the module has to be in before the slot it wants can be filled.
+
+A pack may also bring a device no room type provides, by declaring it in its own
+`slots` clause (`engine/declared_slots.py`): "warn me when the fridge has been
+open too long" needs a `fridge_contact` and the catalog has no word for one. Such
+a name is the pack's own and is neither refused nor reported unbound-against-the-
+house's-vocabulary -- it is a slot the house gains when the pack installs, and
+the check that reads a manifest without an install is the wrong place to demand
+the house already has it.
 
 Installing does not enable. A manifest that declares behaviours installs with
 every one of them still disabled, because activation is opt-in
@@ -40,6 +61,7 @@ from referencing.exceptions import NoSuchResource
 from referencing.jsonschema import DRAFT202012, Schema
 
 from engine.binding import House
+from engine.declared_slots import declared_slots, key_of, required_keys
 from tools.catalog import paths
 from tools.catalog.narrow import as_mapping
 from tools.catalog.schemas import current_version, load_versions
@@ -121,33 +143,48 @@ def manifest_errors(document: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(_message(error) for error in sorted(errors, key=_location))
 
 
-def check_slots(manifest: Mapping[str, object], house: House) -> None:
-    """Fail if any slot `manifest` requires is one `house` cannot supply.
+def check_slots(manifest: Mapping[str, object], house: House) -> tuple[str, ...]:
+    """Refuse a slot no vocabulary declares; return the ones this house binds nowhere.
 
     Two ways a required slot can be missing, and they are different findings: a
     name no slot file declares means the pack cannot be installed *anywhere*
-    (`schemas/pack-manifest` says so in the field's own description), while a
-    name the vocabulary carries and this house binds nowhere means the pack is
-    right and the house is not the one for it. Both name the pack and the slot.
+    (`schemas/pack-manifest` says so in the field's own description) and is a
+    refusal, while a name the vocabulary carries and this house binds nowhere
+    means the pack is right and the house is not finished yet -- which is the
+    returned tuple, not an error. Both name the pack and the slot.
+
+    The returned order is the manifest's, so a caller that reports the slots
+    reports them in the order the pack author wrote them rather than in a sort
+    that could differ between two readers of the same declaration.
+
+    The required set is `required_keys`, which is `requires_slots` *and* the
+    manifest's own declarations written `required: true`. Reading only the first
+    would leave a pack that brought a device it cannot run without reported as
+    satisfied by a room that has never heard of the device -- the module would
+    install, enable, and act on an empty slot.
+
+    **A name the manifest declares itself is one the vocabulary need not carry.**
+    A pack may bring a device no room type provides (`engine/declared_slots.py`),
+    so a required slot is refused only when *neither* the vocabulary nor the
+    manifest's own `slots` clause names it. The supplied test is made against the
+    key the slot binds under rather than the written name, because a declaration
+    written `separate: true` is bound by the house under a pack-qualified key and
+    the name the author wrote is one no room ever holds.
     """
     pack = str(manifest.get("name", "<unnamed>"))
-    required = manifest.get("requires_slots")
-    if not isinstance(required, list):
-        return
-    for slot in cast("list[object]", required):
-        if not isinstance(slot, str):
-            continue
-        if slot not in house.vocabulary.slots:
+    declared = {key_of(pack, slot) for slot in declared_slots(manifest)}
+    unbound: list[str] = []
+    for key in required_keys(pack, manifest):
+        if key not in house.vocabulary.slots and key not in declared:
             raise PackError(
                 pack,
-                f"it requires the slot {slot!r}, which the slot vocabulary does "
-                "not declare, so no house can supply it",
+                f"it requires the slot {key!r}, which neither the slot "
+                "vocabulary nor the pack's own `slots` clause declares, so no "
+                "house can supply it",
             )
-        if not _supplied(house, slot):
-            raise PackError(
-                pack,
-                f"it requires the slot {slot!r}, which this house binds nowhere",
-            )
+        if not _supplied(house, key):
+            unbound.append(key)
+    return tuple(unbound)
 
 
 def _supplied(house: House, slot: str) -> bool:

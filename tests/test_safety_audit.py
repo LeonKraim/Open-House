@@ -21,11 +21,11 @@ group per requirement:
 
 The alert itself is `engine/behaviours/safety_alert.py`; the guarantees are the
 engine's (`engine/safety.py`, `engine/arbitration.py`, `engine/engine.py`). The
-unit is injected here rather than shipped in `default_behaviours()`, because the
-shipped registry is exactly the three Phase 1 units and a fourth would be a Phase
-2 decision; what this module proves is that *any* unit that marks a command
-`safety` reaches the unsuppressible path, which is the guarantee a pack interpreter
-will be built against.
+unit ships in `default_behaviours()` and this module drives it through them, so
+what is proved here is what a household actually installs. The synthetic units
+below are the second half: *any* unit that marks a command `safety` reaches the
+unsuppressible path, which is the guarantee a pack interpreter is built against,
+and is a different claim from the shipped alert's.
 
 Each test says, in its docstring, what a falsifying implementation would look like.
 """
@@ -41,7 +41,6 @@ import pytest
 
 from engine.adapter import ChangeContext, ChangeOrigin, EntityView, domain_of
 from engine.behaviours import BehaviourScope, default_behaviours, enable_key
-from engine.behaviours.safety_alert import SafetyAlertBehaviour
 from engine.binding import House
 from engine.config import RATE_LIMIT_BOUND_KEY
 from engine.decision_log import DecisionRecord, HazardReading, Outcome, Repair
@@ -87,13 +86,11 @@ MODES: tuple[Mapping[str, object], ...] = (
     },
 )
 
-#: The kitchen every harness starts from, with a mode selector so a house-scoped
-#: unit's `house_mode` required slot can resolve (a house-scope slot is gathered
-#: from the rooms).
+#: The kitchen every harness starts from. The house state is the engine's own
+#: variable, so no room binds a slot for it and none is needed to resolve one.
 KITCHEN: Mapping[str, str] = {
     "motion_sensor": "binary_sensor.kitchen_motion",
     "light_group": "light.kitchen",
-    "house_mode": "input_select.house_mode",
 }
 
 #: The state a fresh entity of each domain is added in.
@@ -143,7 +140,7 @@ class _LightOnBehaviour:
     id = "plain_on"
     corpus_rows = ("lighting.motion_light_on",)
     scope = BehaviourScope.HOUSE
-    required_slots = ("house_mode",)
+    required_slots = ()
     optional_slots = ("light_group",)
     priority = 100
     module: str | None = None
@@ -172,7 +169,7 @@ class _LoudCompetitorBehaviour:
     id = "loud_competitor"
     corpus_rows = ("lighting.motion_light_on",)
     scope = BehaviourScope.HOUSE
-    required_slots = ("house_mode",)
+    required_slots = ()
     optional_slots = ("light_group",)
     priority = 1000
     module: str | None = None
@@ -302,7 +299,11 @@ def _document(
 
 
 def _registry(*extra: Behaviour) -> tuple[Behaviour, ...]:
-    """The shipped units, so a test's injected unit runs alongside the real ones."""
+    """The shipped units, so a test's injected unit runs alongside the real ones.
+
+    The alert is among them now, so a test that wants only the shipped set calls
+    this with nothing and gets the product as a household does.
+    """
     return (*default_behaviours().values(), *extra)
 
 
@@ -315,7 +316,7 @@ def _build(
     attributes: Mapping[str, Mapping[str, object]] | None = None,
     settings: Mapping[str, object] | None = None,
     behaviours: Sequence[Behaviour] | None = None,
-    house_scope_slots: Sequence[str] = ("house_mode", "light_group"),
+    house_scope_slots: Sequence[str] = ("light_group",),
 ) -> tuple[Engine, FakeHouseAdapter, VirtualClock]:
     """A house, a fake and an engine over them, all the units enabled.
 
@@ -403,7 +404,7 @@ def test_a_smoke_alarm_lights_the_house(vocabulary: Vocabulary) -> None:
     """
     engine, adapter, _ = _build(
         vocabulary,
-        behaviours=_registry(SafetyAlertBehaviour()),
+        behaviours=_registry(),
         entities={"binary_sensor.smoke_sensor": "on"},
         attributes={"binary_sensor.smoke_sensor": _SMOKE},
     )
@@ -426,7 +427,7 @@ def test_a_leak_alarm_lights_the_house(vocabulary: Vocabulary) -> None:
     """
     engine, adapter, _ = _build(
         vocabulary,
-        behaviours=_registry(SafetyAlertBehaviour()),
+        behaviours=_registry(),
         entities={"binary_sensor.utility_leak": "on"},
         attributes={"binary_sensor.utility_leak": {"device_class": "moisture"}},
     )
@@ -449,7 +450,7 @@ def test_a_co_alarm_lights_the_house(vocabulary: Vocabulary) -> None:
     """
     engine, adapter, _ = _build(
         vocabulary,
-        behaviours=_registry(SafetyAlertBehaviour()),
+        behaviours=_registry(),
         entities={"binary_sensor.co_alarm": "on"},
         attributes={"binary_sensor.co_alarm": {"device_class": "carbon_monoxide"}},
     )
@@ -475,7 +476,7 @@ def test_the_safety_flag_outranks_a_higher_priority_behaviour(
     """
     engine, adapter, _ = _build(
         vocabulary,
-        behaviours=_registry(SafetyAlertBehaviour(), _LoudCompetitorBehaviour()),
+        behaviours=_registry(_LoudCompetitorBehaviour()),
         entities={"binary_sensor.smoke_sensor": "on", "light.kitchen": "on"},
         attributes={"binary_sensor.smoke_sensor": _SMOKE},
     )
@@ -499,7 +500,7 @@ def test_away_mode_cannot_silence_the_alert(vocabulary: Vocabulary) -> None:
     """
     engine, adapter, clock = _build(
         vocabulary,
-        behaviours=_registry(SafetyAlertBehaviour()),
+        behaviours=_registry(),
         entities={"light.kitchen": "on"},
     )
     engine.modes.activate("away")
@@ -521,7 +522,7 @@ def test_sleep_mode_cannot_silence_the_alert(vocabulary: Vocabulary) -> None:
     """
     engine, adapter, _ = _build(
         vocabulary,
-        behaviours=_registry(SafetyAlertBehaviour()),
+        behaviours=_registry(),
         entities={"binary_sensor.smoke_sensor": "on"},
         attributes={"binary_sensor.smoke_sensor": _SMOKE},
     )
@@ -542,9 +543,7 @@ def test_a_person_s_recent_hand_cannot_silence_the_alert(
     now. The override is asserted to *still stand* afterwards: the alert bypasses
     it, it does not cancel it, so a lamp somebody is holding keeps its exemption.
     """
-    engine, adapter, _ = _build(
-        vocabulary, behaviours=_registry(SafetyAlertBehaviour())
-    )
+    engine, adapter, _ = _build(vocabulary, behaviours=_registry())
     adapter.actuate("light.kitchen", "off", context=ChangeContext.user())
     _alarm(adapter)
     record = _one(engine.tick(), "safety_alert")
@@ -581,7 +580,7 @@ def test_the_rate_limit_cannot_silence_the_alert(vocabulary: Vocabulary) -> None
     """
     engine, adapter, _ = _build(
         vocabulary,
-        behaviours=_registry(SafetyAlertBehaviour()),
+        behaviours=_registry(),
         settings={RATE_LIMIT_BOUND_KEY: 1, "engine.rate_limit.window_seconds": 3600.0},
     )
     adapter.actuate("binary_sensor.kitchen_motion", "on", context=ChangeContext.world())
@@ -633,7 +632,7 @@ def test_a_detector_that_is_not_alarming_raises_nothing(
     """
     engine, adapter, _ = _build(
         vocabulary,
-        behaviours=_registry(SafetyAlertBehaviour()),
+        behaviours=_registry(),
         entities={"binary_sensor.smoke_sensor": "off"},
         attributes={"binary_sensor.smoke_sensor": _SMOKE},
     )

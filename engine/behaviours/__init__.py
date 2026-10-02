@@ -31,9 +31,11 @@ from engine.behaviours.base import (
     enable_key,
     module_enable_key,
     priority_key,
+    scope_key,
 )
 from engine.behaviours.motion_lighting import MotionLightingBehaviour
 from engine.behaviours.override import OverrideBehaviour
+from engine.behaviours.safety_alert import SafetyAlertBehaviour
 
 __all__ = [
     "AwayShutdownBehaviour",
@@ -43,11 +45,13 @@ __all__ = [
     "BehaviourScope",
     "MotionLightingBehaviour",
     "OverrideBehaviour",
+    "SafetyAlertBehaviour",
     "behaviour_defaults",
     "default_behaviours",
     "enable_key",
     "module_enable_key",
     "priority_key",
+    "scope_key",
 ]
 
 
@@ -64,6 +68,7 @@ def default_behaviours() -> Mapping[str, Behaviour]:
         MotionLightingBehaviour(),
         OverrideBehaviour(),
         AwayShutdownBehaviour(),
+        SafetyAlertBehaviour(),
     )
     return {unit.id: unit for unit in sorted(units, key=lambda unit: unit.id)}
 
@@ -71,11 +76,14 @@ def default_behaviours() -> Mapping[str, Behaviour]:
 def behaviour_defaults(behaviours: Iterable[Behaviour]) -> Mapping[str, object]:
     """The built-in layer every unit contributes to the config resolver.
 
-    Three keys per unit, and all three are the same kind of fact: the unit's
+    Four keys per unit, and all four are the same kind of fact: the unit's
     declared answer, which any house or room layer may overrule. `enabled` is
     here rather than left to the engine because the product rule is that a fresh
     house runs nothing, and the value that makes that true should be readable in
-    the unit that would otherwise run.
+    the unit that would otherwise run. `scope` is here for the same reason on the
+    other axis: a unit that states what it is about should be readable as saying
+    so, and the resolver's answer for an untouched house should be the unit's own
+    word rather than an absence the engine fills in.
 
     A later unit whose defaults collide with an earlier one's is a unit reusing
     another's key, so the later value would silently win; the mapping is built
@@ -87,6 +95,7 @@ def behaviour_defaults(behaviours: Iterable[Behaviour]) -> Mapping[str, object]:
         contributed = {
             enable_key(unit.id): unit.enabled,
             priority_key(unit.id): unit.priority,
+            scope_key(unit.id): str(unit.scope),
             **unit.defaults,
         }
         for key, value in contributed.items():

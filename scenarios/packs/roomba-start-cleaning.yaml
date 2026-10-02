@@ -24,7 +24,7 @@ given:
           vacuum:
             entity_id: vacuum.roomba
     house_scope:
-      slots: [house_mode]
+      slots: [vacuum]
   seed: 11
   started_at: "2026-01-01T23:00:00+00:00"
   enable_flags:

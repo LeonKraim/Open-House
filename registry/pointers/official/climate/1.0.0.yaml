@@ -1,0 +1,7 @@
+name: climate
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/derived/climate.yaml
+sha256: sha256:3f41786e78ea06026df736a96581737e63e152e9c64aa626f74bf49407f99119
+tier: official

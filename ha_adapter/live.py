@@ -48,6 +48,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from engine.behaviours import enable_key
 from engine.binding import RoomScope
@@ -66,9 +67,28 @@ from .composition import (
     build_live_house,
     mode_name,
 )
+from .declared_units import with_declared_slots
 from .transport import HaTransport
 
-__all__ = ["SESSION_STATE_VERSION", "LiveSession", "LiveSessionError"]
+__all__ = [
+    "HOUSE",
+    "SESSION_STATE_VERSION",
+    "LiveSession",
+    "LiveSessionError",
+]
+
+#: The placement that means *the whole house* rather than a room.
+#:
+#: The house is a target a module can be put in, exactly like a room -- its own
+#: slots, its own modules, its own settings -- and a placement has to be able to
+#: say so. A room placement is the room's engine id; this is the other one, and
+#: it is spelled the empty string because that is already what a room id is never
+#: allowed to be (`rebuild` refuses duplicate ids and every room has one) and
+#: what a module that belongs to no single room already read as. `module_rooms`
+#: carrying `pack: ""` is therefore unambiguous: the key is *present*, so the
+#: house was chosen, where an absent key still means "never placed" and falls
+#: back to joining the pack's slots (`live_modules._module_room`).
+HOUSE = ""
 
 #: The version the session writes into the state it hands out. Bumped when the
 #: shape of that state changes, so a state written by an older build is refused
@@ -121,8 +141,31 @@ class LiveSession:
     profiles: ProfileSet
     #: House-scope settings a person has set, above the builtin defaults.
     house_settings: Mapping[str, object] = field(default_factory=dict)
+    #: The house's own binding per house-scope slot, by slot name.
+    #:
+    #: One global entity per role -- "the house's lights" -- bound once on the
+    #: House tab. It is what the house scope resolves the slot to, ahead of the
+    #: rooms it would otherwise collect, and what a room that bound no slot of
+    #: its own falls back to (`engine.binding.resolve_slot`). Kept here rather
+    #: than in a room because a room is not where it lives: the frozen house
+    #: schema has no house-level `bindings`, so this is session state, saved and
+    #: restored beside `house_settings` and absent from a house that never set
+    #: one.
+    house_bindings: Mapping[str, str] = field(default_factory=dict)
     #: The packs this house holds.
     installed: InstalledSet = field(default_factory=InstalledSet)
+    #: The room each installed pack was *put in*, by pack name.
+    #:
+    #: A pack lands in the house -- the engine keys the installed set by name
+    #: and knows nothing of rooms -- but a person installs a module *into a
+    #: room*, and which room has to be remembered rather than worked out. The
+    #: obvious inference, "the room that binds every entity the pack's slots
+    #: reached", cannot answer for a pack whose slots are mostly house-scope:
+    #: `light_group` and `lock` are the whole house's, so `bedtime` reaches
+    #: through them in every room at once and no room binds them at all. It got
+    #: no room, `_enabled` answered `False` for the empty id, and the module a
+    #: person had just placed could never be switched on.
+    module_rooms: Mapping[str, str] = field(default_factory=dict)
     #: The adapter, kept across rebuilds so an entity Home Assistant currently
     #: reports as unavailable keeps the last state it was known to hold.
     adapter: HAAdapter | None = None
@@ -143,8 +186,10 @@ class LiveSession:
         location: Location,
         clock: Clock | None = None,
         house_settings: Mapping[str, object] | None = None,
+        house_bindings: Mapping[str, str] | None = None,
         installed: InstalledSet | None = None,
         profiles: ProfileSet | None = None,
+        module_rooms: Mapping[str, str] | None = None,
         adapter: HAAdapter | None = None,
     ) -> LiveSession:
         """A session over `rooms`, with its first engine built.
@@ -172,7 +217,9 @@ class LiveSession:
             if profiles is None
             else profiles,
             house_settings=dict(house_settings or {}),
+            house_bindings=dict(house_bindings or {}),
             installed=InstalledSet() if installed is None else installed,
+            module_rooms=dict(module_rooms or {}),
             adapter=adapter,
         )
         session.rebuild()
@@ -241,7 +288,9 @@ class LiveSession:
             location=self.location,
             clock=self.clock,
             house_settings=self.house_settings,
+            house_bindings=self.house_bindings,
             installed=self.installed,
+            module_rooms=self.module_rooms,
             profiles=self.profiles,
             adapter=self.adapter,
         )
@@ -271,16 +320,23 @@ class LiveSession:
         """Activate the house mode a label names, projecting the label once."""
         self.engine.modes.activate(mode_name(label))
 
-    def bind(self, room_id: str, slot: str, entity_id: str) -> LiveRoom:
+    def bind(self, room_id: str, slot: str, entity_id: str) -> LiveRoom | None:
         """Point `slot` in `room_id` at `entity_id`, replacing whatever was there.
 
         The old binding is not recoverable from here: the *caller* records what
         it replaced, because only the caller has a decision log to record it in,
         and a session that kept a history of bindings would be a second place the
         house's past is written down.
+
+        `room_id` may be `HOUSE`, which binds the slot for the whole house
+        instead of for a room (`set_house_binding`) and answers `None`, because
+        there is no room that changed.
         """
+        if room_id == HOUSE:
+            self.set_house_binding(slot, entity_id)
+            return None
         room = self.require_room(room_id)
-        if slot not in room.bindings and slot not in self.vocabulary.slots:
+        if slot not in room.bindings and slot not in self.bindable_slots():
             raise LiveSessionError(f"there is no slot {slot!r} in this house")
         updated = _rebind(room, slot, entity_id)
         self.set_rooms(
@@ -288,8 +344,55 @@ class LiveSession:
         )
         return updated
 
-    def unbind(self, room_id: str, slot: str) -> LiveRoom:
-        """Leave `slot` in `room_id` unbound."""
+    def set_house_binding(self, slot: str, entity_id: str | None) -> None:
+        """Bind `slot` for the whole house to `entity_id`, or clear it for `None`.
+
+        The global half of binding: one entity standing in for a role everywhere
+        -- the house scope resolves the slot to it, and every room that bound
+        none of its own falls back to it (`engine.binding.resolve_slot`). It
+        rebuilds, because the house the engine decides for is a different house
+        once a global slot points somewhere new.
+
+        Gated on the house's own slot list first, which is the list the house
+        scope will resolve against: a binding the engine would refuse to resolve
+        is refused here, where the person can still be told why.
+        """
+        house = self.engine.house
+        if slot not in house.house_scope_slots and slot not in self.bindable_slots():
+            raise LiveSessionError(f"there is no house slot {slot!r} in this house")
+        bindings = dict(self.house_bindings)
+        if entity_id is None:
+            bindings.pop(slot, None)
+        else:
+            bindings[slot] = entity_id
+        self.house_bindings = bindings
+        self.rebuild()
+
+    def bindable_slots(self) -> frozenset[str]:
+        """Every slot a room in this house may bind, by the name it binds under.
+
+        The catalog's words *and* the devices the installed packs declare of
+        their own. The frozen vocabulary carries only the first: a pack that
+        brings `fridge_contact` has that word added to the house's vocabulary by
+        the install rather than by the catalog, so a gate that checked
+        `self.vocabulary.slots` alone would refuse the very binding that makes
+        the pack's own requirement fillable -- the room's page would offer the
+        device and the write behind it would answer "no such slot".
+
+        The extension is read through `with_declared_slots`, the one function
+        that grows the vocabulary, so this gate and the engine's vocabulary
+        cannot disagree about which names the house carries. A declared name
+        arrives under the key it binds with (`key_of`), which is the name the
+        room's page lists and the name this check is asked about.
+        """
+        extended = with_declared_slots(self.root, self.installed, self.vocabulary)
+        return frozenset(extended.slots)
+
+    def unbind(self, room_id: str, slot: str) -> LiveRoom | None:
+        """Leave `slot` in `room_id` unbound, or the house's own binding for `HOUSE`."""
+        if room_id == HOUSE:
+            self.set_house_binding(slot, None)
+            return None
         room = self.require_room(room_id)
         updated = _rebind(room, slot, None)
         self.set_rooms(
@@ -301,6 +404,36 @@ class LiveSession:
         """Replace the installed packs and rebuild."""
         self.installed = installed
         self.rebuild()
+
+    def place_module(self, pack: str, room_id: str) -> None:
+        """Record where `pack` was installed: a room id, or `HOUSE` for the house.
+
+        Rebound rather than mutated so a reader holding the previous mapping
+        keeps the previous answer, which is the same discipline the installed set
+        is kept under. No rebuild: where a module belongs is how the panel groups
+        it and where its enable flag is written, and neither is engine wiring.
+
+        `room_id` is `HOUSE` when a module was put in the whole house rather than
+        in a room, which is a real choice and not the absence of one -- the house
+        has its own modules (`live_modules.install`) and this is what records it.
+        """
+        self.module_rooms = {**self.module_rooms, pack: room_id}
+
+    def forget_module(self, pack: str) -> None:
+        """Drop `pack`'s room, because the module is no longer in the house."""
+        self.module_rooms = {
+            name: room for name, room in self.module_rooms.items() if name != pack
+        }
+
+    def module_room(self, pack: str) -> str | None:
+        """Where `pack` was installed: a room id, `HOUSE`, or `None` if unnamed.
+
+        The three answers are three different facts and none is a spelling of
+        another: a room id is a room, `HOUSE` is the whole house, and `None` is a
+        pack nobody placed -- a Store install, or a house configured before the
+        placement was kept.
+        """
+        return self.module_rooms.get(pack)
 
     def set_profiles(self, profiles: ProfileSet) -> None:
         """Replace the profile set -- declarations and selections -- and rebuild."""
@@ -341,6 +474,7 @@ class LiveSession:
             "rooms": [_room_document(room) for room in self.rooms],
             "house_settings": dict(self.house_settings),
             "installed": self.installed.to_document(),
+            "module_rooms": dict(self.module_rooms),
             "profiles": self.profiles.to_document(),
         }
 
@@ -387,6 +521,9 @@ class LiveSession:
             installed=InstalledSet.from_document(
                 _mapping(state.get("installed"), "installed")
             ),
+            # Absent from a document written before the field existed, and the
+            # empty mapping is the honest reading: nothing has been placed.
+            module_rooms=_strings_mapping(state.get("module_rooms")),
             profiles=ProfileSet.from_document(
                 _mapping(profiles, "profiles"), schema=schema
             )
@@ -478,6 +615,27 @@ def _mapping(value: object, field_name: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise LiveSessionError(f"a session state needs {field_name!r} to be an object")
     return value
+
+
+def _strings_mapping(value: object) -> Mapping[str, str]:
+    """`module_rooms`: pack names to room ids, both strings.
+
+    Absent is the empty mapping and not a failure, because a document written
+    before the field existed has none recorded and is still a valid house --
+    `_module_room` falls back to joining the pack's slots for those. A value
+    that is not a string is a different thing: it is a document that says
+    something this build cannot read, and it is refused rather than quietly
+    dropped so a module cannot end up in a room nobody chose.
+    """
+    entries = _mapping(value, "module_rooms")
+    if not all(
+        isinstance(name, str) and isinstance(room, str)
+        for name, room in entries.items()
+    ):
+        raise LiveSessionError(
+            "a session state needs 'module_rooms' to map pack names to room ids"
+        )
+    return cast("Mapping[str, str]", entries)
 
 
 def _labels(value: object) -> tuple[str, ...]:

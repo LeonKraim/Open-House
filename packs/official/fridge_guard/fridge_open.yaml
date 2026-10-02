@@ -1,0 +1,28 @@
+# What `packs/official/fridge-guard.yaml` confers, and the file its `provides`
+# entry pins. The entry declares the class `automation`; this file is that
+# artefact.
+#
+# Documentation rather than input: the engine evaluates the manifest's behaviour
+# and never reads this file. What it is for is the other direction of the same
+# idea -- the artifact a person can read to see what the pack hands over.
+#
+# It names **slots, not entities**, exactly as the pack does. `fridge_contact` is
+# a name this pack declared and a room binds; `light_group` is the catalog's word
+# for the room's lights. A file that named `binary_sensor.kitchen_fridge` would
+# only work in the house it was written in, which is the one thing a pack may not
+# be -- and the fridge contact is the reason this example exists, because the
+# placeholder it names is one no room type provides.
+alias: The fridge has been open too long
+description: >-
+  Turns the room's lights on when the fridge door reports open, so the alarm is
+  something a person in the house can see. The manifest holds no duration; the
+  engine holds the clock.
+trigger:
+  - platform: state
+    entity_id: fridge_contact
+    to: "on"
+action:
+  - service: light.turn_on
+    target:
+      entity_id: light_group
+mode: single

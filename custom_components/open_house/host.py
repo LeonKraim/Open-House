@@ -37,17 +37,18 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 
 from engine.install import InstalledSet
 from engine.profiles import ProfileSet, load_profile_schema
 from ha_adapter.composition import LiveRoom, room_id
-from ha_adapter.live import LiveSession
+from ha_adapter.live import HOUSE, LiveSession, LiveSessionError
 
 from .const import (
     DATA_AREA_ID,
@@ -177,7 +178,7 @@ class OpenHouseHost:
 
     async def async_set_binding(
         self, room_id: str, slot: str, entity_id: str | None
-    ) -> RoomRef:
+    ) -> RoomRef | None:
         """Bind or unbind a slot, in the session and in the subentry both.
 
         The session edit is what the caller's reply is built from, so it happens
@@ -186,13 +187,28 @@ class OpenHouseHost:
         the subentry write would leave the running house and the saved one
         disagreeing until the next reload, which is why the session's own
         validation is the gate rather than a second check here.
+
+        `room_id` may be `HOUSE`, whose slots have no subentry to write: the
+        binding lives in the session's `house_bindings` and is saved with the rest
+        of the session state that Home Assistant has no home for (`async_save`),
+        which is what makes a global slot survive a restart. `None` is the answer
+        for it, because no room changed.
         """
+        if room_id == HOUSE:
+            if entity_id is not None:
+                self.session.bind(room_id, slot, entity_id)
+            else:
+                self.session.unbind(room_id, slot)
+            await self.async_save()
+            return None
         room = self.require_room(room_id)
         updated = (
             self.session.bind(room_id, slot, entity_id)
             if entity_id is not None
             else self.session.unbind(room_id, slot)
         )
+        if updated is None:  # pragma: no cover - the HOUSE branch above returned
+            raise LiveSessionError(f"binding {slot!r} in {room_id!r} changed no room")
         await self._async_write_room(room, updated)
         return await self._async_refresh_room(room_id)
 
@@ -236,6 +252,22 @@ class OpenHouseHost:
             bindings=dict(bindings),
         )
         self.session.set_rooms((*self.session.rooms, engine_room))
+        # `self.rooms` was built once, at setup, out of the entry's subentries,
+        # and the subentry added just above is not in it yet -- the entry's own
+        # map is only rebuilt when the reload lands. So the room is recorded here
+        # by hand for the same reason it is added to the session by hand: the
+        # answer this call returns is read out of it. Without this line the
+        # subentry is written and the room is then reported as missing, so
+        # "Add room" tells the person it failed and the room appears anyway on
+        # the next reload.
+        self.rooms[engine_room.id] = RoomRef(
+            subentry_id=subentry.subentry_id,
+            area_id=area_id,
+            id=engine_room.id,
+            name=area.name,
+            type=engine_room.type,
+            bindings=dict(bindings),
+        )
         return await self._async_refresh_room(engine_room.id)
 
     async def async_remove_room(self, room_id: str) -> None:
@@ -279,12 +311,23 @@ class OpenHouseHost:
         Rooms are absent on purpose (see the module docstring). The engine's
         runtime state is absent too: what a light was doing is not what a house
         *is*, and restoring it would describe a house that no longer exists.
+
+        `module_rooms` is here because it is the one thing about a placement that
+        Home Assistant does not already hold: the installed set says the pack is
+        in the house and the room says which slots it binds, but neither says
+        *which room the person put it in* -- and for a pack whose slots are
+        house-scope (`light_group`, `lock`) that is the only room there is to
+        report. Dropped on restart, the module would come back with no room,
+        `_enabled` would answer `False` for the empty id, and a module sitting
+        visibly in a room could not be switched on.
         """
         await self._store.async_save(
             {
                 "installed": self.session.installed.to_document(),
                 "profiles": self.session.profiles.to_document(),
                 "house_settings": dict(self.session.house_settings),
+                "house_bindings": dict(self.session.house_bindings),
+                "module_rooms": dict(self.session.module_rooms),
             }
         )
 
@@ -535,8 +578,16 @@ def _session(
         root=root,
         location=location,
         house_settings=_mapping(stored.get("house_settings")),
+        # Absent from a store written before the field existed, and the empty
+        # mapping is the honest reading there: a house that has not bound a
+        # global slot resolves each role from rooms, exactly as it did then.
+        house_bindings=_strings(stored.get("house_bindings")),
         installed=InstalledSet.from_document(_mapping(stored.get("installed"))),
         profiles=_profiles(stored.get("profiles"), root),
+        # Absent in a document written before the field existed, and the empty
+        # mapping is the right answer there: `_module_room` joins the pack's
+        # slots for a house that recorded no placement.
+        module_rooms=_strings(stored.get("module_rooms")),
     )
 
 
@@ -582,8 +633,69 @@ def _profiles(stored: object, root: Any) -> ProfileSet:
     return ProfileSet([], schema=schema)
 
 
+def entity_ids_in_area(hass: HomeAssistant, area_id: str) -> tuple[str, ...]:
+    """Every entity Home Assistant files under an area, sorted for determinism.
+
+    "Files under" is the entity's *effective* area, not its own. An entity with
+    no area of its own lives in its device's area, and a device's area is what a
+    person sets when they say which room a thing is in -- which is also how an
+    integration's `suggested_area` lands. `entity_registry.async_entries_for_area`
+    indexes the entity's own `area_id` and nothing else, so it answers with the
+    entities somebody filed one at a time: in a house whose devices are all
+    neatly in their rooms, and no entity filed individually, that is nothing at
+    all. Every slot in the panel answered "No match" for exactly this reason.
+
+    Both the setup flow's guess and the picker's candidates read this, so the two
+    cannot disagree about which room a device is in.
+    """
+    registry = er.async_get(hass)
+    return tuple(
+        sorted(
+            entry.entity_id
+            for entry in registry.entities.values()
+            if er.async_get_effective_area_id(hass, entry) == area_id
+        )
+    )
+
+
+def entity_ids_house(hass: HomeAssistant) -> tuple[str, ...]:
+    """Every entity Home Assistant holds, sorted for determinism.
+
+    The house scope's candidate set, and the one place "any area" is read: a
+    global slot belongs to no room -- it is the house's own role, filled once for
+    every room -- so there is no area to file its candidates under and the whole
+    house is the honest answer. Reading the state machine rather than the entity
+    registry is deliberate here: a global slot is proposed from what the house
+    can actually actuate, and an entity with no registry entry (a template, a
+    group) is one it can actuate all the same.
+    """
+    return tuple(sorted(state.entity_id for state in hass.states.async_all()))
+
+
 def _mapping(value: object) -> Mapping[str, object]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _strings(value: object) -> Mapping[str, str]:
+    """A stored mapping whose keys and values are both strings, or a refusal.
+
+    `module_rooms` is pack names to room ids and nothing else, so a document
+    holding anything else is not one this build can read -- and it is refused
+    rather than filtered, because a dropped entry is a module coming back with
+    no room and an Enable button that does nothing, which is exactly the failure
+    the field exists to prevent and it would arrive quietly.
+
+    Absent is the empty mapping. A house stored before the field existed has no
+    placement recorded and is still a valid house: `_module_room` joins the
+    pack's slots for it.
+    """
+    entries = _mapping(value)
+    if not all(
+        isinstance(name, str) and isinstance(room, str)
+        for name, room in entries.items()
+    ):
+        raise ValueError("'module_rooms' must map pack names to room ids")
+    return cast("Mapping[str, str]", entries)
 
 
 def _location(hass: HomeAssistant) -> Any:

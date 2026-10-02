@@ -14,6 +14,15 @@ import { OpenHouseElement } from "../base.ts";
 import type { ProfileRef, RoomSummary } from "../api/models.ts";
 
 export class ProfilesTab extends OpenHouseElement {
+  static override properties = {
+    ...OpenHouseElement.properties,
+    profiles: { state: true },
+    rooms: { state: true },
+    isLoading: { state: true },
+    error: { state: true },
+    busy: { state: true },
+  };
+
   private profiles: ProfileRef[] = [];
   private rooms: RoomSummary[] = [];
   private isLoading = true;

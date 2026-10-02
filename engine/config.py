@@ -177,6 +177,21 @@ class ResolvedSetting:
             raise InvalidSettingError(self.key, self.value, self.layer, "a boolean")
         return self.value
 
+    def text(self) -> str:
+        """The value as a string, or `InvalidSettingError` naming key and layer.
+
+        The accessor for a setting whose value is a *word* rather than a number
+        or a switch -- a behaviour's chosen scope is the one so far. It is here
+        rather than left to the caller's `str()` because the callers that matter
+        compare the answer against a closed set of words, and `str()` over a
+        `None` or a `True` would hand back `"None"` or `"True"`: words that match
+        nothing, so the comparison would fall through to a default in silence and
+        the layer that wrote the wrong value would never be named.
+        """
+        if not isinstance(self.value, str):
+            raise InvalidSettingError(self.key, self.value, self.layer, "a string")
+        return self.value
+
 
 class ConfigResolver:
     """The layered settings stack, resolved by precedence.

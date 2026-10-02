@@ -68,6 +68,23 @@ class Dwell:
     #: written before this field existed, and every ordinary observation, reads
     #: as a reading that could be trusted.
     known: bool = True
+    #: When the reading last *changed value*. The second duration this registry
+    #: answers, and a different one from `since`: `since` moves whenever the slot
+    #: reads active, while `held` stands still until the reading becomes a
+    #: *different* reading. `pack-manifest/1.3.0`'s `for` clause asks this
+    #: question -- "the fridge has read open for a quarter of an hour" -- and
+    #: `since` cannot answer it, because a contact that has read `on` for an hour
+    #: and one that flicked to `on` a second ago have the same `since` only when
+    #: neither has changed, which is exactly the case the clause is not about.
+    #: `None` for a record observed before this field existed, or by a caller
+    #: that named no reading (the presence path, which asks a boolean question
+    #: and has no state string to hold).
+    held: datetime | None = None
+    #: The reading that `held` is the age of, in the one string form a caller
+    #: supplies (`engine/engine.py`'s `observe`). Kept beside `held` because a
+    #: duration with no value beside it could not tell "the door has been open
+    #: for an hour" from "the door has been shut for an hour".
+    reading: str | None = None
 
 
 class DwellRegistry:
@@ -75,7 +92,7 @@ class DwellRegistry:
 
     One entry per room and slot rather than per room, because the two callers
     read different things -- motion lighting watches the room's `motion_sensor`,
-    a presence-driven rule might watch a `contact_sensor` -- and a registry keyed
+    a presence-driven rule might watch a `door_contact` -- and a registry keyed
     by room alone would silently make the second caller's observations overwrite
     the first's.
     """
@@ -90,7 +107,14 @@ class DwellRegistry:
         return len(self._records)
 
     def observe(
-        self, room_id: str, slot: str, *, active: bool, at: datetime, known: bool = True
+        self,
+        room_id: str,
+        slot: str,
+        *,
+        active: bool,
+        at: datetime,
+        known: bool = True,
+        reading: str | None = None,
     ) -> Dwell:
         """Record this tick's reading, and return the quiet period it defines.
 
@@ -105,18 +129,64 @@ class DwellRegistry:
         readable reading arrives. Keeping `since` rather than resetting it means
         the quiet time is never restarted by a fault, so a sensor that comes back
         after a long outage does not hand the room a fresh occupancy it never had.
+
+        `reading` is the optional second question -- which value the slot holds
+        and since when -- and it is supplied only by callers that have a state
+        string to give. A reading equal to the last one leaves `held` where it
+        was; a *different* one moves it to `at`; the first one a slot is ever
+        observed holding sets `held` to `at` too, because the engine does not know
+        how long it had been so before it looked. An unreadable observation
+        advances neither, on the same reasoning that keeps `since` still: a
+        sensor that cannot be read is not a sensor reporting a change.
         """
         key = (room_id, slot)
         existing = self._records.get(key)
+        held, held_reading = _held(existing, at=at, known=known, reading=reading)
         if not known:
             since = at if existing is None else existing.since
-            record = Dwell(room_id=room_id, slot=slot, since=since, known=False)
+            record = Dwell(
+                room_id=room_id,
+                slot=slot,
+                since=since,
+                known=False,
+                held=held,
+                reading=held_reading,
+            )
         elif active or existing is None:
-            record = Dwell(room_id=room_id, slot=slot, since=at)
+            record = Dwell(
+                room_id=room_id,
+                slot=slot,
+                since=at,
+                known=True,
+                held=held,
+                reading=held_reading,
+            )
         else:
-            record = Dwell(room_id=room_id, slot=slot, since=existing.since, known=True)
+            record = Dwell(
+                room_id=room_id,
+                slot=slot,
+                since=existing.since,
+                known=True,
+                held=held,
+                reading=held_reading,
+            )
         self._records[key] = record
         return record
+
+    def held_for(self, room_id: str, slot: str, *, at: datetime) -> timedelta | None:
+        """How long the slot has held its current reading, or `None` if unknown.
+
+        `None` rather than zero for a slot nothing has observed with a reading,
+        for the reason `quiet` answers false for one nothing has observed at all:
+        "the door has been open for a while" must not be manufactured out of a
+        reading nobody took. A duration of zero is a real answer -- the reading
+        changed on this very tick -- and it is the one that stops a `for` clause
+        firing the instant a door opens.
+        """
+        record = self._records.get((room_id, slot))
+        if record is None or record.held is None:
+            return None
+        return at - record.held
 
     def since(self, room_id: str, slot: str) -> datetime | None:
         """When the slot last read as active, or `None` if never observed."""
@@ -170,6 +240,11 @@ class DwellRegistry:
                 "slot": record.slot,
                 "since": record.since.isoformat(),
                 "known": record.known,
+                # The duration half, written even when unknown: a key that
+                # appeared only sometimes would make the document's shape depend
+                # on the run, and a snapshot reader compares documents.
+                "held": None if record.held is None else record.held.isoformat(),
+                "reading": record.reading,
             }
             for record in self.records()
         ]
@@ -191,9 +266,34 @@ class DwellRegistry:
                     slot=_str(fields, "slot", index),
                     since=_timestamp(fields, "since", index),
                     known=_bool(fields, "known", index),
+                    held=_optional_timestamp(fields, "held", index),
+                    reading=_optional_str(fields, "reading", index),
                 )
             )
         return cls(records)
+
+
+def _held(
+    existing: Dwell | None, *, at: datetime, known: bool, reading: str | None
+) -> tuple[datetime | None, str | None]:
+    """The `held` instant and reading an observation defines.
+
+    Four cases, and the two that are easy to get wrong are named here rather than
+    left to the reader of `observe`:
+
+    - **Nothing to report** (`reading is None`) keeps whatever the record already
+      held, so a caller asking the boolean question does not erase the answer to
+      the duration one.
+    - **Unreadable** keeps it too: a dead sensor reports no change, and a `for`
+      clause must not fire because a contact flicked to unavailable.
+    - **The same reading** stands still, which is the whole point.
+    - **A different reading**, and the first one ever seen, both set `at`.
+    """
+    if reading is None or not known:
+        return (None, None) if existing is None else (existing.held, existing.reading)
+    if existing is not None and existing.reading == reading:
+        return (existing.held if existing.held is not None else at, reading)
+    return (at, reading)
 
 
 def _str(fields: Mapping[str, object], key: str, index: int) -> str:
@@ -216,6 +316,39 @@ def _bool(fields: Mapping[str, object], key: str, index: int) -> bool:
     if not isinstance(value, bool):
         raise DwellError(f"dwell row {index} has a non-boolean {key!r}: {value!r}")
     return value
+
+
+def _optional_str(fields: Mapping[str, object], key: str, index: int) -> str | None:
+    """A row's optional string, where absent and null both mean "not reported".
+
+    Absent is what a snapshot written before the field existed has, and null is
+    what the current writer emits for a record it observed no reading for. The
+    two mean the same thing to every reader here, so they are collapsed rather
+    than distinguished -- unlike a present-but-wrong value, which is refused.
+    """
+    value = fields.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise DwellError(f"dwell row {index} has a non-string {key!r}: {value!r}")
+    return value
+
+
+def _optional_timestamp(
+    fields: Mapping[str, object], key: str, index: int
+) -> datetime | None:
+    """A row's optional instant, absent or null both reading as unknown."""
+    value = fields.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise DwellError(f"dwell row {index} has a non-string {key!r}: {value!r}")
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError as error:
+        raise DwellError(
+            f"dwell row {index} has an unreadable {key!r}: {value!r}"
+        ) from error
 
 
 def _timestamp(fields: Mapping[str, object], key: str, index: int) -> datetime:

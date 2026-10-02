@@ -12,22 +12,24 @@ the virtual clock, no network and no wall-clock sleep. The oracle is the decisio
 log (`session.get_decision_log`), which is the record this project already keeps
 -- a step asserts *why* something happened by its record's `rule` and `outcome`,
 and reaches for a device's literal state only where a person would look at the
-house and see it. That is deliberate: the fake port writes a proposed service as
-though it were a state (`engine/behaviours/declared.py`), so `light.hall` reading
-`light.turn_on` is the port's documented gap and not the light's colour.
+house and see it. That the state read off a device is the *state* and not a
+service name is the thing `catalog/services.yaml` fixed: a declared service is
+projected to what it writes (`light.turn_off` -> `off`) when the unit is built,
+so `light.hall` reads `on` or `off` rather than the service a pack named.
 
-Two steps in the brief cannot pass against the tree as it stands, and they are
-left failing loudly with a message naming the missing mechanism rather than
-weakened into a test of what happens to exist:
+Two steps in the brief were blocked on clauses `pack-manifest/1.3.0` adds, and
+both are now written against them rather than left failing:
 
-- **the bed button entering Sleep mode** -- `pack-manifest/1.2.0`'s behaviour
-  clause has no value beside its `action` kind, so a manifest can say a behaviour
-  ends in a service call and cannot say it enters a named mode;
-- **the Roomba dispatching on its state** -- the same clause carries no `choose`,
-  so the four behaviours fire together with the vacuum's state meaning nothing.
+- **the bed button entering Sleep mode** -- `1.3.0`'s `mode` is the value beside
+  a `service` action, and `packs/official/bedtime.yaml` carries `mode: sleep`;
+- **the Roomba dispatching on its state** -- `1.3.0`'s `match` names the readings
+  a behaviour acts on, and each of the pack's four behaviours gates on one, so
+  the dispatch is four behaviours gating each other out rather than a `choose`.
 
-Both are the pack format's boundaries, recorded in the packs' own docstrings, and
-each failing test below quotes the file and clause that would have to change.
+One step still cannot pass, and it fails loudly with a message naming the missing
+mechanism rather than being weakened into a test of what happens to exist: the
+stuck Roomba's **notification**, because `notify.send_message` raises an event
+rather than writing a state and the port, which takes a state, cannot carry it.
 """
 
 from __future__ import annotations
@@ -97,7 +99,7 @@ def _house(bindings: Mapping[str, str]) -> dict[str, object]:
                 },
             }
         ],
-        "house_scope": {"slots": ["house_mode", "light_group"]},
+        "house_scope": {"slots": ["light_group"]},
     }
 
 
@@ -187,7 +189,7 @@ def test_setup_binding_the_devices_makes_the_house_usable(
             {
                 "motion_sensor": "binary_sensor.hall_motion",
                 "light_group": "light.hall",
-                "lux_sensor": "sensor.hall_lux",
+                "ambient_light_sensor": "sensor.hall_lux",
             }
         )
     )
@@ -231,7 +233,7 @@ def test_first_day_override_a_persons_hand_holds_the_light(
             {
                 "motion_sensor": "binary_sensor.hall_motion",
                 "light_group": "light.hall",
-                "lux_sensor": "sensor.hall_lux",
+                "ambient_light_sensor": "sensor.hall_lux",
             }
         )
     )
@@ -295,7 +297,7 @@ def test_bed_button_the_lights_go_off_and_the_locks_do_not(
                 },
             }
         ],
-        "house_scope": {"slots": ["house_mode", "light_group", "lock"]},
+        "house_scope": {"slots": ["light_group", "lock"]},
     }
     session = _session(
         vocabulary,
@@ -316,7 +318,7 @@ def test_bed_button_the_lights_go_off_and_the_locks_do_not(
     assert lights.rule == "lights_off"
     assert [
         (command.slot, command.entities, command.action) for command in lights.commands
-    ] == [("light_group", ("light.bedroom",), "light.turn_off")]
+    ] == [("light_group", ("light.bedroom",), "off")]
     assert [(change.entity_id, change.before) for change in lights.state_delta] == [
         ("light.bedroom", "on")
     ]
@@ -327,17 +329,15 @@ def test_bed_button_the_lights_go_off_and_the_locks_do_not(
 
 
 def test_bed_button_the_house_enters_sleep(vocabulary: Vocabulary) -> None:
-    """The bed button puts the house in Sleep mode -- and today it cannot.
+    """The bed button puts the house in Sleep mode.
 
-    Red on purpose, and the message is the point. `packs/official/bedtime.yaml`
-    says in its own docstring that this clause is "deliberately absent, and
-    cannot be, against `pack-manifest/1.2.0`": a behaviour's `action` axis is a
-    block *kind* with no value beside it, so a manifest can say a behaviour ends
-    in a service call and cannot say it *enters a named mode*. The whole pack
-    therefore fires with the house in whatever mode it was already in. The gap is
-    the clause `packs/official/bedtime.yaml:9-19` names, and it closes when the
-    manifest carries the mode a behaviour activates -- the clause
-    `schemas/mode/1.0.0.json` fixes the shape of.
+    The step that was blocked until `pack-manifest/1.3.0`: a behaviour's `action`
+    axis was a block *kind* with no value beside it, so a manifest could say a
+    behaviour ends in a service call and could not say it *enters a named mode*.
+    `1.3.0`'s `mode` is that value, `packs/official/bedtime.yaml`'s `lights_off`
+    carries `mode: sleep`, and the engine applies it after arbitrating the tick's
+    commands -- so the record for the press shows the lights going off *and* the
+    house entering Sleep, which is the pair `spec.txt:58` describes.
     """
     house = {
         "name": "the bedtime house",
@@ -349,7 +349,7 @@ def test_bed_button_the_house_enters_sleep(vocabulary: Vocabulary) -> None:
                 "bindings": {"light_group": {"entity_id": "light.bedroom"}},
             }
         ],
-        "house_scope": {"slots": ["house_mode", "light_group"]},
+        "house_scope": {"slots": ["light_group"]},
     }
     session = open_session(
         house=house,
@@ -414,7 +414,7 @@ def _roomba_session(vocabulary: Vocabulary) -> OpenHouse:
                 "bindings": {"vacuum": {"entity_id": "vacuum.roomba"}},
             }
         ],
-        "house_scope": {"slots": ["house_mode"]},
+        "house_scope": {"slots": ["light_group"]},
     }
     session = open_session(
         house=house,
@@ -433,18 +433,14 @@ def _roomba_session(vocabulary: Vocabulary) -> OpenHouse:
 
 
 def test_roomba_an_idle_vacuum_starts_cleaning(vocabulary: Vocabulary) -> None:
-    """An idle Roomba starts a clean -- and today it is sent home instead.
+    """An idle Roomba starts a clean, and is not sent home to the dock it is on.
 
-    Red on purpose. `spec.txt:58` describes a dispatch: which of the four acts
-    follows depends on the vacuum's current state. `pack-manifest/1.2.0` has no
-    `choose` -- `catalog/pack-policy.yaml` forbids it -- and a behaviour's
-    `condition` axis is a block kind with no value beside it, so no behaviour can
-    say *which* state it waits for. The four therefore fire together and
-    arbitration decides: `send_home` and `start_cleaning` share priority 30 and
-    the tie-break picks `send_home`, so a docked vacuum is sent back to the dock
-    it is already sitting on. The gap is the one
-    `packs/official/roomba.yaml` records; it closes when a manifest can dispatch
-    on a state.
+    The dispatch `spec.txt:58` describes, written as `pack-manifest/1.3.0`'s
+    `match` clause rather than a `choose` -- `catalog/pack-policy.yaml` keeps
+    `choose` off the declarative subset, and `match` is a literal the schema
+    checks rather than a branch the engine evaluates. With all four behaviours
+    enabled, `start_cleaning` gates on `docked`/`idle`, `send_home` on
+    `cleaning`, and only the one whose reading matches proposes.
     """
     session = _roomba_session(vocabulary)
     assert session.read_entity("vacuum.roomba").state == "docked"
@@ -458,7 +454,7 @@ def test_roomba_an_idle_vacuum_starts_cleaning(vocabulary: Vocabulary) -> None:
         if record.outcome is Outcome.ACTED
         for command in record.commands
     ]
-    assert actions == [("roomba.start_cleaning", "vacuum.start")], (
+    assert actions == [("roomba.start_cleaning", "cleaning")], (
         f"an idle (docked) vacuum must start cleaning, but the pack proposed "
         f"{actions!r}: with all four behaviours enabled there is no state "
         "dispatch, so `send_home` wins arbitration whatever the vacuum is doing. "
@@ -468,13 +464,17 @@ def test_roomba_an_idle_vacuum_starts_cleaning(vocabulary: Vocabulary) -> None:
 
 
 def test_roomba_a_stuck_vacuum_is_notified(vocabulary: Vocabulary) -> None:
-    """A stuck Roomba raises a notification rather than being silently retried.
+    """A stuck Roomba raises a notification -- still red, for the port's reason.
 
-    Red on purpose, and for the same missing clause as the idle case. The pack
-    declares `notify_stuck`, but with no way to say "when the vacuum is stuck" it
-    declines on every tick, and the two `vacuum.start` behaviours propose into
-    the void -- so a robot erroring in the corner is neither reported nor
-    understood as anything different from a robot cleaning the floor.
+    Red on purpose, and now for one boundary rather than two. The state-dispatch
+    half is closed: `notify_stuck` carries `match: [error]`, so it is the only
+    one of the four that answers a robot erroring in the corner, and the two
+    `vacuum.start` behaviours no longer propose into the void.
+
+    What remains is the port: `notify.send_message` raises an event rather than
+    writing a state, so it has no row in `catalog/services.yaml` and the port --
+    which takes a state -- cannot carry it. The assertion reads `notified == []`
+    rather than a list naming the service for exactly that reason.
     """
     session = _roomba_session(vocabulary)
     session.set_state("vacuum.roomba", "error")
@@ -482,18 +482,25 @@ def test_roomba_a_stuck_vacuum_is_notified(vocabulary: Vocabulary) -> None:
     mark = len(session.get_decision_log())
     session.advance_time(minutes=1)
 
+    # Read off the *actor* rather than the service name, because the second of
+    # the two boundaries below is that the service a notification would be made
+    # through has no state to write -- so asserting on `command.action` would
+    # bake in one answer to a question that is still open. What is required is
+    # that `notify_stuck` acts at all when the vacuum is stuck.
     notified = [
         (record.actor, command.action)
         for record in _since(session, mark)
         if record.outcome is Outcome.ACTED
         for command in record.commands
-        if command.action.startswith("notify.")
+        if record.actor == "roomba.notify_stuck"
     ]
-    assert notified == [("roomba.notify_stuck", "notify.send_message")], (
-        "a stuck vacuum must raise a notification, but the pack proposed "
-        f"{notified!r}: `notify_stuck` has no way to say which state it responds "
-        "to, because `pack-manifest/1.2.0` carries no value beside a behaviour's "
-        "`condition` kind. The gap is `packs/official/roomba.yaml`'s."
+    assert notified, (
+        "a stuck vacuum must raise a notification, but `notify_stuck` proposed "
+        "nothing. Its state gate is closed -- `match: [error]` -- so what remains "
+        "is the port: `notify.send_message` raises an event rather than writing a "
+        "state, so it has no row in `catalog/services.yaml` and the port, which "
+        "takes a state, cannot carry it. Widening the port to carry a service "
+        "call is what closes this half."
     )
 
 
@@ -522,7 +529,7 @@ def test_sensor_death_a_dead_motion_sensor_decides_nothing(
             {
                 "motion_sensor": "binary_sensor.hall_motion",
                 "light_group": "light.hall",
-                "lux_sensor": "sensor.hall_lux",
+                "ambient_light_sensor": "sensor.hall_lux",
             }
         )
     )
@@ -566,7 +573,7 @@ def test_sensor_death_replacing_the_sensor_restores_the_behaviour(
             {
                 "motion_sensor": "binary_sensor.hall_motion",
                 "light_group": "light.hall",
-                "lux_sensor": "sensor.hall_lux",
+                "ambient_light_sensor": "sensor.hall_lux",
             }
         )
     )

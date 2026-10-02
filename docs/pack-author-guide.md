@@ -30,10 +30,11 @@ path, but the manifest is the pack: nothing the engine evaluates comes from the
 pinned file.
 
 The manifest format is published and frozen as
-`schemas/pack-manifest/1.2.0.json`. That schema is the normative answer to what a
-manifest may be, and the loader that applies it is `engine/manifest.py`. Both
-superseded versions, `schemas/pack-manifest/1.1.0.json` and
-`schemas/pack-manifest/1.0.0.json`, are retained unedited, so a manifest written
+`schemas/pack-manifest/1.3.0.json`. That schema is the normative answer to what a
+manifest may be, and the loader that applies it is `engine/manifest.py`. Every
+superseded version — `schemas/pack-manifest/1.2.0.json`,
+`schemas/pack-manifest/1.1.0.json` and `schemas/pack-manifest/1.0.0.json` — is
+retained unedited, so a manifest written
 against an older format is still readable as what it was.
 
 ## The clauses, and the four authorities that judge them
@@ -43,7 +44,7 @@ them can answer another's question:
 
 | Authority | Read from | Answers |
 | --- | --- | --- |
-| the schema | `schemas/pack-manifest/1.2.0.json` | what a document of this kind may be |
+| the schema | `schemas/pack-manifest/1.3.0.json` | what a document of this kind may be |
 | the licence vocabulary | `schemas/catalog/licenses.json` | what a licence code means, and where it sits in the published order |
 | the corpus | `catalog/behaviors.yaml` | what a row grants to a pack derived from it |
 | the marker | `packs/official/HANDWRITTEN` | which files a person wrote rather than a derivation produced |
@@ -81,6 +82,47 @@ directory, and checks the file is of the class the entry declares. A path that
 dangles, one that escapes the pack, and one whose file is the wrong class are
 three different refusals, named `dangling_path`, `escaping_path` and
 `class_mismatch`.
+
+## A device the catalog has no word for
+
+A pack names slots, and almost always those are words `catalog/slots.yaml`
+already carries — a room is a room, so a bathroom has a `fan` and a hall has a
+`motion_sensor`. The exception is a pack whose point is a device the catalog has
+no word for: "warn me when the fridge has been open too long" needs a contact on
+the fridge door, no room type provides one, and widening the vocabulary for every
+appliance a pack might watch is what would stop it being a vocabulary.
+
+Such a pack declares the device itself, in a `slots` clause:
+
+```yaml
+slots:
+  - name: fridge_contact
+    accepts_domains: [binary_sensor]
+    required: true
+```
+
+Three rules decide what the declaration means, and they are the product's rules
+rather than the clause's:
+
+- **A name the vocabulary already carries reuses that slot.** A pack declaring
+  `door_contact` asks for the room's own door contact, not a second one.
+- **A name it does not carry joins the house's vocabulary** for the houses that
+  install the pack, so the room can bind it — which is what makes the pack's own
+  requirement fillable.
+- **`separate: true` gives the pack a device of its own**, bound under
+  `fridge_guard__fridge_contact`, so two packs may each hold their own motion
+  sensor while a third shares the room's.
+
+The name is the whole of the declaration: there is no sentence beside it to
+explain what the device is for, so the name has to *be* the answer — the front
+door, or the fridge? `fridge_contact` says which, and a name that could mean two
+devices is a defect rather than a prompt for a clarifying sentence.
+`required: true` puts the device in the pack's required set beside the names
+`requires_slots` carries, so the room's settings page shows one list; left off,
+the device is optional and the pack runs without one.
+
+`packs/official/fridge-guard.yaml` is the shipped example and the only pack that
+declares a device of its own.
 
 ## What a behaviour may say
 
@@ -261,9 +303,9 @@ side by side in `schemas/catalog/licenses.json`. The order matters only to a
 *derived* pack: a pack that carries `derives_from` may sit at or below each named
 row's code in that order, and a code more restrictive than a row's is refused as
 `licence_too_restrictive`. The corpus bounds what can ground a derivation —
-`catalog/behaviors.yaml` holds 83 rows, of which 19 are `reusable` (10 `mit`, 9
-`apache_2_0`) and 64 are `ideas_only` under `no_licence` — and a `HANDWRITTEN`
-pack may not carry `derives_from` at all.
+`catalog/behaviors.yaml` holds 83 rows, all of them `reusable` (30 `mit`, 29
+`public_domain`, 24 `apache_2_0`) and none `ideas_only` under `no_licence` — and a
+`HANDWRITTEN` pack may not carry `derives_from` at all.
 
 Packs are published in tiers. `registry/tiers.yaml` names four — `official`,
 `verified`, `community` and `local` — and the field that decides behaviour is
@@ -276,61 +318,73 @@ stay while the store refuses the install and says why.
 
 ## The packs the project ships
 
-`packs/official/` holds fourteen files ending in `.yaml`, of which twelve are pack
-manifests; the other two, `packs/official/example-house.yaml` and
+`packs/official/` holds fifteen files ending in `.yaml`, of which thirteen are
+pack manifests; the other two, `packs/official/example-house.yaml` and
 `packs/official/example-export.yaml`, are the hand-written examples of the house
 and export-document concepts that live in the same directory. `packs/derived/`
-holds one more, so the checkout ships thirteen pack manifests.
+holds one manifest per corpus *namespace*, so the checkout ships twenty-three
+pack manifests.
+
+**A derived pack is a family of rows, not a row.** The corpus namespaces its
+rows by the idea they are about, and the derivation groups by that namespace
+rather than emitting a card per row: every `lighting.*` row is one `lighting`
+module, whose behaviours are the rows and whose per-behaviour enable keys are the
+switches. A person installs one Lighting thing and turns on the parts of it they
+have, instead of choosing between fifteen near-identical cards.
 
 | Pack | `kind` | Declares |
 | --- | --- | --- |
-| `packs/official/example-pack.yaml` | `module` | a motion-triggered light: `requires_slots: [light_group, motion_sensor]`, `optional_slots: [lux_sensor]`, one behaviour calling `light.turn_on` |
+| `packs/official/example-pack.yaml` | `module` | a motion-triggered light: `requires_slots: [light_group, motion_sensor]`, `optional_slots: [ambient_light_sensor]`, one behaviour calling `light.turn_on` |
 | `packs/official/bedtime.yaml` | `module` | the bedtime button: lights off, thermostat down, lock up, as three behaviours; the lock behaviour calls `lock.lock`, which is not flagged |
 | `packs/official/roomba.yaml` | `module` | four behaviours over a `vacuum` slot, one of which notifies through no slot at all |
 | `packs/official/bathroom_fan.yaml` | `module` | an extractor fan on a `fan` slot, on and off |
+| `packs/official/fridge-guard.yaml` | `module` | the fridge guard: the only pack that declares a device of its own, a `fridge_contact` in its `slots` clause, and calls `light.turn_on` through `light_group` when it trips |
 | `packs/official/bathroom.yaml`, `bedroom.yaml`, `driveway.yaml`, `garage.yaml`, `kitchen.yaml`, `living_room.yaml` | `room-template` | the slots each default room type offers, transcribed from `catalog/room_types.yaml`; no behaviours |
 | `packs/official/house.yaml` | `house-template` | the slots the whole house offers, read from the room catalog's `house` entry |
 | `packs/official/guest-mode.yaml` | `profile-set` | one house mode, `class: mode`, pinned to `packs/official/guest_mode/mode.yaml` |
-| `packs/derived/lighting_outdoor_landscape.yaml` | `behavior` | one behaviour derived from the corpus row `lighting.outdoor_landscape`, with itself as its only `derives_from` |
+| `packs/derived/*.yaml` | `module` | one module per corpus namespace, one behaviour per row: `cleaning`, `climate`, `laundry`, `lighting`, `media`, `modes`, `notifications`, `presence`, `security`, `system`. Each names every row it reproduces in `derives_from`, and requires no slot — a module is installable in any room and the behaviour whose device is missing is inert. |
 
-`registry/index.json` publishes nine of these, every one `official`:
-`bathroom`, `bedroom`, `driveway`, `example_pack`, `garage`, `guest_mode`,
-`house`, `kitchen` and `living_room`. The published set and the directory are not
-the same set, and the difference is deliberate: the index is what a live panel
-offers — `ha_adapter/live_modules.py` reads it and offers only what it names — and
-a pack present under `packs/` but absent from the index is not offered. The four
-module packs (`bedtime`, `roomba`, `bathroom_fan` and the derived
-`lighting_outdoor_landscape`) are on disk and not yet in the index.
+`registry/index.json` publishes twenty-three of them, every one `official`: the
+six room templates and the house, `guest_mode`, the four module packs (`bedtime`,
+`roomba`, `bathroom_fan`, `fridge_guard`), `example_pack`, and the ten derived
+family modules. The published set and the directory are not the same set, and the
+difference is deliberate: the index is what a live panel offers —
+`ha_adapter/live_modules.py` reads it and offers only what it names — and a pack
+present under `packs/` but absent from the index is not offered. Here the
+difference is the two example documents, which are not packs at all.
 
 ## What a pack cannot do yet, stated plainly
 
 An author will hit each of these within an hour, so they are listed rather than
 left to be discovered.
 
-- **No value on an action.** As above: `action` is a kind with no value beside
-  it, so no manifest can enter a named mode or dispatch on a device's state, and
-  `choose` is forbidden.
-- **No trigger and no condition evaluation.** As above: every behaviour fires
-  together and only `priority` separates them.
-- **A pack's behaviours are recorded on install, not registered as live units.**
-  The install record lists the pack's behaviour ids, but the live composition root
-  (`ha_adapter/composition.py`) builds its engine from
-  `engine/behaviours/__init__.py`'s `default_behaviours()` — the three shipped
-  units alone. The declared interpreter is instantiated only by
-  `openhouse/facade.py`, in the simulator. So installing a pack does not make a
-  live house actuate: there is no `DeclaredBehaviour` in the live engine to
-  evaluate.
-- **No options clause.** There is no options schema in `pack-manifest`, so a pack
-  that would offer per-room high-level options cannot yet declare them.
-  `ha_adapter/live_modules.py` reports `options_schema: None` for every offer,
-  because the clause does not exist to build a schema from.
-- **A service is proposed as the command's action, and the port writes it as a
-  state.** `engine/behaviours/declared.py` proposes the service string itself —
-  `light.turn_on` — where the port's `actuate` takes a *state*. Nothing in the
-  repository maps one to the other, so a pack's behaviour cannot be enabled in a
-  real house until either the port is widened with a service call the Home
-  Assistant adapter implements directly, or a service-to-state artifact is
-  published.
+- **A behaviour's action is a state, not a value.** `services` names service
+  calls and `catalog/services.yaml` maps each to the state it writes, so
+  `light.turn_on` becomes "write `on`". A service with no row in that table — a
+  setpoint, a notification, a `scene.turn_on` — is not an actuation the port can
+  perform, and a behaviour declaring only those proposes nothing. Widening the
+  port to carry a service *call* rather than a state is what would change this.
+- **`choose`, loops and expressions are forbidden.** The sandbox fixes what a
+  behaviour may reach to "resolve a slot and call a declared service on it", with
+  no branch, variable or expression evaluation (`design.md` D5,
+  `pack-sandbox`). `match`, `mode` and `for` are the three clauses that stand in
+  for the branches an author would otherwise write.
+- **A trigger is a tick.** Every behaviour is evaluated once per tick and the
+  clauses narrow what it proposes; there is no event subscription and no
+  per-device trigger, and `priority` is the only thing that separates two
+  behaviours that disagree.
+- **A pack may not declare behaviour code.** `provides` points at the artifacts a
+  pack was extracted from, and the engine does not execute them: the manifest's
+  clauses are the whole of what a pack does.
+
+Three things an author might expect to be missing are not. A pack's behaviours
+are built into live units at install (`ha_adapter/declared_units.py`), so an
+enabled behaviour in an installed pack actuates a real house. A pack's top-level
+`options` clause becomes the fields on a room's settings page, typed and bounded
+as the author wrote them. And the roles a pack acts through become per-room
+switches of their own: every slot a behaviour acts on draws an "Act on …"
+checkbox beside the pack's own options, so a household can leave the thermostats
+out of a bathroom pack without editing it.
 
 ## A worked manifest
 
@@ -351,7 +405,7 @@ kind: module
 engine_api: ">=1.0.0 <2.0.0"
 license: mit
 requires_slots: [light_group, motion_sensor]
-optional_slots: [lux_sensor]
+optional_slots: [ambient_light_sensor]
 provides:
   - path: packs/official/evening_lights/evening_scene.yaml
     class: automation

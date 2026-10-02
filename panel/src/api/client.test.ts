@@ -13,7 +13,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
 import { OpenHouseClient } from "./client.ts";
-import { COMMANDS } from "./protocol.ts";
+import { COMMANDS, REFUSALS } from "./protocol.ts";
 import { PanelError, type HaConnection, type HassLike } from "./connection.ts";
 
 interface Call {
@@ -84,6 +84,40 @@ test("a refusal keeps the server's error code", async () => {
       error.code === "unauthorized" &&
       error.message === "Admins only.",
   );
+});
+
+test("a command refused while the house reloads is asked again", async () => {
+  // `not_ready` is the one refusal that means "ask again": a room subentry was
+  // just written, Home Assistant is reloading the entry, and the house is
+  // unreadable for a moment. Answering it as final is what put "Room not found
+  // -- This room is no longer in the house" on a room that had just been made.
+  let attempts = 0;
+  const { hass, calls } = fakeHass(() => {
+    attempts += 1;
+    if (attempts < 3) return new PanelError(REFUSALS.notReady, "reloading");
+    return { id: "kitchen", name: "Kitchen" };
+  });
+  const room = await new OpenHouseClient(hass).room("kitchen");
+  assert.equal(room.id, "kitchen");
+  assert.equal(attempts, 3);
+  assert.equal(calls.length, 3);
+});
+
+test("a refusal that is an answer is not asked again", async () => {
+  // `not_setup` reads almost the same as `not_ready` and means the opposite:
+  // no house has ever been made, and no amount of asking will change that.
+  // Retrying it would delay the setup prompt by the length of the backoff.
+  let attempts = 0;
+  const { hass } = fakeHass(() => {
+    attempts += 1;
+    return new PanelError(REFUSALS.notSetup, "no house yet");
+  });
+  await assert.rejects(
+    () => new OpenHouseClient(hass).rooms(),
+    (error: unknown) =>
+      error instanceof PanelError && error.code === REFUSALS.notSetup,
+  );
+  assert.equal(attempts, 1);
 });
 
 test("a plain Error becomes a PanelError with an unknown code", async () => {

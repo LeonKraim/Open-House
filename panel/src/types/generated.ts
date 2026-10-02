@@ -29,12 +29,13 @@ export const SCHEMA_VERSIONS = {
   "catalog/repos": "1.0.0",
   "catalog/room_types": "1.0.0",
   "catalog/rooms": "1.0.0",
+  "catalog/services": "1.0.0",
   "catalog/slots": "1.0.0",
   "engine-api": "1.0.0",
   "export-document": "1.1.0",
   "house": "1.0.0",
   "mode": "1.0.0",
-  "pack-manifest": "1.2.0",
+  "pack-manifest": "1.3.0",
   "profile": "1.1.0",
   "room-type": "1.0.0",
   "scenario": "1.0.0",
@@ -369,7 +370,7 @@ export interface CatalogHardcodedRefsEntry {
    * follows. Exactly one of `slot` and `constant` is non-null, which `hardcoded_entry_one_of`
    * states above and `check_slots` enforces by naming the reference and its repo.
    */
-  slot: "climate_zone" | "contact_sensor" | "cover" | "fan" | "house_mode" | "humidity_sensor" | "leak_sensor" | "light_group" | "lock" | "lux_sensor" | "media_player" | "motion_sensor" | "scene_selector" | "temperature_sensor" | "vacuum" | null;
+  slot: "ambient_light_sensor" | "climate_zone" | "cover" | "door_contact" | "fan" | "humidity_sensor" | "leak_sensor" | "light_group" | "lock" | "media_player" | "motion_sensor" | "scene_selector" | "temperature_sensor" | "vacuum" | null;
 }
 
 // ----------------------------------------------------------------------
@@ -729,7 +730,7 @@ export interface CatalogRawBehaviorsRawRecord {
    * the reference is to `catalog/slots.yaml` rather than to the raw entity ids: the slot a
    * hardcoded reference maps to is the product's own vocabulary, derived in §5.
    */
-  slots: "climate_zone" | "contact_sensor" | "cover" | "fan" | "house_mode" | "humidity_sensor" | "leak_sensor" | "light_group" | "lock" | "lux_sensor" | "media_player" | "motion_sensor" | "scene_selector" | "temperature_sensor" | "vacuum"[];
+  slots: "ambient_light_sensor" | "climate_zone" | "cover" | "door_contact" | "fan" | "humidity_sensor" | "leak_sensor" | "light_group" | "lock" | "media_player" | "motion_sensor" | "scene_selector" | "temperature_sensor" | "vacuum"[];
   /** The trigger terms this artifact uses, drawn from the behaviour vocabulary. */
   triggers: "calendar" | "conversation" | "device" | "event" | "homeassistant" | "mqtt" | "numeric_state" | "state" | "sun" | "tag" | "template" | "time" | "time_pattern" | "webhook" | "zone"[];
   /**
@@ -817,6 +818,32 @@ export interface CatalogRoomsRoom {
    */
   repo: string;
 }
+
+// ----------------------------------------------------------------------
+// catalog/services @ 1.0.0
+// ----------------------------------------------------------------------
+export interface CatalogServices {
+  /** One row per service the port can carry out, as the state it writes. */
+  services: { /**
+ * The `domain.service` a manifest's behaviour clause may name. The same shape the manifest
+ * schema's own `services` pattern admits, repeated because the two are read by different
+ * checkers and a row that could not be declared would be a row nothing reads.
+ */ service: string; /**
+ * The state the port writes on the entity this service acts through. Deliberately not
+ * constrained to an enum here: the states are Home Assistant's, and the domain that owns each
+ * is the authority on its spelling rather than this schema.
+ */ state: string; }[];
+}
+
+export type CatalogServicesService = { /**
+ * The `domain.service` a manifest's behaviour clause may name. The same shape the manifest
+ * schema's own `services` pattern admits, repeated because the two are read by different
+ * checkers and a row that could not be declared would be a row nothing reads.
+ */ service: string; /**
+ * The state the port writes on the entity this service acts through. Deliberately not
+ * constrained to an enum here: the states are Home Assistant's, and the domain that owns each
+ * is the authority on its spelling rather than this schema.
+ */ state: string; };
 
 // ----------------------------------------------------------------------
 // catalog/slots @ 1.0.0
@@ -958,7 +985,7 @@ export interface Mode {
 }
 
 // ----------------------------------------------------------------------
-// pack-manifest @ 1.2.0
+// pack-manifest @ 1.3.0
 // ----------------------------------------------------------------------
 export interface PackManifest {
   /**
@@ -1028,6 +1055,23 @@ export interface PackManifest {
    */
   optional_slots?: string[];
   /**
+   * The settings this pack offers a person, each a small typed declaration and never a
+   * free-form schema. A module knows what it is *for* and what a person might reasonably want
+   * to change about it -- how long the fridge door may stand open, whether the fan runs at all
+   * after dark -- and until this clause existed there was nowhere to say so: a pack could
+   * declare what it does and not one number about how. The declaration is deliberately narrow
+   * rather than a nested JSON Schema, because the panel already renders a schema and the
+   * interesting question is not what *can* be expressed but what the *engine* will act on.
+   * Every option resolves under `module.<pack>.<key>` through the same layered resolver as
+   * every other tunable (`engine/config.py`), so a house and a room may each set one and the
+   * pack's `default` is the bottom of the stack. **An option is only worth declaring if
+   * something reads it**: `for` on a behaviour names a duration option and is how the
+   * declarative interpreter acts on one, and a boolean option's honest use is gated the same
+   * way. Declaring an option nothing reads is the defect this description exists to warn
+   * against, because the panel will render a control for it and the control will do nothing.
+   */
+  options?: PackManifestOption[];
+  /**
    * Every entry carries the artifact class it confers, because the class-pinning rule is what
    * stops a pack smuggling an unpinnable artifact past the licence gate by calling it a helper.
    */
@@ -1035,9 +1079,24 @@ export interface PackManifest {
   /**
    * Slot names, resolved against slots.yaml. A pack that names a slot no slot file defines is a
    * pack that cannot be installed anywhere. Required for the kinds that are plugged into a room
-   * and forbidden nowhere; the per-kind conditionals below say which kinds must carry it.
+   * and forbidden nowhere; the per-kind conditionals below say which kinds must carry it. The
+   * list may be empty, and an empty list is a statement rather than a hole: a pack that acts
+   * through a service and no placeholder -- a notification, an alarm panel, a siren -- is
+   * plugged into a room and needs nothing of it. The home's own state used to be the slot that
+   * made such packs non-empty, and it is the engine's variable rather than a device anybody
+   * binds, so a corpus row that required it now requires nothing and says so.
    */
   requires_slots?: string[];
+  /**
+   * The slots this pack brings with it. A pack may need a device no catalog slot names -- a
+   * fridge's door, a freezer's -- and the vocabulary is grown by the modules rather than by a
+   * publisher's release, so the pack that needs the reading declares it and fixes the domains a
+   * binding may use. A declared name says what the device is: two packs naming the same slot
+   * share the one device, so the name is the whole of the disambiguation -- there is no second
+   * sentence to fall back on, which is why a name that could mean two devices is the defect
+   * this clause exists to refuse.
+   */
+  slots?: PackManifestDeclaredSlot[];
   version: string;
 }
 
@@ -1055,6 +1114,44 @@ export interface PackManifestBehaviour {
   action: BehaviourVocabularyAction;
   /** A condition block kind, resolved against the published vocabulary rather than restated here. */
   condition?: BehaviourVocabularyCondition;
+  /**
+   * The name of a `duration` option this behaviour waits out: it proposes only once the reading
+   * `match` names has *held* for that long. The run-on period, and the second half of what
+   * `match` needs to be useful -- `match: [open]` says the door is open now, and `for:
+   * open_minutes` says it has been open for five minutes, which is the difference between an
+   * alarm and a nuisance. It names an option rather than carrying a literal duration because
+   * *how long* is exactly the sort of number a person wants to change and a manifest author
+   * cannot guess: the value resolves under `module.<pack>.<key>` and the panel draws a field
+   * for it. A name that is not a declared `duration` option is refused when the manifest is
+   * validated -- the clause is meaningless without one, and the check happens where the option
+   * list is readable rather than at evaluation, where the reading would silently never hold.
+   */
+  for?: string;
+  /**
+   * The readings this behaviour acts on: it proposes only when the entity it acts through
+   * currently reads one of these. This is the *value* beside the `condition` kind --
+   * `condition: state` names the kind of test and `match` names what the test is for -- and the
+   * pair is what lets a behaviour dispatch rather than fire blind: a vacuum pack starts a clean
+   * only when the vacuum reads `docked`, and sends it home only when it reads `cleaning`. A
+   * string and not an object, because the comparison is always equality against a literal state
+   * name; anything richer would be the expression language `catalog/pack-policy.yaml` forbids.
+   * Omitted means 'whatever the slot reads', which is 1.2.0's behaviour and is still a legal
+   * pack.
+   */
+  match?: string[];
+  /**
+   * The house mode this behaviour enters when it acts, as the frozen mode schema spells a mode
+   * name (`schemas/mode/1.0.0.json` lower-cases them). The *value* beside a `service` action
+   * for a behaviour whose act is not a device write: the Bedtime button's second clause is the
+   * house entering Sleep, and nothing in 1.2.0 could say so -- which is why the pack could not
+   * be written. Only the name's *shape* is checked here, and deliberately: a manifest does not
+   * know which house it will land in, so the name meets a house for the first time when the
+   * behaviour is evaluated. A name the house does not declare is then refused rather than
+   * raised -- the request is recorded as a `mode_request` whose `taken` is `false`, the rest of
+   * the behaviour still runs, and a tick survives both a pack installed into a house whose
+   * modes changed under it and a hand-edited manifest.
+   */
+  mode?: string;
   name?: string;
   /**
    * What arbitration ranks this behaviour by when two behaviours propose for one entity in one
@@ -1064,6 +1161,19 @@ export interface PackManifestBehaviour {
    * default already says.
    */
   priority?: number;
+  /**
+   * How often this behaviour is evaluated: once per room it is installed into, or once for the
+   * whole house. The corpus records exactly this word per row, and the engine's
+   * `BehaviourScope` is that word rather than a translation of it, so the clause is the
+   * corpus's own and not a second vocabulary. A behaviour whose acts are about one space -- a
+   * room's lights, a room's fan -- is `room`, which is the default and is what 1.2.0 could
+   * express. A behaviour about the house as a whole -- the alarm, the doors, the energy meter,
+   * the vacuum that cleans everything -- is `house`, and it is evaluated once with the house's
+   * own bindings rather than once per room with a room's. `scope` is a clause of the behaviour
+   * and not of the pack for the same reason `priority` and `slots` are: one pack may carry both
+   * kinds, and a pack-level clause could not say which of its behaviours the word applies to.
+   */
+  scope?: "room" | "house";
   /**
    * The services this behaviour may call, as `domain.service`. The set is the behaviour's
    * declaration of permissions and not a comment on them: the sandbox refuses a call the
@@ -1084,6 +1194,29 @@ export interface PackManifestBehaviour {
   trigger?: BehaviourVocabularyTrigger;
 }
 
+export interface PackManifestDeclaredSlot {
+  /** Home Assistant domains a binding for this slot may use. */
+  accepts_domains: string[];
+  /**
+   * The slot's name. A name the slot vocabulary already carries *reuses* that slot: the pack is
+   * asking for the same device every other pack asking for it gets, which is the default. A
+   * name the vocabulary does not carry is a slot this pack introduces, and it joins the house's
+   * vocabulary when the pack is installed.
+   */
+  name: string;
+  /**
+   * True when a behaviour of this pack cannot run without it. Ignored for a name the catalog
+   * already carries: that slot's own `required` is the catalog's answer and not a pack's.
+   */
+  required?: boolean;
+  /**
+   * True when this pack wants a device of its own rather than the one every pack naming the
+   * slot shares. A separate slot is bound under a pack-qualified key, so two packs may each
+   * hold their own motion sensor while a third shares the room's.
+   */
+  separate?: boolean;
+}
+
 export interface PackManifestI18n {
   /**
    * One default string per user-visible name the pack declares: the pack's own name and
@@ -1102,6 +1235,70 @@ export interface PackManifestI18n {
 }
 
 export type PackManifestI18nOverrides = { [key: string]: string; };
+
+export interface PackManifestOption {
+  /**
+   * The value when no layer sets one, and so the bottom of the resolver's stack for this key.
+   * Its JSON type is checked against `type` when the manifest is validated rather than here,
+   * because a static schema cannot compare one property to another: a `duration`'s default is a
+   * whole number of seconds, an `integer`'s a whole number, a `boolean`'s `true` or `false`, an
+   * `enum`'s one of its own members.
+   */
+  default: unknown;
+  /**
+   * The sentence under the title that says what changing it *does*, for when the title is not
+   * enough. Optional, because a good title often is enough and a required field would collect
+   * filler.
+   */
+  description?: string;
+  /**
+   * The members a `type: enum` option may take, and required for it -- an enum with no members
+   * admits no value at all. Refused on every other type when the manifest is validated, because
+   * a member list beside a `boolean` is a clause nobody reads and everybody copies.
+   */
+  enum?: string[];
+  /**
+   * The option's name, and the last segment of the setting it resolves under: an option `key:
+   * open_minutes` in pack `fridge_guard` is the config key `module.fridge_guard.open_minutes`.
+   * The same shape every slot and behaviour name takes, so one name grammar covers the manifest
+   * rather than three.
+   */
+  key: string;
+  /**
+   * The highest value a `number`, `integer` or `duration` may take, with the same two meanings
+   * `minimum` has. Absent means unbounded above.
+   */
+  maximum?: number;
+  /**
+   * The lowest value a `number`, `integer` or `duration` may take, checked when the manifest is
+   * validated and applied to the control the panel draws. Absent means unbounded below.
+   */
+  minimum?: number;
+  /**
+   * The one line a person reads beside the control -- "How long the door may stay open" --
+   * written for somebody who has never opened the manifest. Required, because an option whose
+   * only name is its `key` is an option the panel can only label `open_minutes`, which is the
+   * defect the whole clause exists to fix.
+   */
+  title: string;
+  /**
+   * What kind of value the option takes, which is what decides the control the panel draws: a
+   * checkbox for `boolean`, a number field for `integer` and `number`, a select for `enum`, a
+   * text field for `string`, and a number field read as a length of time for `duration`. The
+   * set is closed rather than the JSON Schema type union, because a control has to be chosen
+   * for each and a type outside this list is a control nothing draws. `duration` is `integer`
+   * seconds with a unit shown beside it -- a person sets *how long*, and the engine's one use
+   * for a duration (`for`) reads it in seconds without parsing a string.
+   */
+  type: "boolean" | "integer" | "number" | "string" | "enum" | "duration";
+  /**
+   * The unit shown beside the control for a `number` or `integer` -- `minutes`, `°C`, `%`.
+   * Display only, and never parsed: a `duration` is always seconds and says so in its own type
+   * rather than through this field, which is what keeps one unit string from meaning a
+   * multiplier in one place and a label in another.
+   */
+  unit?: string;
+}
 
 export interface PackManifestProvided {
   /**

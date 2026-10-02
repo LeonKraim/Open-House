@@ -37,7 +37,6 @@ from homeassistant.config_entries import (
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import section
 from homeassistant.helpers import area_registry as ar
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import floor_registry as fr
 from homeassistant.helpers.selector import (
     AreaSelector,
@@ -52,6 +51,7 @@ from ha_adapter.setup_flow import (
     Area,
     RoomSuggestion,
     SetupPlan,
+    load_module_slots,
     load_room_types,
     load_slot_domains,
     plan_setup,
@@ -65,6 +65,7 @@ from .const import (
     SUBENTRY_ROOM,
     catalog_root,
 )
+from .host import entity_ids_in_area
 
 __all__ = ["OpenHouseConfigFlow", "RoomSubentryFlow"]
 
@@ -80,12 +81,12 @@ _CONF_ROOM_TYPE = "room_type"
 def _read_areas(hass: HomeAssistant) -> tuple[Area, ...]:
     """Every area, with the entities Home Assistant files under it.
 
-    The entity list is the entity registry's view -- the entities a device
-    assigned to the area owns -- which is exactly the candidate set the binding
-    guess reads, so a device that exists but is filed elsewhere is not proposed.
+    The entity list is the *effective* area's, so a device assigned to the area
+    brings its entities with it -- see `host.entity_ids_in_area`. That is exactly
+    the candidate set the binding guess reads, so a device that exists but is
+    filed elsewhere is not proposed.
     """
     areas = ar.async_get(hass)
-    entities = er.async_get(hass)
     floors = fr.async_get(hass)
     result: list[Area] = []
     for area in areas.async_list_areas():
@@ -94,12 +95,7 @@ def _read_areas(hass: HomeAssistant) -> tuple[Area, ...]:
             Area(
                 area_id=area.id,
                 name=area.name,
-                entity_ids=tuple(
-                    sorted(
-                        entry.entity_id
-                        for entry in er.async_entries_for_area(entities, area.id)
-                    )
-                ),
+                entity_ids=entity_ids_in_area(hass, area.id),
                 floor_name=floor.name if floor is not None else None,
             )
         )
@@ -135,6 +131,7 @@ class OpenHouseConfigFlow(ConfigFlow, domain=DOMAIN):
         self._away_people: list[str] = []
         self._room_types: Mapping[str, tuple[str, ...]] = {}
         self._slot_domains: Mapping[str, tuple[str, ...]] = {}
+        self._module_slots: tuple[str, ...] = ()
 
     # -- Steps --------------------------------------------------------------
 
@@ -321,6 +318,7 @@ class OpenHouseConfigFlow(ConfigFlow, domain=DOMAIN):
             return False
         self._room_types = load_room_types(root)
         self._slot_domains = load_slot_domains(root)
+        self._module_slots = load_module_slots(root)
         return True
 
     def _chosen_areas(self) -> tuple[Area, ...]:
@@ -334,6 +332,7 @@ class OpenHouseConfigFlow(ConfigFlow, domain=DOMAIN):
             room_types=self._room_types,
             slot_domains=self._slot_domains,
             room_type_overrides=self._room_type_choices,
+            slots=self._module_slots,
         )
 
 
@@ -385,6 +384,7 @@ class RoomSubentryFlow(ConfigSubentryFlow):
             return self.async_abort(reason="catalog_missing")
         room_types = load_room_types(root)
         slot_domains = load_slot_domains(root)
+        module_slots = load_module_slots(root)
 
         if user_input is not None:
             area_id = str(user_input[DATA_AREA_ID])
@@ -399,6 +399,7 @@ class RoomSubentryFlow(ConfigSubentryFlow):
                 room_types=room_types,
                 slot_domains=slot_domains,
                 room_type_overrides={area.area_id: user_input[DATA_ROOM_TYPE]},
+                slots=module_slots,
             )
             room = plan.rooms[0]
             return self.async_create_entry(

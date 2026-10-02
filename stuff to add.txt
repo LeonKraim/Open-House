@@ -1,0 +1,6 @@
+stuff to add
+priotrity for each interacting with a device
+profiles working properly per room / house import export getting removed in favour of a profile export import system per profile and all profiles and 
+uri encoding so after a reload it doesnt put you into the overwview
+modules being able to put temporrary overrides over other modules by being able to tunr them on or off but just as temporary overrides not ever permanently
+custom user ovverride for each device thats being interacted with by a module

@@ -41,7 +41,7 @@ def _room(name: str = "hall") -> LiveRoom:
         type="hallway",
         bindings={
             "motion_sensor": "binary_sensor.hall_motion",
-            "lux_sensor": "sensor.hall_lux",
+            "ambient_light_sensor": "sensor.hall_lux",
             "light_group": "light.hall",
         },
     )

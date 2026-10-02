@@ -60,16 +60,15 @@
         "slot": {
           "description": "The slot this reference maps to, or null when the reference resolves to a `constant` instead. The closed set is `catalog/slots.yaml` itself, so the field is the product's own vocabulary rather than a copied pattern -- the same rule the raw record's `slots` field follows. Exactly one of `slot` and `constant` is non-null, which `hardcoded_entry_one_of` states above and `check_slots` enforces by naming the reference and its repo.",
           "enum": [
+            "ambient_light_sensor",
             "climate_zone",
-            "contact_sensor",
             "cover",
+            "door_contact",
             "fan",
-            "house_mode",
             "humidity_sensor",
             "leak_sensor",
             "light_group",
             "lock",
-            "lux_sensor",
             "media_player",
             "motion_sensor",
             "scene_selector",

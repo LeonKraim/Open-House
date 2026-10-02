@@ -1,0 +1,126 @@
+# The service-to-state table: what a declared service writes.
+#
+# Schema: `schemas/catalog/services.json`; read by the engine through
+# `engine/vocabulary.py`'s `load_service_states`, so teaching the engine a new
+# service is an edit to this file and not a release of the engine.
+#
+# A pack's behaviour clause declares a *service* -- `light.turn_on` -- because
+# that is the vocabulary Home Assistant publishes, and the engine's port takes a
+# *state*, because that is what a house is a function of: the light is `on` or
+# `off`, and the service is one of the ways it got there. Between the two there
+# was nothing, and `engine/behaviours/declared.py` recorded the consequence in as
+# many words -- it proposed the service string as the command's action, so a port
+# that takes a state wrote `light.turn_on` onto the light. That is the gap that
+# blocked Phase 2's exit criterion ("a declared behaviour's commands reach the
+# entity"), and this file is the missing vocabulary rather than a table written
+# into the interpreter, because a service-to-state mapping is a vocabulary and a
+# vocabulary belongs in an artifact.
+#
+# **The list is closed, and a service with no row is not an actuation.** The port's
+# `actuate` takes a state; a service that sets a *parameter* rather than a state --
+# `climate.set_temperature` names a setpoint, `climate.set_hvac_mode` names a mode,
+# `media_player.volume_set` names a level -- has no state to write and therefore no
+# row. A behaviour declaring one proposes nothing through it: the honest failure is
+# an atom that does not fire, not an atom that writes `climate.set_temperature` as
+# though that were a state a thermostat could be in. Widening the port so it can
+# carry a service *call* rather than a state is the change that retires this
+# distinction, and until it lands the services it would cover are listed here as
+# absent on purpose:
+#
+#   climate.set_temperature, climate.set_hvac_mode, climate.set_fan_mode,
+#   media_player.volume_set, media_player.volume_mute, vacuum.set_fan_speed,
+#   notify.send_message, scene.turn_on, script.turn_on, homeassistant.turn_on,
+#   lock.open (an unlock that releases the bolt; `lock.unlock` is the row above)
+#
+# **Every row is a state Home Assistant's own domain publishes.** The spelling is
+# the domain's and not ours -- `locked`/`unlocked` rather than `on`/`off`, because
+# `lock` publishes those -- so a row that disagrees with the domain it names would
+# put the entity into a state its own integration immediately corrects, and the
+# engine would read the correction as a person's hand (`override`) rather than as
+# its own command.
+
+services:
+  # Lighting. The two the official packs use, and the pair every lighting
+  # behaviour in the corpus reduces to.
+  - service: light.turn_on
+    state: "on"
+  - service: light.turn_off
+    state: "off"
+
+  # Switches, including the `input_boolean` helpers a house uses as flags.
+  - service: switch.turn_on
+    state: "on"
+  - service: switch.turn_off
+    state: "off"
+  - service: input_boolean.turn_on
+    state: "on"
+  - service: input_boolean.turn_off
+    state: "off"
+
+  # Fans. `bathroom_fan` is an official pack and a fan's state is one of a small
+  # closed set, so the speed a fan runs at is a parameter and not a row.
+  - service: fan.turn_on
+    state: "on"
+  - service: fan.turn_off
+    state: "off"
+
+  # Locks. The state words are the `lock` domain's, and the two services are a
+  # matched pair -- one locks and one unlocks -- rather than a turn-on/turn-off,
+  # which is why the flagged `lock.open` above is a third act and not a spelling
+  # of `unlock`.
+  - service: lock.lock
+    state: "locked"
+  - service: lock.unlock
+    state: "unlocked"
+
+  # Covers: blinds, shutters, garage doors.
+  - service: cover.open_cover
+    state: "open"
+  - service: cover.close_cover
+    state: "closed"
+
+  # Media players. The play/pause pair is what a pack reaches for; the volume is
+  # a parameter and is listed absent above.
+  - service: media_player.turn_on
+    state: "on"
+  - service: media_player.turn_off
+    state: "off"
+  - service: media_player.media_play
+    state: "playing"
+  - service: media_player.media_pause
+    state: "paused"
+
+  # Vacuums. An official pack (`roomba`) uses three of these, and the domain's
+  # states are the four below rather than a turn-on/turn-off.
+  - service: vacuum.start
+    state: "cleaning"
+  - service: vacuum.pause
+    state: "paused"
+  - service: vacuum.stop
+    state: "idle"
+  - service: vacuum.return_to_base
+    state: "returning"
+
+  # Climate, for the one act that is a state rather than a parameter: a
+  # thermostat off for the night is `off`, and a thermostat's setpoint is not a
+  # state at all (see the absent list above).
+  - service: climate.turn_on
+    state: "heat"
+  - service: climate.turn_off
+    state: "off"
+  # Alarm panels. The domain's states are the three below, and the pair an
+  # arming behaviour reduces to. `alarm_disarm` is on `pack-policy.yaml`'s
+  # flagged list, so a pack that disarms installs with the flag named rather
+  # than being refused -- a flag is never a refusal.
+  - service: alarm_control_panel.alarm_arm_home
+    state: "armed_home"
+  - service: alarm_control_panel.alarm_arm_away
+    state: "armed_away"
+  - service: alarm_control_panel.alarm_disarm
+    state: "disarmed"
+  # Valves, for the supply a leak behaviour shuts off. The domain names its two
+  # acts open and close rather than on and off, and the states follow.
+  - service: valve.open_valve
+    state: "open"
+  - service: valve.close_valve
+    state: "closed"

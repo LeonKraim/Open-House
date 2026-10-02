@@ -17,6 +17,7 @@ the one it replaces, and the arrow points **backwards**:
 | `schemas/pack-manifest/1.0.0.json` | `null` |
 | `schemas/pack-manifest/1.1.0.json` | `1.0.0` |
 | `schemas/pack-manifest/1.2.0.json` | `1.1.0` |
+| `schemas/pack-manifest/1.3.0.json` | `1.2.0` |
 
 Pointing the arrow backwards is worth stating, because the forward-pointing form
 is the one everyone writes first. With a `superseded_by` field, publishing a
@@ -42,21 +43,31 @@ Three clauses hold the chain together. All three are implemented in
   Deleting a version is a change too — a content comparison cannot see a file
   that is gone — so absence is checked against the paths git remembers adding.
 
-## The two versions this phase publishes
+## The current versions
 
 | Artifact | Version | `supersedes` |
 | --- | --- | --- |
-| [schemas/pack-manifest/1.2.0.json](../../schemas/pack-manifest/1.2.0.json) | 1.2.0 | `1.1.0` |
+| [schemas/pack-manifest/1.3.0.json](../../schemas/pack-manifest/1.3.0.json) | 1.3.0 | `1.2.0` |
 | [schemas/engine-api/1.0.0.json](../../schemas/engine-api/1.0.0.json) | 1.0.0 | `null` |
 
-`schemas/pack-manifest/1.2.0.json` is the manifest format the pack installer
-reads. It closes `kind` to five kinds — `module`, `room-template`, `behavior`,
-`profile-set`, `house-template` — adds `dependencies`, `conflicts`, `engine_api`,
-`license` and `i18n`, adds `derives_from` for a pack derived from a corpus row,
-extends `$defs.provided.class` with `mode` while the other ten values are
-unchanged, retires `min_engine_version` in favour of `engine_api`, and widens
-`$defs.behaviour` with `priority`, `services` and `slots`. The two versions it
-supersedes, `schemas/pack-manifest/1.1.0.json` and
+`schemas/pack-manifest/1.2.0.json` closed `kind` to five kinds — `module`,
+`room-template`, `behavior`, `profile-set`, `house-template` — added
+`dependencies`, `conflicts`, `engine_api`, `license` and `i18n`, added
+`derives_from` for a pack derived from a corpus row, extended
+`$defs.provided.class` with `mode` while the other ten values were unchanged,
+retired `min_engine_version` in favour of `engine_api`, and widened
+`$defs.behaviour` with `priority`, `services` and `slots`.
+
+`schemas/pack-manifest/1.3.0.json` supersedes it and adds three clauses: `match`
+and `mode` on a behaviour, and a pack-level `slots`. `match` is the value beside
+a `state` condition — the readings the behaviour acts on — and `mode` is the
+value beside a `service` action whose act is entering a house mode rather than
+writing an entity; both are optional, so every `1.2.0` pack is a `1.3.0` pack,
+and both are literals the vocabulary can check rather than expressions the engine
+must evaluate. `slots` lets a pack declare a device the catalog does not name,
+each declaration carrying the `intent` that says what it is for and the
+`accepts_domains` a binding may use. The versions it supersedes,
+`schemas/pack-manifest/1.2.0.json`, `schemas/pack-manifest/1.1.0.json` and
 `schemas/pack-manifest/1.0.0.json`, are retained and unedited, which is the whole
 of what the chain above is for.
 

@@ -37,7 +37,7 @@ kind: module
 engine_api: ">=1.0.0 <2.0.0"
 license: mit
 requires_slots: [light_group, motion_sensor]
-optional_slots: [lux_sensor]
+optional_slots: [ambient_light_sensor]
 provides:
   - path: packs/official/example_pack/motion_light.yaml
     class: automation

@@ -15,6 +15,28 @@
  *   * Owning the load state machine. `loading` / `error` / `data` is the same
  *     in every screen, and a helper here is cheaper than the same four lines
  *     repeated and one of them forgetting to clear `error`.
+ *
+ * ## Screen state must be declared, not merely assigned
+ *
+ * Lit re-renders an element when a *reactive* property changes, and a reactive
+ * property is one named in `static properties` (or `static state`). A plain
+ * class field is an own data property: writing it schedules nothing.
+ *
+ * Every screen below used to keep its state in plain fields and lean on
+ * hand-written `this.requestUpdate()` calls after each `await`. That worked for
+ * anything driven by a fetch -- the call was right there in the `finally` -- and
+ * failed for everything driven by a *click*, because a click handler that
+ * assigned a field and returned looked like it had done something and had not.
+ * The symptoms were spread out and looked unrelated: "Add room" never opened
+ * its form, a room's name was not a link to its settings, Rename never appeared,
+ * the device picker's Cancel never closed it, the module filter never filtered.
+ *
+ * So: a screen's own mutable state goes in `static properties` as
+ * `{ state: true }`. `state` rather than `attribute`, because these values come
+ * from the screen and never from markup -- nothing in the DOM should be able to
+ * write them. The `this.requestUpdate()` calls that remain are harmless and are
+ * left where they are; they are simply no longer the only thing keeping the
+ * screen alive.
  */
 
 import { LitElement, html, type TemplateResult } from "lit";

@@ -80,7 +80,7 @@ def test_the_slot_vocabulary_comes_from_the_committed_catalog(
         for row in document["slots"]
     }
     assert dict(vocabulary.slots) == expected
-    assert len(expected) == 15
+    assert len(expected) == 14
 
 
 def test_the_house_scope_slots_come_from_the_room_type_catalog(
@@ -89,7 +89,7 @@ def test_the_house_scope_slots_come_from_the_room_type_catalog(
     """The house's slots are `catalog/room_types.yaml`'s `house.slots`.
 
     A falsifying implementation that read the room types' `provides_slots` union
-    as the house scope would admit `lux_sensor`, which no room type offers at
+    as the house scope would admit `ambient_light_sensor`, which no room type offers at
     house scope, and reject nothing a real house names -- a difference only a
     check against the file's `house` key can see, which is why the expectation is
     read from that key rather than written out here.
@@ -98,7 +98,7 @@ def test_the_house_scope_slots_come_from_the_room_type_catalog(
         (ROOT / "catalog" / "room_types.yaml").read_text(encoding="utf-8")
     )
     assert vocabulary.house_slots == frozenset(document["house"]["slots"])
-    assert "lux_sensor" not in vocabulary.house_slots
+    assert "ambient_light_sensor" not in vocabulary.house_slots
 
 
 def test_the_house_schema_is_the_frozen_one(vocabulary: Vocabulary) -> None:

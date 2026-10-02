@@ -24,6 +24,13 @@ const SEVERITY_CHIP: Record<HealthIssue["severity"], string> = {
 };
 
 export class HealthTab extends OpenHouseElement {
+  static override properties = {
+    ...OpenHouseElement.properties,
+    issues: { state: true },
+    isLoading: { state: true },
+    error: { state: true },
+  };
+
   private issues: HealthIssue[] = [];
   private isLoading = true;
   private error: ReturnType<OpenHouseElement["toError"]> | null = null;

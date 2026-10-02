@@ -23,7 +23,7 @@ trigger:
     to: "on"
 condition:
   - condition: state
-    entity_id: lux_sensor
+    entity_id: ambient_light_sensor
     state: "below_light_threshold"
 action:
   - service: light.turn_on

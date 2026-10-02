@@ -7,9 +7,9 @@ here touches an adapter, a clock or a stream except through the `build` method
 as a table of rooms and devices -- without tracing a single call.
 
 Every binding a room carries is a slot that room's type provides
-(`catalog/room_types.yaml`'s `provides_slots`), or `house_mode` -- the one slot
-no type provides that a house holds at house scope, and which must be bound in a
-room because a house-scope slot is aggregated from the rooms. That is what the
+(`catalog/room_types.yaml`'s `provides_slots`), whether at room scope or, for a
+house slot, at house scope -- a house-scope slot is aggregated from the rooms, so
+a house holds one by a room binding it. That is what the
 catalog means by a type, and a light in a driveway is a house the catalog would
 not recognise. Nothing shipped rejects it: `tools/catalog/scope.py` checks a
 behaviour row against the catalog's supply, not a house's room bindings, so the
@@ -123,11 +123,11 @@ class Plan:
         slot declares" untestable against the fixtures the scenarios use.
 
         Spelled by slot rather than by entity id because the unit is a property
-        of what the slot measures -- every `lux_sensor` anywhere reads in lux --
+        of what the slot measures -- every `ambient_light_sensor` anywhere reads in lux --
         so a room that binds a new one does not have to be taught the unit too.
         """
         units = {
-            "lux_sensor": "lx",
+            "ambient_light_sensor": "lx",
             "temperature_sensor": "°C",
             "humidity_sensor": "%",
         }
@@ -231,14 +231,13 @@ INITIAL: Mapping[str, str] = {
 #: which is what makes a generated house readable.
 _DOMAINS: Mapping[str, str] = {
     "climate_zone": "climate",
-    "contact_sensor": "binary_sensor",
+    "door_contact": "binary_sensor",
     "cover": "cover",
-    "house_mode": "input_select",
     "humidity_sensor": "sensor",
     "leak_sensor": "binary_sensor",
     "light_group": "light",
     "lock": "lock",
-    "lux_sensor": "sensor",
+    "ambient_light_sensor": "sensor",
     "media_player": "media_player",
     "motion_sensor": "binary_sensor",
     "scene_selector": "input_select",
@@ -251,14 +250,13 @@ _DOMAINS: Mapping[str, str] = {
 #: otherwise name two `binary_sensor.*` entities the same way.
 _SLOT_SUFFIX: Mapping[str, str] = {
     "climate_zone": "climate",
-    "contact_sensor": "contact",
+    "door_contact": "contact",
     "cover": "cover",
-    "house_mode": "mode",
     "humidity_sensor": "humidity",
     "leak_sensor": "leak",
     "light_group": "light",
     "lock": "lock",
-    "lux_sensor": "lux",
+    "ambient_light_sensor": "lux",
     "media_player": "media",
     "motion_sensor": "motion",
     "scene_selector": "scene",
@@ -280,7 +278,7 @@ PROVIDES: Mapping[str, tuple[str, ...]] = {
     "bedroom": (
         "climate_zone",
         "light_group",
-        "lux_sensor",
+        "ambient_light_sensor",
         "media_player",
         "motion_sensor",
         "scene_selector",
@@ -289,15 +287,15 @@ PROVIDES: Mapping[str, tuple[str, ...]] = {
     "dining_room": ("light_group", "media_player", "motion_sensor"),
     "driveway": ("motion_sensor",),
     "family_room": ("light_group", "media_player", "motion_sensor"),
-    "foyer": ("contact_sensor", "light_group", "lock", "motion_sensor"),
+    "foyer": ("door_contact", "light_group", "lock", "motion_sensor"),
     "garage": ("cover", "light_group", "motion_sensor"),
     "gazebo": ("motion_sensor",),
     "hallway": ("light_group", "motion_sensor"),
     "kitchen": (
         "climate_zone",
-        "contact_sensor",
+        "door_contact",
         "light_group",
-        "lux_sensor",
+        "ambient_light_sensor",
         "media_player",
         "motion_sensor",
         "temperature_sensor",
@@ -305,17 +303,17 @@ PROVIDES: Mapping[str, tuple[str, ...]] = {
     "laundry": ("light_group", "motion_sensor"),
     "living_room": (
         "light_group",
-        "lux_sensor",
+        "ambient_light_sensor",
         "media_player",
         "motion_sensor",
         "temperature_sensor",
     ),
-    "mudroom": ("contact_sensor", "light_group", "lock", "motion_sensor"),
+    "mudroom": ("door_contact", "light_group", "lock", "motion_sensor"),
     "office": (
         "climate_zone",
-        "contact_sensor",
+        "door_contact",
         "light_group",
-        "lux_sensor",
+        "ambient_light_sensor",
         "media_player",
         "motion_sensor",
         "scene_selector",
@@ -330,23 +328,23 @@ PROVIDES: Mapping[str, tuple[str, ...]] = {
 
 #: One or two rooms and a handful of devices: the least a tick needs. The first
 #: room is a foyer rather than a hallway because it binds a contact sensor and
-#: `catalog/room_types.yaml` gives `contact_sensor` to a foyer; a hallway
-#: provides lighting and occupancy only. `house_mode` is bound in a room rather
-#: than at house scope because a house-scope slot is aggregated from the rooms,
-#: so a house that binds it nowhere cannot resolve the shutdown's required slot
-#: -- the same reason every fixture binds it somewhere.
+#: `catalog/room_types.yaml` gives `door_contact` to a foyer; a hallway
+#: provides lighting and occupancy only. The one house slot it carries,
+#: `light_group`, is bound in the living room rather than at house scope because a
+#: house-scope slot is aggregated from the rooms, and a house that binds it
+#: nowhere cannot resolve the shutdown's required slot.
 _MINIMAL = Plan(
     config=FixtureConfig(
         latitude=51.5074, longitude=-0.1278, time_zone="Europe/London"
     ),
-    house_scope_slots=("house_mode", "light_group"),
+    house_scope_slots=("light_group",),
     rooms=(
         RoomPlan(
             id="foyer",
             name="Foyer",
             type="foyer",
             bindings={
-                "contact_sensor": "binary_sensor.front_door",
+                "door_contact": "binary_sensor.front_door",
                 "light_group": "light.foyer",
                 "motion_sensor": "binary_sensor.foyer_motion",
             },
@@ -357,17 +355,16 @@ _MINIMAL = Plan(
             type="living_room",
             bindings={
                 "light_group": "light.living_room",
-                "lux_sensor": "sensor.living_room_lux",
+                "ambient_light_sensor": "sensor.living_room_lux",
                 "media_player": "media_player.living_room",
                 "motion_sensor": "binary_sensor.living_room_motion",
-                "house_mode": "input_select.house_mode",
             },
         ),
     ),
 )
 
 #: The house that strains binding: `light_group` is bound in two rooms, so the
-#: house-scoped slot resolves to two entities, and no room binds a `lux_sensor`
+#: house-scoped slot resolves to two entities, and no room binds a `ambient_light_sensor`
 #: anywhere -- a kitchen and a dining room both provide one, so the absence is a
 #: choice the fixture makes rather than a slot no type offers. Which of the two
 #: lights is unavailable is the stream's choice, so the house a scenario is
@@ -376,7 +373,7 @@ _MESSY = Plan(
     config=FixtureConfig(
         latitude=51.5074, longitude=-0.1278, time_zone="Europe/London"
     ),
-    house_scope_slots=("house_mode", "light_group"),
+    house_scope_slots=("light_group",),
     rooms=(
         RoomPlan(
             id="dining_room",
@@ -385,7 +382,6 @@ _MESSY = Plan(
             bindings={
                 "light_group": "light.dining_room",
                 "motion_sensor": "binary_sensor.dining_room_motion",
-                "house_mode": "input_select.house_mode",
             },
         ),
         RoomPlan(
@@ -403,9 +399,8 @@ _MESSY = Plan(
 
 #: How many rooms the large fixture has. Sixty rather than forty because every
 #: room binds every slot its type provides, and the 20 types average 3.25 slots
-#: between them: sixty rooms is 195 slot bindings plus the `house_mode` binding
-#: the first room carries, so 196 entities, comfortably over the spec's 150, and
-#: three passes over the catalog's types rather than two.
+#: between them: sixty rooms is 195 slot bindings, comfortably over the spec's
+#: 150, and three passes over the catalog's types rather than two.
 _LARGE_ROOM_COUNT = 60
 
 #: The 20 type names, derived from `PROVIDES` so the cycle and the slot table
@@ -430,8 +425,6 @@ def _large_rooms() -> tuple[RoomPlan, ...]:
             slot: f"{_DOMAINS[slot]}.{slug}_{_SLOT_SUFFIX[slot]}"
             for slot in PROVIDES[room_type]
         }
-        if index == 1:
-            bindings["house_mode"] = "input_select.house_mode"
         rooms.append(
             RoomPlan(
                 id=slug,
@@ -447,11 +440,11 @@ _LARGE = Plan(
     config=FixtureConfig(
         latitude=40.7128, longitude=-74.0060, time_zone="America/New_York"
     ),
-    house_scope_slots=("house_mode", "light_group"),
+    house_scope_slots=("light_group",),
     rooms=_large_rooms(),
 )
 
-#: No `lux_sensor` bound anywhere, which is the sun fallback's own subject: a
+#: No `ambient_light_sensor` bound anywhere, which is the sun fallback's own subject: a
 #: behaviour taking the sun branch is never offered a lux reading here, and the
 #: southern-hemisphere location makes the fallback's answer differ from the
 #: London fixtures' at the same instant. Three of the four types here provide a
@@ -461,7 +454,7 @@ _NO_LUX = Plan(
     config=FixtureConfig(
         latitude=-33.8688, longitude=151.2093, time_zone="Australia/Sydney"
     ),
-    house_scope_slots=("house_mode", "light_group"),
+    house_scope_slots=("light_group",),
     rooms=(
         RoomPlan(
             id="living_room",
@@ -471,7 +464,6 @@ _NO_LUX = Plan(
                 "light_group": "light.living_room",
                 "media_player": "media_player.living_room",
                 "motion_sensor": "binary_sensor.living_room_motion",
-                "house_mode": "input_select.house_mode",
             },
         ),
         RoomPlan(

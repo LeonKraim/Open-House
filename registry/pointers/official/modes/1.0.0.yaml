@@ -1,0 +1,7 @@
+name: modes
+version: 1.0.0
+repo: .
+commit: 196109250697f1c4877b7e4f98b643ae7fc74714
+path: packs/derived/modes.yaml
+sha256: sha256:17e294161c0dbec43e5e9ceae2ea17e3c739efe7314f59f27daa8b975bdd0e31
+tier: official

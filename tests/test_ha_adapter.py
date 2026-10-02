@@ -557,6 +557,7 @@ def _house(
     motion: str = "on",
     lux: str = "5",
     bind_lux: bool = True,
+    bind_light: bool = True,
     house_settings: Mapping[str, object] | None = None,
 ) -> LiveHouse:
     """A one-room live house over a fake transport, for the tests to drive."""
@@ -564,12 +565,11 @@ def _house(
     transport.set_state("light.hall", "off")
     if bind_lux:
         transport.set_state("sensor.hall_lux", lux)
-    bindings = {
-        "motion_sensor": "binary_sensor.hall_motion",
-        "light_group": "light.hall",
-    }
+    bindings = {"motion_sensor": "binary_sensor.hall_motion"}
+    if bind_light:
+        bindings["light_group"] = "light.hall"
     if bind_lux:
-        bindings["lux_sensor"] = "sensor.hall_lux"
+        bindings["ambient_light_sensor"] = "sensor.hall_lux"
     house = build_live_house(
         house_name="Test house",
         rooms=[
@@ -666,7 +666,7 @@ def test_motion_in_a_bright_room_is_left_alone() -> None:
     assert _adapter_state(transport, "light.hall") == "off"
 
 
-def test_an_unreadable_lux_sensor_falls_back_to_the_sun() -> None:
+def test_an_unreadable_ambient_light_sensor_falls_back_to_the_sun() -> None:
     """A bound sensor that cannot answer does not decide; the sun branch does."""
     clock = VirtualClock.started_at(_STARTED_AT)
     transport = FakeHaTransport()
@@ -721,12 +721,12 @@ def test_the_auto_lighting_switch_silences_the_room_and_lets_it_speak_again() ->
 
 
 def test_an_unbound_house_scoped_slot_is_skipped_rather_than_fatal() -> None:
-    """A house scope that omitted `house_mode` would raise where it should skip.
+    """A house scope that omitted `light_group` would raise where it should skip.
 
-    `away_shutdown` requires `house_mode`, which no lighting-only room binds, and
-    the house-scope resolver raises for a slot the scope does not declare before
-    it can notice the binding is empty. The composition declares the vocabulary's
-    whole house scope so that this tick records `skipped: unbound slot` instead of
+    `away_shutdown` requires `light_group`, which this hall does not bind, and the
+    house-scope resolver raises for a slot the scope does not declare before it can
+    notice the binding is empty. The composition declares the vocabulary's whole
+    house scope so that this tick records `skipped: unbound slot` instead of
     failing -- the difference between a house that runs and one that does not.
     """
     clock = VirtualClock.started_at(_STARTED_AT)
@@ -734,6 +734,7 @@ def test_an_unbound_house_scoped_slot_is_skipped_rather_than_fatal() -> None:
     house = _house(
         clock=clock,
         transport=transport,
+        bind_light=False,
         house_settings={enable_key("away_shutdown"): True},
     )
 
@@ -778,12 +779,12 @@ def test_the_house_scope_declares_the_vocabularys_house_slots() -> None:
     vocabulary = Vocabulary.load(paths.ROOT)
 
     assert set(declared) == set(vocabulary.house_slots)
-    # `house_mode` is the slot that makes it matter: no room of a lighting-only
-    # house binds it, so declaring it is what turns the raise into a
-    # `skipped: unbound slot`.
-    assert "house_mode" in declared
+    # A lock and a vacuum are the slots that make it matter: no room of a
+    # lighting-only house binds them, so declaring them is what turns the raise
+    # into a `skipped: unbound slot`.
+    assert {"lock", "vacuum"} <= set(declared)
     bound = {slot for room in house.engine.house.rooms for slot in room.bindings}
-    assert "house_mode" not in bound
+    assert not {"lock", "vacuum"} & bound
 
 
 def test_a_rooms_switch_becomes_the_engines_enable_flag() -> None:

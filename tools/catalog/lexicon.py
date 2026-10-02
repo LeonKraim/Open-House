@@ -68,16 +68,15 @@ SCOPES: tuple[str, ...] = ("room", "house")
 #: spelling invented at a point of use, which is exactly what a controlled
 #: vocabulary exists to refuse, so the check names it rather than admitting it.
 ROLE_VOCABULARY: tuple[str, ...] = (
+    "ambient_light_sensor",
     "climate_zone",
-    "contact_sensor",
     "cover",
+    "door_contact",
     "fan",
-    "house_mode",
     "humidity_sensor",
     "leak_sensor",
     "light_group",
     "lock",
-    "lux_sensor",
     "media_player",
     "motion_sensor",
     "scene_selector",
@@ -164,7 +163,7 @@ LEXICON: tuple[LexiconEntry, ...] = (
         "words a multisensor or mmWave node carries all name presence in a room",
     ),
     _entry(
-        "contact_sensor",
+        "door_contact",
         "binary_sensor",
         r"(door|window|contact|fenster|t[üu]r|gate)",
         ("room",),
@@ -184,7 +183,7 @@ LEXICON: tuple[LexiconEntry, ...] = (
         "binary_sensor domain with motion and opening contacts",
     ),
     _entry(
-        "lux_sensor",
+        "ambient_light_sensor",
         "sensor",
         r"(illuminance|lux)",
         ("room",),
@@ -230,24 +229,14 @@ LEXICON: tuple[LexiconEntry, ...] = (
         "speaker or a display wherever it stands",
     ),
     _entry(
-        "house_mode",
-        "input_select",
-        r"(house|_mode$|mode_|presence_mode|sleep_state|_state$|^away$|guest_mode)",
-        ("house",),
-        ("fwartner", "johnkoht"),
-        "design D5's house_mode: a selector holding the home's state -- away, "
-        "guest, a sleep state -- is house-scoped, and its name is what tells it "
-        "from the room-scoped scenes a repo also keeps in an input_select",
-    ),
-    _entry(
         "scene_selector",
         "input_select",
         r"scene",
         ("room", "house"),
         ("johnkoht", "renemarc"),
-        "a selector naming a scene chooses a lighting mood; it shares the "
-        "input_select domain with house_mode and is separated from it by the "
-        "`scene` token rather than by scope",
+        "a selector naming a scene chooses a lighting mood; it is told from "
+        "every other input_select by the `scene` token rather than by scope, "
+        "because the home's own state is the engine's and is no slot at all",
     ),
     _entry(
         "cover",
@@ -298,16 +287,15 @@ def candidates(
     """The slot candidates a reference is drawn from, in lexicon order.
 
     A candidate rather than a verdict: `binary_sensor.basement_exterior_door_leak_sensor`
-    matches both `contact_sensor` and `leak_sensor`, and that is the honest
+    matches both `door_contact` and `leak_sensor`, and that is the honest
     answer -- the reference is evidence for both, and 5.3 weighs it against the
     rest of the usage. Returning one role would require a precedence nothing in
     the corpus supplies. Roles are de-duplicated and ordered by `LEXICON`, so the
     result is a function of the inputs and not of iteration order.
 
     `scope` is the room context, and it is optional because stage A's scope is
-    deliberately coarse: it reads the domain alone, so it labels every
-    `input_select` a room's even where the role -- `house_mode` -- is the
-    house's, and 5.3 is where that inference is revisited. Omitted, the match is
+    deliberately coarse: it reads the domain alone, and 5.3 is where that
+    inference is revisited. Omitted, the match is
     on domain and pattern and every scope's roles are returned; supplied, it
     narrows to the roles that admit that context. A caller that has no scope
     observation still gets the candidates, and one that has a corrected scope
@@ -337,9 +325,7 @@ def scope_for(role: str) -> tuple[str, ...]:
     """The scopes a role lives in, sorted.
 
     Exposed because stage A's scope inference is deliberately coarse -- it reads
-    the domain, and gives every `input_select` the room scope -- while a role
-    like `house_mode` is house-scoped. Task 5.3 is where that inference is
-    revisited, and this is the answer it revisits it with.
+    the domain alone -- while a role's own scopes are what 5.3 narrows it with.
     """
     return tuple(
         sorted({s for entry in LEXICON if entry.role == role for s in entry.scopes})

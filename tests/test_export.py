@@ -38,12 +38,12 @@ ROOT = Path(__file__).resolve().parents[1]
 BOUND_KEY = "engine.rate_limit.bound"
 
 ROOM_IDS = ("foyer", "kitchen", "garage", "bedroom")
-ROOM_SLOTS = ("light_group", "motion_sensor", "contact_sensor", "lock", "cover")
+ROOM_SLOTS = ("light_group", "motion_sensor", "door_contact", "lock", "cover")
 HOUSE_SLOTS = ("light_group", "lock", "media_player")
 DOMAINS = {
     "light_group": "light",
     "motion_sensor": "binary_sensor",
-    "contact_sensor": "binary_sensor",
+    "door_contact": "binary_sensor",
     "lock": "lock",
     "cover": "cover",
     "media_player": "media_player",

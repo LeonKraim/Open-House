@@ -63,12 +63,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
 import yaml
 
+from engine.declared_slots import declared_slots, slot_keys
 from engine.vocabulary import BehaviourVocabulary, PackPolicy, Vocabulary
 
 #: Every code a refusal carries, in the order a reader meets them: the three
@@ -190,6 +191,17 @@ class Pack:
     optional_slots: tuple[str, ...]
     behaviours: tuple[Behaviour, ...]
     provides: tuple[Provided, ...]
+    #: The names of the devices the pack declares in its own `slots` clause
+    #: (`engine/declared_slots.py`). They are the pack's own vocabulary entries --
+    #: a name the catalog does not carry is one this pack brings.
+    own_slots: tuple[str, ...] = ()
+    #: Written slot name -> the key a house binds it under, for the pack's own
+    #: declarations that asked to be held separately. Empty for every pack that
+    #: declares none and for every declaration that is shared, which is the
+    #: default: a caller resolves a name with `.get(slot, slot)`, and a shared
+    #: name is the identity. A separate declaration is what makes the two differ,
+    #: and it is projected once, here, from the clause that states it.
+    slot_keys: Mapping[str, str] = field(default_factory=dict[str, str])
 
     @property
     def directory(self) -> Path:
@@ -198,15 +210,36 @@ class Pack:
 
     @property
     def declared_slots(self) -> frozenset[str]:
-        """Every slot the pack declares, required or optional.
+        """Every slot the pack declares, required, optional or its own.
 
-        One set rather than two, because every rule that reads it is asking
-        whether the pack said the slot's name at all. Which of the two lists it
-        came from is a question for install -- a missing *required* slot skips a
-        behaviour and a missing optional one degrades it -- and not for the
-        sandbox, whose question is reach.
+        One set rather than three, because every rule that reads it is asking
+        whether the pack said the slot's name at all. Which list it came from is
+        a question for install -- a missing *required* slot skips a behaviour and
+        a missing optional one degrades it -- and not for the sandbox, whose
+        question is reach.
+
+        The pack's own declarations join the two catalog-facing lists here rather
+        than being kept apart, because to every rule in this module they are one
+        thing: names this pack is allowed to reach through. What separates them
+        is *where the name comes from*, which is a question about the vocabulary
+        and not about reach.
         """
-        return frozenset(self.requires_slots) | frozenset(self.optional_slots)
+        return (
+            frozenset(self.requires_slots)
+            | frozenset(self.optional_slots)
+            | frozenset(self.own_slots)
+        )
+
+    def bound_key(self, slot: str) -> str:
+        """The name `slot` binds under in a house this pack is installed in.
+
+        A behaviour's clauses are written in *written* names -- the manifest's own
+        spelling, which is what its author reads -- while a house document binds
+        under keys. This is the one translation between them, and it is the
+        identity for every name that is not a separate declaration, which is every
+        name the catalog carries and every shared declaration.
+        """
+        return self.slot_keys.get(slot, slot)
 
     @property
     def effective_permissions(self) -> frozenset[str]:
@@ -313,6 +346,7 @@ def project_pack(document: Mapping[str, object], path: Path) -> Pack:
     name = document.get("name")
     if not isinstance(name, str):
         raise MalformedPackError(path, "`name`")
+    declared = declared_slots(document)
     return Pack(
         name=name,
         path=path,
@@ -320,6 +354,8 @@ def project_pack(document: Mapping[str, object], path: Path) -> Pack:
         optional_slots=_slot_names(path, document, "optional_slots"),
         behaviours=_behaviours(path, document),
         provides=_provides(path, document),
+        own_slots=tuple(slot.name for slot in declared),
+        slot_keys=slot_keys(name, document),
     )
 
 
@@ -403,11 +439,19 @@ def check_slot_claims(pack: Pack, vocabulary: Vocabulary) -> tuple[Refusal, ...]
     refused; only the second is reported as a literal, and the distinction is
     by shape rather than by a list of domains, because a slot name cannot
     contain a dot and every literal can.
+
+    **A name the pack declares itself is one the catalog need not carry.** A
+    pack's `slots` clause is a second source of slot names -- `fridge_contact` is
+    a device no room type provides and this pack brings -- so the vocabulary test
+    admits it. What is still refused is a name *no* authority carries: a pack may
+    mint a slot, and it may not reach through a word nobody published.
     """
     refusals: list[Refusal] = []
     declared = pack.declared_slots
+    own = frozenset(pack.own_slots)
+    known = frozenset(vocabulary.slots) | own
     for slot in sorted(declared):
-        if slot not in vocabulary.slots:
+        if slot not in known:
             refusals.append(
                 Refusal(
                     reason="slot_not_declared",
@@ -433,14 +477,16 @@ def check_slot_claims(pack: Pack, vocabulary: Vocabulary) -> tuple[Refusal, ...]
                         "reach past its grant",
                     )
                 )
-            elif slot not in vocabulary.slots:
+            elif slot not in known:
                 refusals.append(
                     Refusal(
                         reason="slot_not_declared",
                         pack=pack.name,
                         where=where,
                         message=f"{where} reaches through `{slot}`, which "
-                        "`catalog/slots.yaml` does not define",
+                        "neither `catalog/slots.yaml` nor `"
+                        + pack.name
+                        + "`'s own `slots` clause defines",
                     )
                 )
             elif slot not in declared:

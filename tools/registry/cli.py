@@ -127,7 +127,10 @@ def _check(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return EXIT_USAGE
     submission = Submission(
-        pointer=pointer, manifest=source, root=source.parent, previous=args.previous
+        pointer=pointer,
+        manifest=source,
+        root=_submission_root(source, args.repo),
+        previous=args.previous,
     )
     report = run_checks(
         submission, existing_names=_published_names(root), registry_root=root
@@ -163,6 +166,27 @@ def _publish(args: argparse.Namespace) -> int:
 
 def _root(registry: Path | None) -> Path:
     return default_root() if registry is None else registry
+
+
+def _submission_root(source: Path, repo: str) -> Path:
+    """The repository a pack's `provides` paths are written against.
+
+    `Submission.root` is defined as exactly that -- "the same base the engine
+    resolves them against at install" -- and the `provides` paths in this
+    repository are repo-relative (`packs/official/example_pack/motion_light.yaml`).
+    Passing the manifest's own directory instead made every check resolve one
+    directory too deep: `packs/official/` + `packs/official/...`, which does not
+    exist, so `permissions:provides` reported "names no file" for *every* pack
+    -- the already-published `example_pack` and `kitchen` among them. The
+    maintainer's one pre-pull-request command could not pass for any pack, which
+    is why the check is worth reaching for a repository that is not this one.
+
+    `--repo` is what names the repository, so when it is a directory it is the
+    answer. A `repo` that is a URL has no local tree -- the same case `publish`
+    handles -- and there the manifest's directory is the only thing left.
+    """
+    candidate = Path(repo)
+    return candidate.resolve() if candidate.is_dir() else source.parent
 
 
 def _pointer_for(source: Path, repo: str, commit: str, tier: str) -> Pointer:

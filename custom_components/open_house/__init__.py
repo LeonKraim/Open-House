@@ -56,6 +56,7 @@ from .const import (
     VERSION,
 )
 from .repairs import async_sync_startup_issues
+from .rooms_sync import async_import_areas
 from .runtime import OpenHouseRuntime, RoomRuntime
 from .transport import HassTransport
 
@@ -244,6 +245,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     modules = await hass.async_add_executor_job(_engine_modules)
     if modules is not None:
         await _async_start_engine(hass, entry, runtime, *modules)
+
+    # Areas are the source of truth for rooms, so the entry is brought into step
+    # with Home Assistant's area registry here -- an area made while the
+    # integration was not watching is imported now, and every area made afterwards
+    # arrives through the registry event this registers. Last, because an import
+    # adds subentries and a subentry change reloads the entry: doing it before the
+    # platforms were up would reload a house that had never finished loading.
+    await async_import_areas(hass, entry)
 
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     return True

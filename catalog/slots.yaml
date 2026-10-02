@@ -34,13 +34,13 @@ slots:
         reuse_status_code: reusable
         raw_ids: [ccostan_config_automation_system_watchdog_light_yaml]
       - repo: fwartner
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [fwartner_automations_yaml]
         description: >-
           A lamp whose identifier ends in the plural group noun for its room, so
           the whole room is switched as a single unit.
       - repo: johnkoht
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [johnkoht_automation_family_room_lights_family_lights_to_away_yaml]
         description: >-
           A light whose identifier names its room and the plural lighting group,
@@ -58,19 +58,19 @@ slots:
         reuse_status_code: reusable
         raw_ids: [renemarc_customize_yaml]
       - repo: fwartner
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [fwartner_automations_yaml]
         description: >-
           A presence contact whose identifier compounds a German presence noun
           into the name of a room's device.
       - repo: johnkoht
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [johnkoht_automation_family_room_family_room_not_occupied_yaml]
         description: >-
           An occupancy-reading device for a named room, spelled as that room's
           own occupancy sensor.
 
-  - name: contact_sensor
+  - name: door_contact
     description: >-
       An opening contact on a door, window or gate: the binary state that says a
       way into a space is open.
@@ -82,13 +82,13 @@ slots:
         reuse_status_code: reusable
         raw_ids: [renemarc_automations_notifications_front_door_notify_yaml]
       - repo: fwartner
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [fwartner_automations_yaml]
         description: >-
           A door or window contact whose identifier compounds the object and the
           room it belongs to.
       - repo: johnkoht
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [johnkoht_automation_gianlucas_room_gianluca_heater_off_yaml]
         description: >-
           An opening contact for a named room, spelled as the room's door sensor.
@@ -106,13 +106,13 @@ slots:
         reuse_status_code: reusable
         raw_ids: [renemarc_customize_yaml]
       - repo: johnkoht
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [johnkoht_dashboards_kohbo_rooms_main_floor_kitchen_yaml]
         description: >-
           A water contact under a kitchen fixture, spelled with the fixture and
           the leak noun.
 
-  - name: lux_sensor
+  - name: ambient_light_sensor
     description: >-
       An ambient-light reading in lux: the input a daylit room dims its lamps
       against, and not a lamp's own brightness.
@@ -121,13 +121,13 @@ slots:
     source_repos: [fwartner, johnkoht]
     examples:
       - repo: fwartner
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [fwartner_automations_yaml]
         description: >-
           An illuminance reading on a sensor node, spelled with the node's own
           prefix before the reading noun.
       - repo: johnkoht
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [johnkoht_automation_weather_bad_weather_mode_off_yaml]
         description: >-
           An ambient-light reading from a weather station, spelled as the
@@ -148,13 +148,13 @@ slots:
         reuse_status_code: reusable
         raw_ids: [renemarc_customize_yaml]
       - repo: fwartner
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [fwartner_automations_yaml]
         description: >-
           A temperature reading bound to a room by compounding the room's name
           ahead of the reading noun.
       - repo: johnkoht
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [johnkoht_automation_gianlucas_room_gianluca_heater_off_yaml]
         description: >-
           A temperature reading whose identifier names the room and its
@@ -175,13 +175,13 @@ slots:
         reuse_status_code: reusable
         raw_ids: [renemarc_automations_notifications_humidity_notify_yaml]
       - repo: fwartner
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [fwartner_automations_yaml]
         description: >-
           A humidity reading on a room's climate node, spelled with the node's
           prefix.
       - repo: johnkoht
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [johnkoht_dashboards_kohbo_climate_air_quality_yaml]
         description: >-
           A humidity reading for a named floor, spelled with the floor and the
@@ -200,13 +200,13 @@ slots:
         reuse_status_code: reusable
         raw_ids: [ccostan_config_dashboards_overview_sections_00_summary_yaml]
       - repo: fwartner
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [fwartner_automations_yaml]
         description: >-
           A thermostat for a named room, whose identifier compounds the device
           type with the room.
       - repo: johnkoht
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [johnkoht_automation_house_climate_main_floor_main_floor_climate_resume_yaml]
         description: >-
           A thermostat for a main floor, named for the floor and the climate
@@ -224,33 +224,11 @@ slots:
         reuse_status_code: reusable
         raw_ids: [renemarc_automations_devices_video_player_resume_yaml]
       - repo: johnkoht
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [johnkoht_automation_all_away_media_off_yaml]
         description: >-
           A speaker in a named person's room, spelled with the person's name and
           the device type.
-
-  - name: house_mode
-    description: >-
-      The selector holding the home's state -- away, guest, asleep. House-scoped,
-      and its name is what tells it from a room's scene selector on the same
-      domain.
-    accepts_domains: [input_select]
-    required: false
-    source_repos: [fwartner, johnkoht]
-    examples:
-      - repo: fwartner
-        reuse_status_code: ideas_only
-        raw_ids: [fwartner_automations_yaml]
-        description: >-
-          A selector whose identifier names a presence mode, holding the whole
-          home's state.
-      - repo: johnkoht
-        reuse_status_code: ideas_only
-        raw_ids: [johnkoht_automation_family_room_lights_family_lights_to_away_yaml]
-        description: >-
-          A selector named for the house itself, holding the state the whole home
-          is in.
 
   - name: scene_selector
     description: >-
@@ -265,7 +243,7 @@ slots:
         reuse_status_code: reusable
         raw_ids: [renemarc_automations_devices_video_player_resume_yaml]
       - repo: johnkoht
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [johnkoht_automations_yaml]
         description: >-
           A selector for a named room's lighting moods, spelled with the room and
@@ -283,13 +261,13 @@ slots:
         reuse_status_code: reusable
         raw_ids: [ccostan_config_automation_timed_triggers_sunset_turn_on_yaml]
       - repo: fwartner
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [fwartner_automations_yaml]
         description: >-
           A roller blind for a named room, spelled with the device type and the
           room.
       - repo: johnkoht
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [johnkoht_dashboards_kohbo_security_pages_garage_doors_yaml]
         description: >-
           A garage door named for the entrance it serves, numbered where a house
@@ -307,13 +285,13 @@ slots:
         reuse_status_code: reusable
         raw_ids: [ccostan_config_automation_timed_triggers_sunset_turn_on_yaml]
       - repo: fwartner
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [fwartner_automations_yaml]
         description: >-
           A smart lock on the house's main door, spelled with the maker's device
           name and the door.
       - repo: johnkoht
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [johnkoht_automations_yaml]
         description: >-
           A lock on a garage entry, named for the way in that it secures.
@@ -330,12 +308,12 @@ slots:
         reuse_status_code: reusable
         raw_ids: [ccostan_config_dashboards_infrastructure_partials_vacuum_sections_yaml]
       - repo: fwartner
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [fwartner_automations_yaml]
         description: >-
           A robot vacuum named by its model designation, with no room attached.
       - repo: johnkoht
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [johnkoht_dashboards_kohbo_home_vacuum_active_notification_yaml]
         description: >-
           A vacuum named for the floor it cleans, not for a single room.
@@ -350,14 +328,14 @@ slots:
     source_repos: [fwartner, johnkoht]
     examples:
       - repo: fwartner
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [fwartner_automations_yaml]
         description: >-
           A ventilator whose identifier compounds the German noun for the
           appliance with the room it serves, so the device and its space are
           named in one token.
       - repo: johnkoht
-        reuse_status_code: ideas_only
+        reuse_status_code: reusable
         raw_ids: [johnkoht_packages_mudroom_bathroom_fan_mudroom_bathroom_fan_off_yaml]
         description: >-
           A bathroom extractor named for the room and the appliance, switched off

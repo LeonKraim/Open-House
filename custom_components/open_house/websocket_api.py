@@ -48,10 +48,10 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
 
 from ha_adapter import live_export, live_modules, live_profiles
-from ha_adapter.live import LiveSessionError
+from ha_adapter.live import HOUSE, LiveSessionError
 
 from . import views
-from .const import ENGINE_API_FALLBACK, VERSION
+from .const import DOMAIN, ENGINE_API_FALLBACK, VERSION
 from .host import OpenHouseHost, single_host
 
 __all__ = ["async_register_websocket_api"]
@@ -81,7 +81,10 @@ ROOM_AVAILABLE_MODULES = "open_house/rooms/available_modules"
 MODULE_INSTALL = "open_house/modules/install"
 MODULE_UNINSTALL = "open_house/modules/uninstall"
 MODULE_SET_ENABLED = "open_house/modules/set_enabled"
+MODULE_SET_BEHAVIOUR_ENABLED = "open_house/modules/set_behaviour_enabled"
+MODULE_SET_BEHAVIOUR_SCOPE = "open_house/modules/set_behaviour_scope"
 MODULES_LIST = "open_house/modules/list"
+HOUSE_SCOPE = "open_house/house/scope"
 PROFILES_LIST = "open_house/profiles/list"
 PROFILE_ACTIVATE = "open_house/profiles/activate"
 STORE_INDEX = "open_house/store/index"
@@ -100,6 +103,12 @@ DASHBOARD_GENERATE = "open_house/dashboard/generate"
 UNAUTHORIZED = "unauthorized"
 #: No config entry has completed the setup flow, so there is no house to speak of.
 NOT_SETUP = "not_setup"
+#: An entry exists, but it is between loads and there is no host *yet*. Distinct
+#: from `not_setup` because the two want opposite things from whoever asked: this
+#: one is worth asking again in a moment, and `not_setup` is worth never asking
+#: again until someone runs the setup flow. Collapsing them told a person who had
+#: just created a room that their house did not exist.
+NOT_READY = "not_ready"
 #: A room, slot, pack or profile the caller named does not exist.
 NOT_FOUND = "not_found"
 #: A value the caller sent is wrong on its merits, or the request is malformed.
@@ -143,23 +152,49 @@ def _admin(handler: Any) -> Any:
     return _guard
 
 
+def _house_exists(hass: HomeAssistant) -> bool:
+    """Whether an Open House entry has been made, whether or not it is loaded.
+
+    `single_host` answers whether the house can be *read* right now; this answers
+    whether it has been *made*. They differ for exactly as long as a config entry
+    reload takes, and the difference is what a caller needs to know: a house that
+    is reloading is worth asking again, and a house that was never made is not.
+    """
+    return bool(hass.config_entries.async_entries(DOMAIN))
+
+
 def _host_or_error(
     connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> OpenHouseHost | None:
-    """The one host, sending `not_setup` and answering `None` when there is none.
+    """The one host, sending a refusal and answering `None` when there is none.
 
     Every command needs the same three lines and every one of them has the same
     two outcomes, so the lookup is one function rather than a block copied into
     twenty-eight handlers -- where a handler that forgot to check would answer a
     reply shaped like a house over a session that does not exist.
+
+    Which refusal it sends matters. Writing a room subentry makes Home Assistant
+    reload the config entry (`async_add_subentry` schedules one), and a reload
+    takes the host away and puts it back. A read that lands in that gap is not
+    early and is not wrong -- it is a question about a house that is momentarily
+    unreadable, so it is answered `not_ready`, which the panel asks again.
+    `not_setup` is kept for the case it names: no entry, no flow ever run, no
+    house to be had until somebody makes one.
     """
     host = single_host(connection.hass)
     if host is None:
-        connection.send_error(
-            msg["id"],
-            NOT_SETUP,
-            "Open House has no house yet; run its setup flow to create one",
-        )
+        if _house_exists(connection.hass):
+            connection.send_error(
+                msg["id"],
+                NOT_READY,
+                "Open House is reloading; ask again in a moment",
+            )
+        else:
+            connection.send_error(
+                msg["id"],
+                NOT_SETUP,
+                "Open House has no house yet; run its setup flow to create one",
+            )
     return host
 
 
@@ -203,10 +238,11 @@ async def ws_capabilities(
 ) -> None:
     """Who is looking, and what they may do. Answerable by any authenticated user.
 
-    `needs_setup` is the absence of a host rather than a flag somewhere: a host
-    exists exactly when a config entry has completed the setup flow, so asking the
-    same question the other commands ask is what keeps the answer consistent with
-    whether they would work.
+    `needs_setup` is the absence of a *house*, not the absence of a host: an entry
+    that exists but is reloading has a house, and saying otherwise sent the panel
+    to "Open House has not been set up yet. Finish setup" over a house somebody
+    had just finished setting up. So the flag reads `_house_exists`, the same
+    question `_host_or_error` asks, and the two cannot disagree.
     """
     user = connection.user
     host = single_host(hass)
@@ -221,7 +257,7 @@ async def ws_capabilities(
                 if host is None
                 else host.session.vocabulary.engine_api_version
             ),
-            needs_setup=host is None,
+            needs_setup=not _house_exists(hass),
         ),
     )
 
@@ -277,7 +313,16 @@ async def ws_room_get(
     {
         vol.Required("type"): ROOM_CREATE,
         vol.Required("name"): str,
-        vol.Required("type"): str,
+        # Not `type`. The discriminator is already called `type`, and a Python
+        # dict literal that names a key twice keeps only the last one -- so the
+        # version of this schema that had `vol.Required("type"): str` here did
+        # not narrow the command at all: it replaced the value that names the
+        # command with `str` and Home Assistant registered the handler under the
+        # command `"str"`. `open_house/rooms/create` was never registered, and
+        # the panel's "Create room" answered `unknown_command` for as long as
+        # that line was there. `tests/test_ws_contract.py` now reads this file
+        # for exactly this shape.
+        vol.Required("room_type"): str,
     }
 )
 @websocket_api.async_response
@@ -297,18 +342,17 @@ async def ws_room_create(
     if host is None:
         return
     areas = ar.async_get(hass)
-    existing = areas.async_get_area_by_name(msg["name"])
-    if existing is not None:
-        connection.send_error(
-            msg["id"],
-            INVALID_FORMAT,
-            f"there is already an area called {msg['name']!r}",
-        )
-        return
-    area = areas.async_create(msg["name"])
+    # An area that already exists is *adopted*, not refused. Home Assistant areas
+    # are the source of truth for rooms, and a real house has areas before Open
+    # House does -- an integration files its devices into one, or the person made
+    # it in Home Assistant's own settings. Refusing would leave that person with
+    # no way to make the room, which is the one thing this command is for. An
+    # area that is *already a room* is still refused, but further in, by
+    # `OpenHouseHost.async_add_room`.
+    area = areas.async_get_area_by_name(msg["name"]) or areas.async_create(msg["name"])
     try:
         room = await host.async_add_room(
-            area_id=area.id, room_type=msg["type"], bindings={}
+            area_id=area.id, room_type=msg["room_type"], bindings={}
         )
     except (KeyError, ValueError) as refusal:
         connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
@@ -389,15 +433,27 @@ async def ws_room_delete(
 async def ws_room_bind(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
-    """Fill an empty slot. See the module docstring for why this refuses a rebind."""
+    """Fill an empty slot. See the module docstring for why this refuses a rebind.
+
+    `room_id` may be `HOUSE`, whose slots are bound on the House tab: the
+    occupancy it checks against is the house's own binding for the slot, not any
+    room's, because that is the binding this command would displace.
+    """
     host = _host_or_error(connection, msg)
     if host is None:
         return
+    house_scope = msg["room_id"] == HOUSE
     room = host.room(msg["room_id"])
-    if room is None:
+    if room is None and not house_scope:
         connection.send_error(msg["id"], NOT_FOUND, f"no room {msg['room_id']!r}")
         return
-    occupied = room.bindings.get(msg["slot"])
+    occupied = (
+        host.session.house_bindings.get(msg["slot"])
+        if house_scope
+        else None
+        if room is None
+        else room.bindings.get(msg["slot"])
+    )
     if occupied is not None:
         connection.send_error(
             msg["id"],
@@ -480,7 +536,12 @@ async def ws_room_unbind(
 async def ws_room_candidates(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
-    """The devices the server proposes for a slot, best first."""
+    """The devices the server proposes for a slot, best first.
+
+    `room_id` may be `HOUSE`, for a global slot: there is no room to file the
+    candidates under, so the whole house is the candidate set
+    (`views.candidates`).
+    """
     host = _host_or_error(connection, msg)
     if host is None:
         return
@@ -597,6 +658,12 @@ async def ws_module_install(
     same projection `modules/list` answers with: two commands that described the
     same module differently would be a screen that changed shape depending on how
     a person got to it.
+
+    `room_id` may be the house (`""`), which puts the module in the whole house
+    rather than a room. The reply then carries the house's own page (`house`)
+    instead of a room's, because the house is the target the person installed
+    into and a room detail for a room they did not choose would be the wrong page
+    to hand back.
     """
     host = _host_or_error(connection, msg)
     if host is None:
@@ -606,7 +673,9 @@ async def ws_module_install(
         connection.send_error(msg["id"], NOT_FOUND, f"no pack called {msg['pack']!r}")
         return
     try:
-        live_modules.install(host.session, path, root=host.session.root)
+        live_modules.install(
+            host.session, path, room_id=msg["room_id"], root=host.session.root
+        )
     except LiveSessionError as refusal:
         _error(connection, msg, refusal)
         return
@@ -615,6 +684,12 @@ async def ws_module_install(
     if installed is None:
         connection.send_error(
             msg["id"], INVALID_FORMAT, f"the pack {msg['pack']!r} did not install"
+        )
+        return
+    if msg["room_id"] == HOUSE:
+        connection.send_result(
+            msg["id"],
+            {"installed": installed, "house": views.house_scope(host)},
         )
         return
     connection.send_result(
@@ -635,7 +710,12 @@ async def ws_module_install(
 async def ws_module_uninstall(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
-    """Remove a pack from the house, answering with the room after."""
+    """Remove a pack from the house, answering with the room -- or house -- after.
+
+    `room_id` may be the house (`""`), which is where a module put in the whole
+    house lives; the reply is then the house's page rather than a room detail,
+    for the reason `ws_module_install` gives.
+    """
     host = _host_or_error(connection, msg)
     if host is None:
         return
@@ -645,6 +725,15 @@ async def ws_module_uninstall(
         _error(connection, msg, refusal)
         return
     await host.async_save()
+    if msg["room_id"] == HOUSE:
+        connection.send_result(
+            msg["id"],
+            {
+                "room_id": HOUSE,
+                "house": views.house_scope(host),
+            },
+        )
+        return
     _detail(connection, msg, hass, host, msg["room_id"])
 
 
@@ -688,6 +777,95 @@ async def ws_module_set_enabled(
     connection.send_result(msg["id"], installed)
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULE_SET_BEHAVIOUR_ENABLED,
+        vol.Required("room_id"): str,
+        vol.Required("pack"): str,
+        vol.Required("behaviour"): str,
+        vol.Required("enabled"): bool,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_module_set_behaviour_enabled(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Turn one behaviour of a pack on or off for one room.
+
+    The same permission the pack-level switch is, one atom down: it writes the
+    unit's enable flag and stops there, so nothing that atom already did is
+    undone and the next tick is what finds it switched off. `behaviour` is the
+    pack-qualified id the module row already carries, so the panel sends back the
+    atom it rendered rather than a name it composed.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        live_modules.set_behaviour_enabled(
+            host.session,
+            room_id=msg["room_id"],
+            pack=msg["pack"],
+            behaviour=msg["behaviour"],
+            enabled=msg["enabled"],
+        )
+    except LiveSessionError as refusal:
+        _error(connection, msg, refusal)
+        return
+    await host.async_save()
+    installed = _installed(host, msg["pack"])
+    if installed is None:
+        connection.send_error(msg["id"], NOT_FOUND, f"no pack called {msg['pack']!r}")
+        return
+    connection.send_result(msg["id"], installed)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULE_SET_BEHAVIOUR_SCOPE,
+        vol.Required("room_id"): str,
+        vol.Required("pack"): str,
+        vol.Required("behaviour"): str,
+        vol.Required("scope"): vol.In(["room", "house"]),
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_module_set_behaviour_scope(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Say which rooms one behaviour of a pack runs for.
+
+    The reach control beside the atom's switch: `room` narrows a house-wide atom
+    to the room its module was installed into, and `house` widens a room's atom
+    to every room. Configuration rather than state, so this is saved with the
+    house settings (`ha_adapter.live_modules.set_behaviour_scope`), and it is
+    admin-only for the same reason the switch is: it changes what the house will
+    do next, not what it has already done.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        live_modules.set_behaviour_scope(
+            host.session,
+            room_id=msg["room_id"],
+            pack=msg["pack"],
+            behaviour=msg["behaviour"],
+            scope=msg["scope"],
+        )
+    except LiveSessionError as refusal:
+        _error(connection, msg, refusal)
+        return
+    await host.async_save()
+    installed = _installed(host, msg["pack"])
+    if installed is None:
+        connection.send_error(msg["id"], NOT_FOUND, f"no pack called {msg['pack']!r}")
+        return
+    connection.send_result(msg["id"], installed)
+
+
 @websocket_api.websocket_command({vol.Required("type"): MODULES_LIST})
 @websocket_api.async_response
 @_admin
@@ -701,6 +879,28 @@ async def ws_modules_list(
     connection.send_result(
         msg["id"], {"modules": list(live_modules.installed_modules(host.session))}
     )
+
+
+@websocket_api.websocket_command({vol.Required("type"): HOUSE_SCOPE})
+@websocket_api.async_response
+@_admin
+async def ws_house_scope(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """The house's own slots, and the whole-house modules.
+
+    The slots are the roles an installed module actually reaches
+    (`ha_adapter.live_modules.house_scope`), and each one is bound here rather
+    than collected: `open_house/rooms/bind` with `room_id` `HOUSE` writes the
+    house's own binding for it, the global entity that fills the role in the
+    house scope and in every room that bound none of its own. The modules are
+    the ones that act on the house, wherever they sit -- a bedtime button in a
+    bedroom is one of them, because the house's doors are what it is for.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    connection.send_result(msg["id"], views.house_scope(host))
 
 
 # -- Profiles ---------------------------------------------------------------
@@ -1041,7 +1241,13 @@ def _detail(
     the state the server just produced rather than what it hoped it produced --
     which is what makes a refused or partly-applied write visible instead of
     silently divergent from the screen.
+
+    `room_id` may be `HOUSE`, in which case the page that changed is the house's
+    own -- binding a global slot redraws the House tab, not a room.
     """
+    if room_id == HOUSE:
+        connection.send_result(msg["id"], views.house_scope(host))
+        return
     if host.room(room_id) is None:
         connection.send_error(msg["id"], NOT_FOUND, f"no room {room_id!r}")
         return
@@ -1111,6 +1317,9 @@ _HANDLERS: tuple[Any, ...] = (
     ws_module_install,
     ws_module_uninstall,
     ws_module_set_enabled,
+    ws_module_set_behaviour_enabled,
+    ws_module_set_behaviour_scope,
+    ws_house_scope,
     ws_modules_list,
     ws_profiles_list,
     ws_profile_activate,

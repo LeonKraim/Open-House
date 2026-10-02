@@ -80,13 +80,12 @@ MODES: tuple[Mapping[str, object], ...] = (
     },
 )
 
-#: The kitchen every harness starts from. `house_mode` is bound in the room
+#: The kitchen every harness starts from. `light_group` is bound in the room
 #: because a house-scope slot is aggregated from the rooms (`resolve_slot`), so a
 #: house that binds it nowhere cannot resolve the shutdown's required slot.
 KITCHEN: Mapping[str, str] = {
     "motion_sensor": "binary_sensor.kitchen_motion",
     "light_group": "light.kitchen",
-    "house_mode": "input_select.house_mode",
 }
 
 #: The state a fresh entity of each domain is added in: off for anything
@@ -173,7 +172,7 @@ def _build(
     settings: Mapping[str, object] | None = None,
     room_settings: Mapping[str, Mapping[str, object]] | None = None,
     behaviours: Sequence[Behaviour] | None = None,
-    house_scope_slots: Sequence[str] = ("house_mode", "light_group"),
+    house_scope_slots: Sequence[str] = ("light_group",),
     state: Mapping[str, object] | None = None,
 ) -> tuple[Engine, FakeHouseAdapter, VirtualClock]:
     """A house, a fake and an engine over them, all three units enabled.
@@ -293,7 +292,6 @@ def _drive_skipped_unbound(vocabulary: Vocabulary) -> Sequence[DecisionRecord]:
         layout={
             "kitchen": {
                 "light_group": "light.kitchen",
-                "house_mode": "input_select.house_mode",
             }
         },
     )
@@ -608,6 +606,7 @@ def test_a_fresh_house_runs_nothing(vocabulary: Vocabulary) -> None:
         "away_shutdown",
         "motion_lighting",
         "override",
+        "safety_alert",
     }
 
 
@@ -637,7 +636,6 @@ def test_the_enable_flag_is_resolved_per_room(vocabulary: Vocabulary) -> None:
         "hall": {
             "motion_sensor": "binary_sensor.hall_motion",
             "light_group": "light.hall",
-            "house_mode": "input_select.house_mode",
         },
     }
     engine, adapter, _ = _build(
@@ -662,7 +660,7 @@ def test_the_enable_flag_is_resolved_per_room(vocabulary: Vocabulary) -> None:
 
 
 def test_one_record_per_evaluation_and_no_more(vocabulary: Vocabulary) -> None:
-    """Two rooms and three units give five records, however each one went.
+    """Two rooms and four units give six records, however each one went.
 
     A falsifying implementation that appended only when something happened would
     return fewer, and the number would depend on the house's state rather than on
@@ -676,18 +674,18 @@ def test_one_record_per_evaluation_and_no_more(vocabulary: Vocabulary) -> None:
             "hall": {
                 "motion_sensor": "binary_sensor.hall_motion",
                 "light_group": "light.hall",
-                "house_mode": "input_select.house_mode",
             },
         },
     )
     records = engine.tick()
-    assert len(records) == 2 * 2 + 1
+    assert len(records) == 2 * 2 + 2
     assert [record.actor for record in records] == [
         "away_shutdown",
         "motion_lighting",
         "motion_lighting",
         "override",
         "override",
+        "safety_alert",
     ]
 
 
@@ -707,12 +705,10 @@ def test_a_room_scoped_unit_visits_the_house_s_rooms_in_order(
             "study": {
                 "motion_sensor": "binary_sensor.study_motion",
                 "light_group": "light.study",
-                "house_mode": "input_select.house_mode",
             },
             "attic": {
                 "motion_sensor": "binary_sensor.attic_motion",
                 "light_group": "light.attic",
-                "house_mode": "input_select.house_mode",
             },
         },
     )
@@ -839,6 +835,7 @@ def test_the_snapshot_records_the_bindings_the_modes_and_the_flags(
         "away_shutdown": {"house": False, "rooms": {"kitchen": False}},
         "motion_lighting": {"house": False, "rooms": {"kitchen": True}},
         "override": {"house": False, "rooms": {"kitchen": False}},
+        "safety_alert": {"house": False, "rooms": {"kitchen": False}},
     }
 
 
@@ -897,7 +894,6 @@ def test_a_snapshot_restored_onto_a_different_house_is_refused(
                 "kitchen": {
                     "motion_sensor": "binary_sensor.other_motion",
                     "light_group": "light.other",
-                    "house_mode": "input_select.house_mode",
                 }
             },
             state=state,
@@ -941,7 +937,7 @@ def test_the_log_is_bounded_and_keeps_the_newest_records(
 # --------------------------------------------------------------------------
 
 
-def test_the_dark_test_falls_back_to_the_sun_when_no_lux_sensor_is_bound(
+def test_the_dark_test_falls_back_to_the_sun_when_no_ambient_light_sensor_is_bound(
     vocabulary: Vocabulary,
 ) -> None:
     """With no lux slot bound, the sun decides and the record says so.
@@ -956,7 +952,9 @@ def test_the_dark_test_falls_back_to_the_sun_when_no_lux_sensor_is_bound(
     assert readings[0].value < 0.0
 
 
-def test_a_bound_lux_sensor_decides_the_dark_test(vocabulary: Vocabulary) -> None:
+def test_a_bound_ambient_light_sensor_decides_the_dark_test(
+    vocabulary: Vocabulary,
+) -> None:
     """A bound, answering lux sensor is the branch that decides, and it is recorded.
 
     A falsifying implementation that consulted the sun whenever it could would
@@ -966,7 +964,7 @@ def test_a_bound_lux_sensor_decides_the_dark_test(vocabulary: Vocabulary) -> Non
     """
     engine, _, _ = _build(
         vocabulary,
-        layout={"kitchen": {**KITCHEN, "lux_sensor": "sensor.kitchen_lux"}},
+        layout={"kitchen": {**KITCHEN, "ambient_light_sensor": "sensor.kitchen_lux"}},
     )
     record = _one(engine.tick(), "motion_lighting")
     readings = _readings(record, DarkSourceReading)
@@ -974,7 +972,7 @@ def test_a_bound_lux_sensor_decides_the_dark_test(vocabulary: Vocabulary) -> Non
 
     engine, adapter, _ = _build(
         vocabulary,
-        layout={"kitchen": {**KITCHEN, "lux_sensor": "sensor.kitchen_lux"}},
+        layout={"kitchen": {**KITCHEN, "ambient_light_sensor": "sensor.kitchen_lux"}},
     )
     adapter.actuate("binary_sensor.kitchen_motion", "on", context=ChangeContext.world())
     readings = _readings(_one(engine.tick(), "motion_lighting"), DarkSourceReading)
@@ -993,7 +991,7 @@ def test_a_bright_lux_reading_declines_rather_than_lighting(
     """
     engine, adapter, _ = _build(
         vocabulary,
-        layout={"kitchen": {**KITCHEN, "lux_sensor": "sensor.kitchen_lux"}},
+        layout={"kitchen": {**KITCHEN, "ambient_light_sensor": "sensor.kitchen_lux"}},
         entities={"sensor.kitchen_lux": "100"},
     )
     adapter.actuate("binary_sensor.kitchen_motion", "on", context=ChangeContext.world())
@@ -1002,7 +1000,7 @@ def test_a_bright_lux_reading_declines_rather_than_lighting(
     assert record.state_delta == ()
 
 
-def test_an_unavailable_lux_sensor_falls_back_to_the_sun(
+def test_an_unavailable_ambient_light_sensor_falls_back_to_the_sun(
     vocabulary: Vocabulary,
 ) -> None:
     """A bound sensor that cannot answer does not decide the branch.
@@ -1014,7 +1012,7 @@ def test_an_unavailable_lux_sensor_falls_back_to_the_sun(
     """
     engine, adapter, _ = _build(
         vocabulary,
-        layout={"kitchen": {**KITCHEN, "lux_sensor": "sensor.kitchen_lux"}},
+        layout={"kitchen": {**KITCHEN, "ambient_light_sensor": "sensor.kitchen_lux"}},
     )
     adapter.set_availability(
         "sensor.kitchen_lux", available=False, context=ChangeContext.world()
@@ -1085,10 +1083,10 @@ def test_the_shutdown_gates_on_away_mode_and_reports_the_gate(
 ) -> None:
     """Not in away mode, the shutdown declines and the record names the mode gate.
 
-    A falsifying implementation that read the mode off the `house_mode` entity
-    rather than from the mode set would let a stale `input_select` disagree with
-    every other behaviour's gate, and the record would name an entity rather than
-    the mode the house was supposed to be in.
+    A falsifying implementation that read the mode off an entity rather than
+    from the mode set would let a stale `input_select` disagree with every other
+    behaviour's gate, and the record would name an entity rather than the mode
+    the house was supposed to be in.
     """
     engine, _, _ = _build(vocabulary, entities={"light.kitchen": "on"})
     record = _one(engine.tick(), "away_shutdown")
@@ -1172,7 +1170,6 @@ def test_a_house_scoped_slot_gathers_every_room_that_binds_it(
             "hall": {
                 "motion_sensor": "binary_sensor.hall_motion",
                 "light_group": "light.hall",
-                "house_mode": "input_select.house_mode",
             },
         },
         entities={"light.kitchen": "on", "light.hall": "on"},

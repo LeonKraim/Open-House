@@ -52,15 +52,24 @@ the report live in the same file as the verbs, reading the corpus through
 
 The derivation's *shape* is where this phase's one unanswered question is
 settled, and it is settled the way the corpus rather than the requirement reads:
-a derived pack reproduces a row's **expression**, and eighteen of the nineteen
-reusable rows carry none -- `expression` is source-derived structure and is
-withheld unless every source repo's *code* grant is reusable, and the extraction
-populated it once. So a candidate row that carries no expression is skipped and
-named, rather than packed as a shell with an invented behaviour: task 8.1 forbids
-"inventing a hand-written pack under a derived label" for an `ideas_only` row and
-the same sentence forbids it here. The requirement's report names two skip reasons
-and the corpus needs four, and the four are enumerated in `SKIP_REASONS` with the
-reason each is reachable.
+a derived pack reproduces a row's **expression**, and the corpus's reuse statuses
+and licences decide which rows may ground one at all. So a candidate row that
+carries no expression is skipped and named, rather than packed as a shell with an
+invented behaviour: task 8.1 forbids "inventing a hand-written pack under a
+derived label" for an `ideas_only` row and the same sentence forbids it here. The
+requirement's report names two skip reasons and the corpus needs six, and the six
+are enumerated in `SKIP_REASONS` with the reason each is reachable.
+
+**A pack is a family of rows, not a row.** A person does not want fifteen cards
+for fifteen ways of driving a light; they want one Lighting thing they install
+once and switch the parts of on the ones they have. So the corpus's own id
+namespaces are the module boundaries -- every `lighting.*` row is one `lighting`
+module -- and each row becomes one *behaviour* of it, with the per-behaviour
+enable keys the engine already resolves as the switch. That keeps "wake on motion
+but never flash on an alert" a choice rather than a fork, and it is why a module's
+slot lists are the union of its rows' rather than the intersection: a module that
+required every device any part of it could want would be installable only in the
+one room that happens to hold them all.
 """
 
 from __future__ import annotations
@@ -69,6 +78,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import TypeGuard, cast
 
@@ -90,6 +100,7 @@ from openhouse import packs as pack_installation
 from openhouse import scenarios as openhouse_scenarios
 from tools.catalog import behaviors as catalog_behaviors
 from tools.catalog import paths
+from tools.catalog import slots as catalog_slots
 
 __all__ = [
     "EXIT_OK",
@@ -533,29 +544,52 @@ def _gain_class(policy: PackPolicy, service: str) -> str:
 #: Every reason a candidate row can be skipped, closed for the reason
 #: `engine.manifest.REASONS` is closed: a caller reporting the bound groups by
 #: these, and a reason invented at the point of a skip is a reason no caller can
-#: enumerate. Four rather than the two the requirement names, and each is
+#: enumerate. Six rather than the two the requirement names, and each is
 #: reachable:
 #:
 #: - `ideas_only` -- the row's own `reuse_status`, which is the corpus's
-#:   statement that its expression may not be reproduced. Sixty-four rows.
+#:   statement that its expression may not be reproduced.
 #: - `licence_too_restrictive` -- the row's licence is `no_licence`, the code
 #:   that grants nothing, so no pack may be derived from it whatever its status
 #:   says. No row of the committed corpus reaches this, because a row's status
 #:   is derived from its licence and the two cannot disagree there; it is the arm
 #:   a corpus edited by hand lands in, and a test drives it.
+#: - `discarded` -- the row's own `classification`. The corpus's own requirement
+#:   is exact about this one: a `discard` row "SHALL be retained with
+#:   `retention: audit` and excluded from the shipped default set", because the
+#:   row depends on a named household member or one person's device. Shipping one
+#:   would install a stranger's bedroom into somebody's house.
+#: - `helper_act` -- every service the row's expression names acts on an
+#:   `input_boolean` or an `input_select`. Those two domains are Home Assistant's
+#:   *helpers*: state a house keeps rather than a device it has. A row that does
+#:   nothing but flip one is the machinery behind a state the engine already
+#:   models for itself -- `ctx.mode_is_active`, `ctx.house_is_empty` -- so a pack
+#:   derived from it would offer a person a switch for a variable they never
+#:   asked to own. Twenty-three rows, and the reason the derived set is smaller
+#:   than the corpus.
 #: - `no_expression` -- the row is reusable and licence-clear and the corpus
 #:   carries no expression to reproduce, or carries one a single behaviour clause
-#:   cannot hold. Eighteen rows, and the reason the derived set is one pack and
-#:   not nineteen.
+#:   cannot hold.
 #: - `refused` -- the pack the derivation built is refused by the schema or by
 #:   the sandbox. A pack that cannot validate is not written at all, and the row
 #:   is named with the refusal rather than a half-made file appearing.
 SKIP_REASONS: tuple[str, ...] = (
     "ideas_only",
     "licence_too_restrictive",
+    "discarded",
+    "helper_act",
     "no_expression",
     "refused",
 )
+
+#: The `classification` that bars a row from the shipped set outright.
+_DISCARDED = "discard"
+
+#: The two domains that are a house's own state rather than a device it has.
+#: Home Assistant calls them helpers, and the name is the distinction: a helper
+#: is a variable the household reads, so an act on one is the variable moving
+#: rather than a thing in the house being driven.
+_HELPER_DOMAINS = frozenset({"input_boolean", "input_select"})
 
 #: The one `reuse_status` a row must carry for its expression to ground a pack.
 _REUSABLE = "reusable"
@@ -599,27 +633,33 @@ _DUMP_WIDTH = 88
 class DerivedPack:
     """One pack the derivation produced, and the bytes it produced for it.
 
-    The two texts are carried rather than rendered again by the writer, so that
+    The texts are carried rather than rendered again by the writer, so that
     "two runs produce byte-identical packs" is a property of the report and can
     be asserted without writing anything, and so that the tree on disk can be
     compared against the report that claims to have produced it.
+
+    **A pack is a family, not a row.** Every corpus row sharing an id namespace
+    -- `lighting.motion_light_on` and `lighting.motion_light_off` are one
+    `lighting` -- becomes one module with one behaviour per row, so a person
+    installs one thing per idea and switches the parts of it on one at a time
+    through the per-behaviour enable keys the engine already resolves. `rows`
+    is therefore a list, and `artefacts` is one file per behaviour.
     """
 
-    row: str
+    rows: tuple[str, ...]
     name: str
     license: str
     manifest_path: str
-    artefact_path: str
     manifest_text: str
-    artefact_text: str
+    artefacts: tuple[tuple[str, str], ...]
 
     def to_document(self) -> dict[str, object]:
         return {
-            "row": self.row,
+            "rows": list(self.rows),
             "name": self.name,
             "license": self.license,
             "manifest": self.manifest_path,
-            "artefact": self.artefact_path,
+            "artefacts": [path for path, _ in self.artefacts],
         }
 
 
@@ -682,8 +722,13 @@ class DerivationReport:
 
     @property
     def accounted(self) -> int:
-        """Every row the report speaks for, emitted and skipped together."""
-        return len(self.emitted) + len(self.skipped)
+        """Every row the report speaks for, emitted and skipped together.
+
+        Counted in *rows* rather than in packs, because a pack is a family of
+        rows and counting packs would make the corpus look smaller than it is
+        the moment two rows shared a namespace.
+        """
+        return sum(len(pack.rows) for pack in self.emitted) + len(self.skipped)
 
     def reasons(self) -> Mapping[str, int]:
         """How many rows each skip reason accounts for, every reason a key."""
@@ -710,7 +755,7 @@ def derive_packs(
     root: Path | None = None,
     write: bool = True,
 ) -> DerivationReport:
-    """Emit one pack per corpus row whose expression may be reproduced.
+    """Emit one module per corpus namespace, one behaviour per reproducible row.
 
     `root` is the tree the derived packs' `provides` paths are written against,
     and it is the project's by default -- the same second root `validate_directory`
@@ -753,22 +798,7 @@ def derive_packs(
             "catalog/behaviors.yaml", "holds no rows, so nothing was derived"
         )
 
-    emitted: list[DerivedPack] = []
-    skipped: list[SkippedRow] = []
-    for row in rows:
-        identifier = _row_text(row, "id")
-        if identifier is None:
-            raise UsageError(
-                "catalog/behaviors.yaml",
-                "holds a row with no `id`, so the row cannot be named in a report",
-            )
-        outcome = _derive_row(
-            row, identifier, relative, artifacts, vocabulary, published
-        )
-        if isinstance(outcome, DerivedPack):
-            emitted.append(outcome)
-        else:
-            skipped.append(outcome)
+    emitted, skipped = _derive(rows, relative, artifacts, vocabulary, published)
 
     report = DerivationReport(
         destination=target.as_posix(),
@@ -782,22 +812,103 @@ def derive_packs(
     return replace(report, written=True)
 
 
-def _derive_row(
-    row: Mapping[str, object],
-    identifier: str,
+def _family(identifier: str) -> str:
+    """The module a row belongs to: the namespace before its first dot.
+
+    The corpus namespaces its rows by the idea they are about -- every
+    `lighting.*` row is a way of driving a light -- so the namespace is the
+    family, and grouping by it is grouping by the concept the Store should show
+    one card for. An id with no dot is its own family, because there is nothing
+    to group it under.
+    """
+    return identifier.split(".", 1)[0]
+
+
+@dataclass(frozen=True, slots=True)
+class _GroundedRow:
+    """One corpus row, read as the behaviour and the file it is about to become.
+
+    Held between the two passes rather than rebuilt in the second: a row's own
+    verdict is about the row, and whether the module it lands in may ship is
+    about the module, so the reading is done once and the refusal decided once
+    for the family.
+    """
+
+    row: str
+    behaviour: str
+    title: str
+    description: str
+    licence: str
+    scope: str | None
+    trigger: str | None
+    condition: str | None
+    services: tuple[str, ...]
+    slots: tuple[str, ...]
+    optional: tuple[str, ...]
+    repos: tuple[str, ...]
+    obligations: tuple[str, ...]
+    artefact: Mapping[str, object]
+
+
+def _derive(
+    rows: Sequence[Mapping[str, object]],
     relative: str,
     artifacts: ManifestArtifacts,
     vocabulary: Vocabulary,
     published: BehaviourVocabulary,
-) -> DerivedPack | SkippedRow:
-    """One corpus row's outcome: a pack, or the reason there is none.
+) -> tuple[list[DerivedPack], list[SkippedRow]]:
+    """Every corpus row's outcome, gathered into one pack per family.
 
-    The pack is built and then *validated* before it is returned, against the two
-    authorities the shipped tree is judged by. That is not belt-and-braces: a row
-    whose expression named a banned service would produce a pack the sandbox
-    refuses, and a derivation that wrote it would be putting a file in the shipped
-    tree that `validate` reports as broken. A pack that cannot pass is a row
-    skipped with the refusal named.
+    Two passes, because the two questions are different ones. A row's own
+    verdict -- is it reusable, is it licensed, does its expression reproduce --
+    is the row's, and a row that fails one is skipped by name. Whether the
+    module those rows make up may ship is the module's: a family whose manifest
+    the sandbox refuses is a family whose every row is skipped, because a row
+    reported as emitted over a pack that was never written is a report that
+    disagrees with the tree.
+    """
+    families: dict[str, list[_GroundedRow]] = {}
+    skipped: list[SkippedRow] = []
+    for row in rows:
+        identifier = _row_text(row, "id")
+        if identifier is None:
+            raise UsageError(
+                "catalog/behaviors.yaml",
+                "holds a row with no `id`, so the row cannot be named in a report",
+            )
+        outcome = _ground(row, identifier, artifacts, vocabulary)
+        if isinstance(outcome, SkippedRow):
+            skipped.append(outcome)
+            continue
+        families.setdefault(_family(identifier), []).append(outcome)
+
+    emitted: list[DerivedPack] = []
+    for family, grounded in families.items():
+        outcome = _module_pack(
+            family, tuple(grounded), relative, artifacts, vocabulary, published
+        )
+        if isinstance(outcome, DerivedPack):
+            emitted.append(outcome)
+            continue
+        skipped.extend(
+            SkippedRow(row=held.row, reason="refused", message=outcome.message)
+            for held in grounded
+        )
+    return emitted, skipped
+
+
+def _ground(
+    row: Mapping[str, object],
+    identifier: str,
+    artifacts: ManifestArtifacts,
+    vocabulary: Vocabulary,
+) -> _GroundedRow | SkippedRow:
+    """One corpus row's own reading, or the reason it grounds nothing.
+
+    The four gates here are the row's alone -- its reuse status, its licence, its
+    classification and its expression -- so a row is skipped by name rather than
+    by the family it happens to share. `_module_pack` asks the fifth question,
+    which is about the module.
     """
     status = _row_text(row, "reuse_status") or ""
     if status != _REUSABLE:
@@ -825,6 +936,19 @@ def _derive_row(
             ),
         )
 
+    if _row_text(row, "classification") == _DISCARDED:
+        return SkippedRow(
+            row=identifier,
+            reason="discarded",
+            message=(
+                "the row is classified `discard`: the corpus reaches it only "
+                "through one named household member or one person's device, so it "
+                "is retained for the audit and excluded from the shipped set. A "
+                "pack derived from it would install a stranger's household into "
+                "somebody's house"
+            ),
+        )
+
     terms = _expression(row.get("expression"))
     if terms is None:
         return SkippedRow(
@@ -838,74 +962,234 @@ def _derive_row(
         )
     trigger, condition, services = terms
 
-    name = identifier.replace(".", "_")
-    behaviour = identifier.rsplit(".", 1)[-1]
-    requires = _names(row, "required_slots")
-    optional = _names(row, "optional_slots")
-    description = _row_text(row, "description") or identifier
-    title = _row_text(row, "name") or identifier
+    domains = {_domain(service) for service in services}
+    if domains <= _HELPER_DOMAINS:
+        return SkippedRow(
+            row=identifier,
+            reason="helper_act",
+            message=(
+                "every service the expression names acts on "
+                f"{', '.join(sorted(domains))}, which is a helper -- state a house "
+                "keeps rather than a device it has -- so the row is the machinery "
+                "behind a state the engine already models for itself and there is "
+                "nothing for a person to install"
+            ),
+        )
 
-    provides_path = f"{relative}/{name}/{name}.yaml"
-    artefact = _artefact_document(title, trigger, services, requires)
-    document = _manifest_document(
-        identifier=identifier,
-        name=name,
-        behaviour=behaviour,
+    targets = _targets(services)
+    title = _row_text(row, "name") or identifier
+    return _GroundedRow(
+        row=identifier,
+        behaviour=identifier.rsplit(".", 1)[-1],
         title=title,
-        description=description,
+        description=_row_text(row, "description") or identifier,
         licence=licence,
-        requires=requires,
-        optional=optional,
+        scope=_row_text(row, "scope"),
         trigger=trigger,
         condition=condition,
         services=services,
-        provides_path=provides_path,
+        slots=_required_slots(_names(row, "required_slots"), targets, vocabulary),
+        optional=_names(row, "optional_slots"),
+        repos=_names(row, "source_repos"),
+        obligations=_names(row, "obligations"),
+        artefact=_artefact_document(title, trigger, targets),
     )
+
+
+def _module_pack(
+    family: str,
+    held: tuple[_GroundedRow, ...],
+    relative: str,
+    artifacts: ManifestArtifacts,
+    vocabulary: Vocabulary,
+    published: BehaviourVocabulary,
+) -> DerivedPack | SkippedRow:
+    """The module one family's rows become, or the refusal that stops it.
+
+    The pack is built and then *validated* before it is returned, against the two
+    authorities the shipped tree is judged by. That is not belt-and-braces: a
+    behaviour naming a banned service would produce a pack the sandbox refuses,
+    and a derivation that wrote it would be putting a file in the shipped tree
+    that `validate` reports as broken. A pack that cannot pass is a family
+    skipped, every row of it named with the one refusal.
+    """
+    names = [row.behaviour for row in held]
+    if len(set(names)) != len(names):
+        return SkippedRow(
+            row=family,
+            reason="refused",
+            message=(
+                f"two rows of the `{family}` namespace share a behaviour name, so "
+                "the module cannot give each of them its own enable key"
+            ),
+        )
+
+    paths = tuple(f"{relative}/{family}/{name}.yaml" for name in names)
+    requires, optional = _family_slots(held)
+    description = _family_description(family, held)
+    document = _module_document(
+        family=family,
+        title=_family_title(family),
+        description=description,
+        licence=_widest_licence(held, artifacts),
+        requires=requires,
+        optional=optional,
+        clauses=tuple(_behaviour_clause(row) for row in held),
+        labels=tuple((row.behaviour, row.title) for row in held),
+        provides=paths,
+        rows=tuple(row.row for row in held),
+    )
+    pinned = tuple((path, row.artefact) for path, row in zip(paths, held, strict=True))
 
     refusal = _refusal(
-        document, artefact, relative, name, artifacts, vocabulary, published
+        document, pinned, relative, family, artifacts, vocabulary, published
     )
     if refusal is not None:
-        return SkippedRow(row=identifier, reason="refused", message=refusal)
+        return SkippedRow(row=family, reason="refused", message=refusal)
 
-    provenance = _provenance(row, identifier, title)
     return DerivedPack(
-        row=identifier,
-        name=name,
-        license=licence,
-        manifest_path=f"{relative}/{name}.yaml",
-        artefact_path=provides_path,
-        manifest_text=_render(document, provenance),
-        artefact_text=_render(artefact, provenance),
+        rows=tuple(row.row for row in held),
+        name=family,
+        license=cast("str", document["license"]),
+        manifest_path=f"{relative}/{family}.yaml",
+        manifest_text=_render(document, _module_provenance(family, held)),
+        artefacts=tuple(
+            (path, _render(row.artefact, _row_provenance(row)))
+            for path, row in zip(paths, held, strict=True)
+        ),
+    )
+
+
+def _family_slots(
+    held: tuple[_GroundedRow, ...],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """A module's two slot lists: nothing required, and everything it can use.
+
+    A module is one card a person installs into a room they choose, and its
+    behaviours do not agree about devices -- `lighting.scene_select` reads a
+    selector and `lighting.motion_light_on` reads a motion sensor. Requiring
+    their union would make the card installable only in the room that happened to
+    hold every device any part of it wants, which is the opposite of one card per
+    idea; requiring their intersection would be a smaller list and no more honest.
+
+    So nothing is required and the union is optional: a room missing a device
+    still installs the module, and the behaviour that wanted that device is
+    *inert* rather than broken -- the `optional_slots` contract
+    `packs/official/bedtime.yaml` states, rather than a branch.
+    """
+    spare: list[str] = []
+    for row in held:
+        for name in (*row.slots, *row.optional):
+            if name not in spare:
+                spare.append(name)
+    return (), tuple(spare)
+
+
+def _behaviour_clause(row: _GroundedRow) -> dict[str, object]:
+    """One row's behaviour, as the clause the manifest carries."""
+    clause: dict[str, object] = {"name": row.behaviour}
+    if row.scope is not None:
+        clause["scope"] = row.scope
+    if row.trigger is not None:
+        clause["trigger"] = row.trigger
+    if row.condition is not None:
+        clause["condition"] = row.condition
+    clause["action"] = "service"
+    clause["services"] = list(row.services)
+    clause["slots"] = list(row.slots)
+    return clause
+
+
+def _widest_licence(
+    held: tuple[_GroundedRow, ...], artifacts: ManifestArtifacts
+) -> str:
+    """The least restrictive licence the family's rows allow.
+
+    A module claims one licence over expression drawn from every row in it, and
+    `engine.manifest` refuses a claim narrower than any source grants -- so the
+    module takes the widest of its rows' rather than the first or the commonest.
+    The comparison is the published order the artifact already carries, so the
+    answer is a fact about the vocabulary rather than a ranking kept here.
+    """
+    codes = artifacts.licences.codes
+    return min((row.licence for row in held), key=codes.index)
+
+
+def _family_title(family: str) -> str:
+    """A family's key as the label a Store card shows: `cleaning` -> `Cleaning`."""
+    return family.replace("_", " ").capitalize()
+
+
+def _family_description(family: str, held: tuple[_GroundedRow, ...]) -> str:
+    """What the module's card says it is, counted rather than asserted."""
+    count = len(held)
+    noun = "behaviour" if count == 1 else "behaviours"
+    return (
+        f"Every {family} idea the corpus records, as one module: {count} "
+        f"{noun}, each switched on or off on its own."
+    )
+
+
+def _module_provenance(family: str, held: tuple[_GroundedRow, ...]) -> str:
+    """The comment the module's own file carries: what it is made of, after whom."""
+    repos = sorted({repo for row in held for repo in row.repos}) or [
+        "no recorded source"
+    ]
+    obligations = sorted({item for row in held for item in row.obligations}) or ["none"]
+    count = len(held)
+    noun = "row" if count == 1 else "rows"
+    those = "that" if count == 1 else "those"
+    return (
+        f"Derived from the {count} `{family}.*` corpus {noun}, after "
+        f"{', '.join(repos)}.\n"
+        f"Obligations the corpus records for {those} {noun}: {', '.join(obligations)}."
+    )
+
+
+def _row_provenance(row: _GroundedRow) -> str:
+    """The comment one behaviour's own file carries: its row, its sources, its duties."""
+    repos = ", ".join(row.repos) or "no recorded source"
+    obligations = ", ".join(row.obligations) or "none"
+    return (
+        f"Derived from the corpus row `{row.row}` ({row.title}), after {repos}.\n"
+        f"Obligations the corpus records for that row: {obligations}."
     )
 
 
 def _refusal(
     document: dict[str, object],
-    artefact: dict[str, object],
+    pinned: Sequence[tuple[str, Mapping[str, object]]],
     relative: str,
-    name: str,
+    family: str,
     artifacts: ManifestArtifacts,
     vocabulary: Vocabulary,
     published: BehaviourVocabulary,
 ) -> str | None:
-    """The first refusal the pack gets, judged against a copy of what it will be.
+    """The first refusal the module gets, judged against a copy of what it will be.
 
     A copy, because one of the sandbox's four rules is that every `provides` path
     names a file inside the pack -- and a rule about a file cannot be asked of a
-    document. So the pack is written into a scratch tree laid out exactly as the
-    derived tree is, judged there, and the scratch thrown away; what survives is
-    the answer, and the real tree is written only if the answer was "nothing".
-    Judging it in place instead would mean a refused pack had already been written
-    to the shipped tree by the time it was refused.
+    document. So the module and each file it confers are written into a scratch
+    tree laid out exactly as the derived tree is, judged there, and the scratch
+    thrown away; what survives is the answer, and the real tree is written only if
+    the answer was "nothing". Judging it in place instead would mean a refused
+    module had already been written to the shipped tree by the time it was
+    refused.
+
+    Every artefact is written and not only the manifest, because `file_class` reads
+    each conferred file's class off the file: a tree holding an empty directory
+    where a behaviour's automation should be would be refused for a reason the real
+    tree would never produce.
     """
     with tempfile.TemporaryDirectory(prefix="openhouse-derive-") as scratch_text:
         scratch = Path(scratch_text)
-        manifest_path = scratch / relative / f"{name}.yaml"
-        artefact_path = scratch / relative / name / f"{name}.yaml"
-        artefact_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path = scratch / relative / f"{family}.yaml"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
         manifest_path.write_text(_render(document, ""), encoding="utf-8")
-        artefact_path.write_text(_render(artefact, ""), encoding="utf-8")
+        for path, artefact in pinned:
+            written = scratch / path
+            written.parent.mkdir(parents=True, exist_ok=True)
+            written.write_text(_render(artefact, ""), encoding="utf-8")
         manifest = engine_manifest.Manifest(path=manifest_path, document=document)
         verdict = engine_manifest.validate_manifest(manifest, artifacts, vocabulary)
         if not verdict.ok:
@@ -921,78 +1205,152 @@ def _refusal(
     return None
 
 
-def _manifest_document(
+def _module_document(
     *,
-    identifier: str,
-    name: str,
-    behaviour: str,
+    family: str,
     title: str,
     description: str,
     licence: str,
     requires: tuple[str, ...],
     optional: tuple[str, ...],
-    trigger: str | None,
-    condition: str | None,
-    services: tuple[str, ...],
-    provides_path: str,
+    clauses: tuple[dict[str, object], ...],
+    labels: tuple[tuple[str, str], ...],
+    provides: tuple[str, ...],
+    rows: tuple[str, ...],
 ) -> dict[str, object]:
-    """The manifest one row grounds, as the document the schema judges.
+    """The manifest one family's rows ground, as the document the schema judges.
 
-    The clauses that come from the row are the row's own -- its slots, its
-    licence, its title and description, the terms its expression names -- and the
-    clauses that come from the pack format are this phase's. `derives_from` names
-    the one row, so the pack's provenance travels with the pack rather than only
-    in the report of the machine that ran the derivation.
+    The clauses that come from the rows are the rows' own -- their behaviours,
+    their slots, the terms their expressions name -- and the clauses that come
+    from the pack format are this phase's. `derives_from` names every row the
+    module reproduces, so the module's provenance travels with the module rather
+    than only in the report of the machine that ran the derivation.
+
+    `kind` is `module` and not `behavior`: what a person installs is the family,
+    and the behaviours are the parts of it they switch on one at a time.
     """
-    clause: dict[str, object] = {"name": behaviour}
-    if trigger is not None:
-        clause["trigger"] = trigger
-    if condition is not None:
-        clause["condition"] = condition
-    clause["action"] = "service"
-    clause["services"] = list(services)
-    clause["slots"] = list(requires)
     return {
-        "name": name,
+        "name": family,
         "version": _DERIVED_VERSION,
         "description": description,
-        "kind": "behavior",
+        "kind": "module",
         "engine_api": _DERIVED_ENGINE_API,
         "license": licence,
         "requires_slots": list(requires),
         "optional_slots": list(optional),
-        "provides": [{"path": provides_path, "class": _DERIVED_CLASS}],
-        "behaviours": [clause],
+        "provides": [{"path": path, "class": _DERIVED_CLASS} for path in provides],
+        "behaviours": list(clauses),
         "i18n": {
-            "default": {"pack": title, "description": description, behaviour: title}
+            "default": {
+                "pack": title,
+                "description": description,
+                **dict(labels),
+            }
         },
-        "derives_from": [identifier],
+        "derives_from": list(rows),
     }
+
+
+def _domain(service: str) -> str:
+    """The domain a `domain.service` call names."""
+    return service.split(".", 1)[0]
+
+
+@lru_cache(maxsize=1)
+def _slots_by_domain() -> Mapping[str, str]:
+    """Which slot an act on each domain happens through, from `catalog/slots.yaml`.
+
+    The vocabulary's own `accepts_domains` is the authority, and this is the same
+    one `tools.catalog.slots` checks every hand-written slot against -- so
+    "`light.turn_off` happens through `light_group`" is the vocabulary's claim
+    rather than a second list kept here and free to drift from it.
+
+    A domain that two slots accept is left out rather than resolved to whichever
+    happened to be read first. `binary_sensor` is `motion_sensor`, `door_contact`
+    and `leak_sensor`, and an act on it would have three equally good answers --
+    so the honest one is that the vocabulary does not say, and a caller gets
+    `None` rather than a coin toss. No row of the committed corpus acts on one.
+    """
+    mapping: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    for slot in catalog_slots.load_slots().slots:
+        for domain in slot.accepts_domains:
+            if domain in mapping and mapping[domain] != slot.name:
+                ambiguous.add(domain)
+            mapping[domain] = slot.name
+    for domain in ambiguous:
+        del mapping[domain]
+    return mapping
+
+
+def _targets(services: Sequence[str]) -> tuple[tuple[str, str | None], ...]:
+    """Each service the row names, beside the slot its domain acts through.
+
+    `None` stands for a service no slot accepts -- `notify.send_message`,
+    `alarm_control_panel.alarm_arm_home`, `switch.turn_on`. Those are real acts
+    the vocabulary has no placeholder for yet, and they are not the same fact as
+    an act on a helper: the row still describes something a house does, so it is
+    derived with no target rather than skipped.
+    """
+    by_domain = _slots_by_domain()
+    return tuple((service, by_domain.get(_domain(service))) for service in services)
+
+
+def _required_slots(
+    declared: tuple[str, ...],
+    targets: tuple[tuple[str, str | None], ...],
+    vocabulary: Vocabulary,
+) -> tuple[str, ...]:
+    """The slots a derived behaviour must have: the row's, then its acts' own.
+
+    Appending rather than replacing is what stops a pack commanding a device it
+    never declared. `climate.air_quality_purifier` declares `temperature_sensor`
+    alone and calls `fan.turn_on`, and without the act's own slot the behaviour
+    that came out named no `fan` -- so the sandbox judged it against a room with
+    no fan and a person who installed it got a behaviour nothing could satisfy.
+
+    A declared name outside the vocabulary is dropped, because the vocabulary is
+    closed and a name outside it is the corpus's word for a device this product
+    does not model. The home's state is the case that mattered: it is the engine's
+    `ModeSet`, not a device anybody binds, so its name has left the vocabulary
+    altogether -- and a row's claim to need it is then simply dropped, which is
+    what a corpus describing its source's wiring rather than this product's should
+    get.
+    """
+    slots: list[str] = []
+    for name in (*declared, *(slot for _, slot in targets if slot is not None)):
+        if name in vocabulary.slots and name not in slots:
+            slots.append(name)
+    return tuple(slots)
 
 
 def _artefact_document(
     title: str,
     trigger: str | None,
-    services: tuple[str, ...],
-    requires: tuple[str, ...],
+    targets: tuple[tuple[str, str | None], ...],
 ) -> dict[str, object]:
     """The file a derived pack pins, written as the automation it is.
 
     The class is read off this document rather than declared into it: it carries
     a `trigger` when the row's expression named one and an `action` always, which
-    is what `engine.sandbox.file_class` reads as an automation. The entity the
-    act names is the pack's own slot and never a device id, because a derived pack
-    is installed into a room it has never seen.
+    is what `engine.sandbox.file_class` reads as an automation. The entity each
+    act names is the slot its domain belongs to and never a device id, because a
+    derived pack is installed into a room it has never seen.
+
+    A service whose domain no slot accepts carries no `target` at all rather than
+    a borrowed one. Pointing every act at the last declared slot is how a pack
+    ends up calling `light.turn_off` on whatever came last in the row's list,
+    which is a light going off in a house the person was only trying to send a
+    notification from.
     """
     document: dict[str, object] = {"alias": title}
     if trigger is not None:
         document["trigger"] = [{"platform": trigger}]
-    action = requires[-1] if requires else None
     entries: list[dict[str, object]] = []
-    for service in services:
+    for service, slot in targets:
         entry: dict[str, object] = {"service": service}
-        if action is not None:
-            entry["target"] = {"entity_id": action}
+        if slot is not None:
+            entry["target"] = {"entity_id": slot}
         entries.append(entry)
     document["action"] = entries
     return document
@@ -1030,22 +1388,6 @@ def _expression(
         trigger[0] if trigger else None,
         condition[0] if condition else None,
         actions,
-    )
-
-
-def _provenance(row: Mapping[str, object], identifier: str, title: str) -> str:
-    """The comment every derived file carries: the row, its sources, its duties.
-
-    Attribution is an obligation the corpus records per row, and a pack copied out
-    of this repository takes its provenance with it only if the provenance is in
-    the pack. The `derives_from` clause names the row and this names the row's
-    sources and what the corpus says a reuse owes them.
-    """
-    repos = ", ".join(_names(row, "source_repos")) or "no recorded source"
-    obligations = ", ".join(_names(row, "obligations")) or "none"
-    return (
-        f"Derived from the corpus row `{identifier}` ({title}), after {repos}.\n"
-        f"Obligations the corpus records for that row: {obligations}."
     )
 
 
@@ -1096,7 +1438,7 @@ def _write(where: Path, target: Path, emitted: tuple[DerivedPack, ...]) -> None:
     for pack in emitted:
         for relative, text in (
             (pack.manifest_path, pack.manifest_text),
-            (pack.artefact_path, pack.artefact_text),
+            *pack.artefacts,
         ):
             destination = where / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1162,9 +1504,13 @@ class ScenarioOutcome:
 
     The classes name different authors, which is why they are not one "failed": a
     `fixture_error` is a scenario that would not load and is the corpus's to fix,
-    a `pack_error` is the house refusing to install the pack and is the pack's,
-    and `failed` is a run that happened and disagreed with its own assertions and
-    is the scenario's.
+    a `pack_error` is the pack being refused at install and is the pack's, and
+    `failed` is a run that happened and disagreed with its own assertions and is
+    the scenario's.
+
+    A pack the house has not *wired* yet is none of the four: a module whose
+    required slots no room binds installs disabled and unsatisfiable, so its
+    scenarios run and are classed by what they did.
     """
 
     scenario: str
@@ -1232,9 +1578,10 @@ def test_pack(
     `given` block names the house it runs against and a corpus is a set of runs
     rather than one run continued -- the same reason `openhouse.scenarios` opens
     one session per scenario. The pack is installed after the session is opened
-    and before the first step, so a house the pack does not belong to is a
+    and before the first step, so a pack the installation refuses is a
     `pack_error` for that scenario rather than a step that fails for a reason the
-    scenario never wrote.
+    scenario never wrote. A pack the house merely has not wired yet installs -- a
+    module lands disabled until its slots are bound -- and so is not a refusal.
 
     `seed` and `started_at` override every scenario's own `given`, applied by
     opening the session at them rather than by rewriting the scenario, which is
