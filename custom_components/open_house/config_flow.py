@@ -32,6 +32,7 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     ConfigSubentryData,
     ConfigSubentryFlow,
+    OptionsFlow,
     SubentryFlowResult,
 )
 from homeassistant.core import HomeAssistant, callback
@@ -66,6 +67,7 @@ from .const import (
     catalog_root,
 )
 from .host import entity_ids_in_area
+from .node_red import OPTION_EDITOR_URL, OPTION_TOKEN, OPTION_URL
 
 __all__ = ["OpenHouseConfigFlow", "RoomSubentryFlow"]
 
@@ -123,6 +125,12 @@ class OpenHouseConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> dict[str, type[ConfigSubentryFlow]]:
         """Rooms are the one kind of subentry this integration has."""
         return {SUBENTRY_ROOM: RoomSubentryFlow}
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        """The one thing this integration has to be told rather than shown."""
+        return OpenHouseOptionsFlow()
 
     def __init__(self) -> None:
         self._all_areas: tuple[Area, ...] = ()
@@ -333,6 +341,50 @@ class OpenHouseConfigFlow(ConfigFlow, domain=DOMAIN):
             slot_domains=self._slot_domains,
             room_type_overrides=self._room_type_choices,
             slots=self._module_slots,
+        )
+
+
+class OpenHouseOptionsFlow(OptionsFlow):
+    """Where the Node-RED this house casts through lives.
+
+    Three fields and they are all things only the person knows. **Two addresses,
+    because there are two things that reach Node-RED and they do not travel the
+    same way.** Home Assistant opens a connection to it to push a flow, and the
+    browser opens a page on it to edit one -- and on a container stack the first
+    goes by a service name that resolves only between containers while the second
+    goes through a published port or the add-on's ingress. Neither is derivable
+    from the other, or from the house. The *token* is optional because it is only
+    needed where Node-RED's own `adminAuth` is on: the Home Assistant add-on's
+    is, a bare container's is not.
+
+    A house with no Node-RED leaves all three empty, and is not worse off for it:
+    every cast but this one works without it, and the row that offers a flow says
+    where to come and set the address.
+    """
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask for the addresses, or keep what was given."""
+        if user_input is not None:
+            return self.async_create_entry(data=dict(user_input))
+        options = self.config_entry.options
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        OPTION_URL, default=str(options.get(OPTION_URL) or "")
+                    ): str,
+                    vol.Optional(
+                        OPTION_EDITOR_URL,
+                        default=str(options.get(OPTION_EDITOR_URL) or ""),
+                    ): str,
+                    vol.Optional(
+                        OPTION_TOKEN, default=str(options.get(OPTION_TOKEN) or "")
+                    ): str,
+                }
+            ),
         )
 
 

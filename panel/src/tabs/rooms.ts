@@ -10,6 +10,8 @@ import { html, type TemplateResult } from "lit";
 import { OpenHouseElement } from "../base.ts";
 import type { RoomSummary } from "../api/models.ts";
 
+import "../components/house-profile.ts";
+
 export class RoomsTab extends OpenHouseElement {
   // `selectedRoomId` and `creating` are clicks, not fetches: nothing else in
   // this element changes when they do, so they have to be reactive themselves
@@ -104,6 +106,7 @@ export class RoomsTab extends OpenHouseElement {
         .client=${this.client}
         .admin=${this.admin}
         .narrow=${this.narrow}
+        .hass=${this.hass}
         .roomId=${this.selectedRoomId}
         @closed=${() => {
           this.selectedRoomId = null;
@@ -130,6 +133,14 @@ export class RoomsTab extends OpenHouseElement {
             </button>`
           : null}
       </div>
+      ${this.admin
+        ? html`<open-house-house-profile
+            .client=${this.client}
+            .hass=${this.hass}
+            .admin=${this.admin}
+            @profiles-changed=${() => void this.load()}
+          ></open-house-house-profile>`
+        : null}
       ${this.creating ? this.renderCreateForm() : null}
       ${this.rooms.length === 0
         ? this.emptyState(

@@ -115,3 +115,50 @@ services:
       - "1883:1883"
     volumes:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  # A Node-RED beside the house, because one of the ways an input may be
+  # answered is *by a flow of nodes*: Open House creates the entity the flow
+  # writes and pushes the flow's two ends into this editor, and everything the
+  # person builds in between is built here, in Node-RED's own editor, which the
+  # panel then opens on that flow.
+  #
+  # The image is built rather than pulled (`node-red/Dockerfile`) because the
+  # flow Open House pushes is made of Home Assistant nodes and the official
+  # image carries none: a palette step is a first-run step, and a first-run step
+  # is one this repository could never prove.
+  #
+  # `adminAuth` is deliberately unset -- this Node-RED belongs to one machine's
+  # tests and holds nothing, and an editor on localhost:1880 is what the panel
+  # links to. The Home Assistant add-on is *not* like this: it authenticates,
+  # which is why Open House carries an optional token for when it does.
+  #
+  # `/data` is mounted so a flow survives a restart of the stack, and is
+  # gitignored for the same reason `ha-config/` is: it is this machine's state
+  # and not the repository's.
+  #
+  # **Two addresses for one container, and both are configured.** Home Assistant
+  # pushes a flow to `http://nodered:1880`, which resolves between these two
+  # services and nowhere else; the panel *embeds* the editor from
+  # `http://localhost:1880`, which is the published port and resolves on the host
+  # and nowhere else. `tools/ha/node_red.py` writes both into the integration's
+  # options, and a stack where only one of them was set would either push to
+  # nothing or embed nothing.
+  #
+  # A flow Open House pushes needs a Home Assistant *server* node in Node-RED. It
+  # never makes one -- a token is not this repository's to mint and write into
+  # another program's config -- so the first push into a fresh `/data` fails with
+  # one sentence saying to add one, rather than pushing a flow that connects to
+  # nothing and never fires. Adding any Home Assistant node and pointing it at
+  # `http://homeassistant:8123` once is enough, and it survives a reset of the
+  # flow data as long as `/data` does.
+  nodered:
+    build: ./node-red
+    image: open-house-nodered
+    container_name: open-house-nodered
+    restart: unless-stopped
+    ports:
+      - "1880:1880"
+    environment:
+      TZ: Europe/Amsterdam
+    volumes:
+      - ./node-red-data:/data

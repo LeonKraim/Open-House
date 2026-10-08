@@ -196,11 +196,21 @@ class ResolvedSetting:
 class ConfigResolver:
     """The layered settings stack, resolved by precedence.
 
-    The layers below the override are supplied once, at construction, from
-    wherever they come from -- the engine's own defaults, a house's settings, a
-    room's. The override layer is the one that changes during a run, because it
-    is temporary by definition, so it is set and cleared through `set_override`
-    and `clear_override` rather than rebuilt.
+    The layers below the override are supplied at construction, from wherever
+    they come from -- the engine's own defaults, a house's settings, a room's.
+    They are read once by a build and are *not* re-read during a run, which is
+    why the persistent layers have writers of their own: `set_house_setting` and
+    `set_room_setting` (with their `clear_` pairs) change what the running
+    resolver answers without rebuilding the engine around it. A session that
+    recorded a person's setting without also telling the live resolver would
+    have a switch that appeared to do nothing until something else happened to
+    rebuild -- and, worse, a *cleared* setting that kept its old value, because
+    the snapshot taken at construction outlived the record it came from.
+
+    The override layer is separate and stays what it was: temporary by
+    definition, set and cleared through `set_override` and `clear_override`,
+    and above every persistent layer so a person's immediate choice outranks a
+    profile the same key appears in.
     """
 
     def __init__(
@@ -212,7 +222,7 @@ class ConfigResolver:
         profile: Mapping[str, object] | None = None,
         profile_rooms: Mapping[str, Mapping[str, object]] | None = None,
     ) -> None:
-        self._layers: Mapping[Layer, Mapping[str, object]] = {
+        self._layers: dict[Layer, dict[str, object]] = {
             Layer.BUILTIN: dict(builtin),
             Layer.HOUSE: dict(house) if house is not None else {},
             Layer.PROFILE: dict(profile) if profile is not None else {},
@@ -227,7 +237,7 @@ class ConfigResolver:
             if profile_rooms is not None
             else {}
         )
-        self._rooms: Mapping[str, Mapping[str, object]] = (
+        self._rooms: dict[str, dict[str, object]] = (
             {room_id: dict(values) for room_id, values in rooms.items()}
             if rooms is not None
             else {}
@@ -274,6 +284,48 @@ class ConfigResolver:
         clear into a failure.
         """
         self._overrides.pop((_scope_key(scope), key), None)
+
+    def set_house_setting(self, key: str, value: object) -> None:
+        """Set a value in the house layer of *this* resolver.
+
+        The persistent counterpart of `set_override` for a caller that owns the
+        house's settings -- a live session, whose own record of the value is what
+        a rebuild and a restart read back. Writing both keeps the running
+        resolver and the recorded document saying the same thing; writing only
+        the document leaves the engine deciding by a value it was built with.
+
+        Nothing here reaches the document: this layer is a copy taken at
+        construction, so a caller that means to persist must also record it where
+        the session keeps its settings (`ha_adapter.live.LiveSession`).
+        """
+        self._layers[Layer.HOUSE][key] = value
+
+    def clear_house_setting(self, key: str) -> None:
+        """Remove a house-layer value, revealing whatever layer is beneath it."""
+        self._layers[Layer.HOUSE].pop(key, None)
+
+    def set_room_setting(self, key: str, room_id: str, value: object) -> None:
+        """Set a value in one room's layer of *this* resolver.
+
+        The room half of `set_house_setting`, and the same warning applies: this
+        is the running copy, not the record. A room the resolver was not built
+        with is given a layer of its own rather than refused, because the caller
+        that has just added a room has a session that will rebuild in a moment
+        and a resolver that must still answer sensibly until it does.
+        """
+        self._rooms.setdefault(room_id, {})[key] = value
+
+    def clear_room_setting(self, key: str, room_id: str) -> None:
+        """Remove a room-layer value, revealing whatever layer is beneath it.
+
+        A room with nothing left in its layer keeps the empty mapping rather than
+        losing the entry: the two answer identically to every reader here, and
+        dropping the key would make `_rooms` change shape under a caller that is
+        iterating it.
+        """
+        held = self._rooms.get(room_id)
+        if held is not None:
+            held.pop(key, None)
 
     def _value_at(self, layer: Layer, key: str, scope: Scope) -> object:
         if layer is Layer.ROOM:

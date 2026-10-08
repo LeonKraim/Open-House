@@ -136,6 +136,11 @@ def test_install_answers_with_the_protocols_reply_shape() -> None:
         # placement, drawn separately from its evaluation scope.
         "house",
         "enabled",
+        # Whether another module is holding this one off, and the behaviour of
+        # it that declared the clause: the two facts the red panel on the
+        # module's card is built from, and the only place they are read.
+        "suppressed_by",
+        "suppressed_behaviour",
         "satisfiable",
         "missing_slots",
         "scope",
@@ -146,6 +151,10 @@ def test_install_answers_with_the_protocols_reply_shape() -> None:
         "options_schema",
         "options",
         "behaviours",
+        # The devices this module acts through, each with the entity it is
+        # pointed at: the per-module slot override, and the row the panel draws
+        # the module's own device picker and name field from.
+        "slots",
     }
     assert set(room) >= {
         "id",
@@ -286,6 +295,55 @@ def test_a_file_that_is_not_a_pack_is_refused_by_name(tmp_path: Path) -> None:
 
     with pytest.raises(LiveSessionError, match=r"not-a-pack\.yaml"):
         live_modules.install(session, broken)
+    assert session.engine.installed == InstalledSet()
+
+
+# -- validate ----------------------------------------------------------------
+
+
+def test_validate_answers_the_manifest_and_records_nothing() -> None:
+    """The Dev tab's save: a verdict about a module, and no module in the house.
+
+    A person who asked for a file and got an installation has been given
+    something they did not ask for, so the observation is on the engine's set
+    and not only on the answer -- the point of the operation is the *absence*
+    of the record `install` would have made.
+    """
+    session = _session()
+    document = live_modules.validate(session, EXAMPLE)
+
+    assert document["name"] == "example_pack"
+    assert session.engine.installed == InstalledSet()
+    assert live_modules.installed_modules(session) == ()
+
+
+def test_validate_refuses_what_install_would_refuse(tmp_path: Path) -> None:
+    """The refusal a Save button is owed, from the installer's own checks.
+
+    Validating is not a lighter check than installing, and this is what says so:
+    the same file install refuses, validate refuses, and it refuses in the same
+    words -- so "saved" cannot come to mean "saved and uninstallable". The file
+    is well-formed YAML with a key the schema does not allow, so the refusal is
+    the manifest check's and not the YAML parser's, which would make the two
+    sentences agree for a reason that has nothing to do with the checks.
+
+    What this deliberately does *not* claim: a conflict with a pack already
+    installed is refused by `pack_install` and not by `_checked`, so validate
+    lets it through. That is the right answer for a save -- a module on disk
+    conflicts with nothing -- and it is why `validate`'s docstring says the
+    checks are the ones that do not need the installed set.
+    """
+    session = _session()
+    broken = generated_pack(
+        tmp_path, "broken", edits=(("name: broken", "name: broken\nsurprise: 1"),)
+    )
+
+    with pytest.raises(LiveSessionError) as installed:
+        live_modules.install(session, broken)
+    with pytest.raises(LiveSessionError) as validated:
+        live_modules.validate(session, broken)
+
+    assert str(validated.value) == str(installed.value)
     assert session.engine.installed == InstalledSet()
 
 
@@ -1289,6 +1347,43 @@ def test_the_house_tab_names_the_module_that_reaches_each_role() -> None:
     # A house role the pack does not reach is not drawn at all, so there is no
     # row to name anything against.
     assert "door_contact" not in {slot["slot"] for slot in scope["slots"]}
+
+
+def test_a_room_s_page_names_the_module_that_reaches_each_of_its_slots() -> None:
+    """Every slot a room's module reaches, and not only the house-eligible ones.
+
+    The two directions of one join have to differ, and this is the difference:
+    `house_scope` draws a row only for a role the *whole house* resolves, because
+    a house screen is a menu of house roles -- so `motion_sensor`, which is one
+    room's door and no house-wide role at all, is deliberately absent there. A
+    room's page has the opposite duty. `motion_sensor` is a name this room's pack
+    acts through, so "which module reaches it" has to be answerable on the page
+    where the binding is written, or a person setting the room's devices is told
+    nothing about why the row is there.
+
+    Named by the display name a person installed it under, the same choice the
+    house tab makes, and reached through the *keys* the room's slot list uses --
+    so a chip cannot appear against a slot no binding could fill.
+    """
+    session = _session()
+    live_modules.install(session, EXAMPLE)
+
+    hall = live_modules.slots_reached_by(session, room_id=_room().id)
+    # The role the house tab shows, and the two it does not: a room's row is
+    # about the module's whole reach.
+    assert hall["light_group"] == ("Example pack",)
+    assert hall["motion_sensor"] == ("Example pack",)
+    assert hall["ambient_light_sensor"] == ("Example pack",)
+    # A slot nothing installed reaches is absent rather than empty, so a caller
+    # can ask about one slot without walking the vocabulary.
+    assert "door_contact" not in hall
+    # And the chip is the *display* name: the pack id names the pack, and the
+    # chip's whole point is to be the name the person installed.
+    assert "example_pack" not in {name for names in hall.values() for name in names}
+
+    # The room filter is real: a room that holds no module reaches nothing, and
+    # the same pack is not chipped against a room it is not in.
+    assert live_modules.slots_reached_by(session, room_id=room_id("spare")) == {}
 
 
 def test_a_room_local_role_a_pack_reaches_is_not_promoted_to_the_house() -> None:

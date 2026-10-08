@@ -11,7 +11,7 @@ test here rather than misleading a reader.
 
 | Authority | Read from | Answers |
 | --- | --- | --- |
-| the schema | `schemas/pack-manifest/1.3.0.json` | what a document of this kind may be |
+| the schema | `schemas/pack-manifest/1.4.0.json` | what a document of this kind may be |
 | the licence vocabulary | `schemas/catalog/licenses.json` | what a licence code means, and where it sits in the published order |
 | the corpus | `catalog/behaviors.yaml` | what a row grants to a pack derived from it |
 | the marker | `packs/official/HANDWRITTEN` | which files a person wrote rather than a derivation produced |
@@ -68,6 +68,8 @@ three-component versions: `>=1.0.0 <2.0.0` admits `1.0.0`, and `^1.2` admits
 priority, services, slots`, and every one of those named a *kind* with no value
 beside it: a manifest could say `condition: state` and could not say which state.
 `1.3.0` keeps those clauses and adds the values that make them say something.
+`1.4.0` keeps all of it and adds one clause that reaches outside the declaring
+pack: `suppresses`.
 
 | Clause | What it is |
 | --- | --- |
@@ -78,12 +80,24 @@ beside it: a manifest could say `condition: state` and could not say which state
 | `mode` | the house mode the behaviour enters when it acts. Additive, not alternative — a behaviour may turn lights off *and* put the house to sleep |
 | `for` | the name of a `duration` option the pack declares: the matched reading must have held for that many seconds |
 | `priority` | the arbitration number, from `catalog/pack-policy.yaml`'s default when unstated |
+| `suppresses` | the packs this behaviour holds off while it is on — the one module-level override one pack may place over another |
 
 `options` is a clause of the *pack* rather than of a behaviour — one typed entry
 per tunable, with a title, a description, bounds and members — so two behaviours
 of one pack that read `grace` read the same number. `for` names one of those by
 key, and a `for` naming an option the pack does not declare as a `duration` is
 the `unknown_option` refusal below.
+
+`suppresses` is the module-level override, and it is deliberately the *only* one:
+a behaviour that names another pack holds that whole module off while it is on.
+Nothing about the target is written — its own switch stays where its person left
+it — so the suppression is temporary by construction, and the moment the
+suppressing behaviour goes off the target is back. Naming the pack rather than a
+behaviour or a setting is what keeps that promise: anything finer would be one
+pack editing another pack's configuration, and an uninstall could not put that
+back. A pack may not name itself (`self_suppression` below), and naming a pack a
+house has not installed holds nothing off rather than failing, because a manifest
+does not know which house it will land in.
 
 One setting a pack gets without declaring it: each role a behaviour acts through
 becomes a per-room switch under `module.<pack>.reach.<slot>`. It is derived from
@@ -92,7 +106,7 @@ with what the pack actually acts on — a `reach.door_contact` for a pack that a
 on no doors is a checkbox that silently does nothing. Absent means *reached*, so
 every pack written before this existed behaves exactly as it did.
 
-## The fourteen reasons a manifest is refused
+## The fifteen reasons a manifest is refused
 
 A failure carries a reason, the failing instance path (`behaviours/0/action`,
 `<document>` for the whole document) and a message naming the constraint that
@@ -117,8 +131,9 @@ and a reason is what this module actually decided.
 | `override_without_default` | a locale overrides a name `i18n.default` does not declare |
 | `option_mismatch` | an option's `default`, `enum` or bounds disagree with its own `type` |
 | `unknown_option` | a behaviour's `for` names a `duration` option the pack does not declare |
+| `self_suppression` | a behaviour's `suppresses` names its own pack |
 
-Three of the fourteen are schema failures *reclassified*, and the reason is the
+Three of the fifteen are schema failures *reclassified*, and the reason is the
 remedy. A term the vocabulary does not publish, a licence code outside the enum
 and a clause the current version retired are three different things for an author
 to do, so filing all three under `schema` would make the three distinctions the
@@ -130,7 +145,7 @@ The last two are the one pair no schema can report, and that is the whole reason
 they are reasons here rather than keywords there. Every check behind them compares
 *two properties of one option* — a `default` against its `type`, an `enum` against
 its `type`, a `minimum` against a `maximum` — and JSON Schema is a static document
-that constrains one property at a time. `1.3.0` says so where it declares
+that constrains one property at a time. `1.4.0` says so where it declares
 `options`, and the Python here is where that promise is kept.
 
 There is no `malformed_range` reason, and the absence is deliberate. The schema's

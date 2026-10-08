@@ -562,7 +562,9 @@ def check_declared_service(pack: Pack, service: str, where: str) -> Refusal | No
     )
 
 
-def check_provides(pack: Pack, root: Path) -> tuple[Refusal, ...]:
+def check_provides(
+    pack: Pack, root: Path, base: Path | None = None
+) -> tuple[Refusal, ...]:
     """Rule 4: a `provides` path stays inside the pack and carries its class.
 
     The base is the repository root, which is the schema's own wording for the
@@ -571,12 +573,22 @@ def check_provides(pack: Pack, root: Path) -> tuple[Refusal, ...]:
     pack. Containment is checked before existence, because an absolute path that
     happens to name a real file is a worse fault than a dangling relative one and
     must not be reported as merely missing.
+
+    **`base` is where the path is resolved from, when that is not `root`.**
+    `root` is the checkout, and a pack in the checkout says `packs/official/...`
+    because that is where it lives; a pack outside it -- one a person authored,
+    living under Home Assistant's own config -- says `<name>/<name>.yaml`
+    because that is where *it* lives. The two are the same rule against two
+    bases, and conflating them is not a loosening: the containment test is
+    unchanged, so a pack still pins what it confers and nothing else, whichever
+    directory the pin is read from.
     """
     refusals: list[Refusal] = []
     directory = pack.directory
+    origin = root if base is None else base
     for entry in pack.provides:
         where = f"provides {entry.path}"
-        resolved = (root / entry.path).resolve()
+        resolved = (origin / entry.path).resolve()
         if not _inside(resolved, directory):
             refusals.append(
                 Refusal(
@@ -782,7 +794,12 @@ def check_commands(
 
 
 def check_pack(
-    pack: Pack, root: Path, vocabulary: Vocabulary, published: BehaviourVocabulary
+    pack: Pack,
+    root: Path,
+    vocabulary: Vocabulary,
+    published: BehaviourVocabulary,
+    *,
+    pack_base: Path | None = None,
 ) -> SandboxResult:
     """Every rule that can be decided from the manifest alone.
 
@@ -791,11 +808,18 @@ def check_pack(
     sound rather than a gap: a pack that passes this and installs cannot exceed
     the grant it was checked against, because `check_commands` is the only path
     from a behaviour to an entity and it reads the same manifest.
+
+    `root` is the checkout the vocabulary and the licence catalog are read from;
+    `pack_base` is where a `provides` path is resolved from when the pack itself
+    lives elsewhere. They are one argument in every case but one -- a pack a
+    person authored under Home Assistant's config -- and separating them there is
+    what lets the schema stay the checkout's while the containment stays the
+    pack's.
     """
     refusals = (
         check_declarative(pack, published, vocabulary.pack_policy)
         + check_slot_claims(pack, vocabulary)
-        + check_provides(pack, root)
+        + check_provides(pack, root, pack_base)
     )
     return SandboxResult(refusals=refusals).merge(
         check_services(pack, vocabulary.pack_policy)

@@ -1,23 +1,14 @@
-"""The live house's export, its import, and the Activity tab's projection.
+"""The Activity tab's projection: what the engine decided, in the panel's words.
 
-Three of the panel's commands are answered here, and they are answered in one
-module because they are one concern seen from three sides: the document a house
-is, the document a house becomes, and the record of what a house decided. A live
-session (`ha_adapter/live.py`) owns the wiring an engine is rebuilt from; this
-module is what turns that wiring into a file and a file back into wiring, and
-what turns the engine's ordinary vocabulary of dispositions into the five words
-the Activity tab shows.
+One of the panel's commands is answered here. A live session
+(`ha_adapter/live.py`) owns the wiring an engine is rebuilt from and the decision
+log it kept; this module is what turns that log -- the engine's own vocabulary of
+dispositions, inputs and results -- into the rows the Activity tab draws.
 
-`openhouse/facade.py` is the template, and every operation here is its live
-twin: `export_document` is `OpenHouse.export_backup`, `preview` is its
-`dry_run_import` joined to its `relink_import`, `apply` is its `import_backup`
-without the undo it cannot honestly promise, and `activity` plays the part of
-its `get_decision_log`. The differences are the live path's and they are all
-consequences of one fact -- a live house does not own its devices. The simulator
-adds entities to an adapter when a house document is imported (`sim.fixtures`);
-Home Assistant already holds its entities, and a backup that conjured a device
-would be a backup that invented hardware. So `apply` rebinds and rebuilds, and
-leaves the world alone.
+`openhouse/facade.py` plays the same part for the simulator, and the difference
+is the live path's and it is one fact: a live house does not own its devices.
+Nothing here asks whether a device exists, because nothing here acts -- the rows
+are a reading of what already happened.
 
 **This module hands back documents, not result objects.** The facade's
 operations return dataclasses its own callers read; the callers here are
@@ -26,15 +17,12 @@ value the JSON encoder cannot take -- tuples, mappings, strings, numbers and
 `None` -- and no engine dataclass crosses the boundary unprojected.
 
 **Nothing here imports `homeassistant`.** The transport is the seam
-(`ha_adapter/transport.py`), and this module goes further than not importing it:
-`preview` never asks whether a device exists, only whether a *registry id* is
-one this house knows, because a registry id is the only handle that survives a
-re-pair and the only one a document carries.
+(`ha_adapter/transport.py`).
 
 The hard part is `activity_entry`, and it is hard for one reason: the engine's
-closed set of outcomes has eight members and the panel's has five. The mapping
+closed set of outcomes has nine members and the panel's has five. The mapping
 between them is stated as a table with a rule beside it (`_PANEL_OUTCOME`),
-every member of `Outcome` is walked by a test, and a ninth member added later
+every member of `Outcome` is walked by a test, and a tenth member added later
 fails that test rather than disappearing from the Activity tab.
 """
 
@@ -42,57 +30,33 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
-from pathlib import Path
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, cast
 
-from engine import export as engine_export
-from engine import migrations as engine_migrations
-from engine.binding import BindingError, House
 from engine.decision_log import (
     DecisionRecord,
     HazardReading,
     HousePresence,
     ModeReading,
+    ModuleSuppression,
     Outcome,
     OverrideNote,
     Repair,
     ResolvedSetting,
     SlotRead,
 )
-from engine.profiles import ProfileError
-from tools.catalog.schemas import current_version, load_versions
 
-from .composition import LiveRoom, mode_documents
 from .live import LiveSessionError
 
 if TYPE_CHECKING:
     from engine.decision_log import Input
 
-    from .adapter import HAAdapter
     from .live import LiveSession
 
 __all__ = [
     "activity",
     "activity_entry",
-    "apply",
-    "export_document",
-    "preview",
 ]
-
-#: The schema concept an export is validated against, and whose *current*
-#: version is the version this module both writes and reads. Named here rather
-#: than spelled as a file name so a version bump is followed rather than missed,
-#: which is the same reason `engine/profiles.py` reads `schemas/profile/` the way
-#: it does.
-EXPORT_CONCEPT = "export-document"
-
-#: How many replacement devices a re-link row offers. The panel renders the
-#: candidates in a `<select>`, and a list longer than a person will read is a
-#: list that hides the best answer at the top of it; every candidate is still
-#: ranked, so the cut is of the least likely rather than of the arbitrarily
-#: ordered.
-CANDIDATE_LIMIT = 10
 
 #: The panel's five outcomes, as the Activity tab's own union spells them
 #: (`panel/src/api/models.ts`). Spelled here only so the module can say what it
@@ -145,640 +109,16 @@ _PANEL_OUTCOME: Mapping[Outcome, str] = {
     Outcome.DECLINED: "skipped",
     Outcome.SKIPPED_UNBOUND_SLOT: "skipped",
     Outcome.SKIPPED_DISABLED: "skipped",
+    # `skipped` rather than `blocked`: the panel's `blocked` is a device another
+    # behaviour won, and this is a module another module switched off before its
+    # atoms were ever evaluated. The row's reason names the holder, which is what
+    # the person looking for the culprit reads.
+    Outcome.SKIPPED_SUPPRESSED: "skipped",
     Outcome.LOST_ARBITRATION: "blocked",
     Outcome.RATE_LIMITED: "blocked",
     Outcome.OVERRIDDEN: "overridden",
     Outcome.REFUSED_UNSAFE: "error",
 }
-
-#: The first path segment of a diff leaf, to the row's `scope`. The `ImportDiffRow`
-#: scope is what the panel groups by, so it names the *part of the configuration*
-#: a leaf belongs to rather than repeating the leaf's own path; a segment this
-#: map does not know -- a top-level field such as `house` or `format_version` --
-#: is `document`, which is the honest answer for a leaf that belongs to no part.
-_SCOPES: Mapping[str, str] = {
-    "rooms": "room",
-    "profiles": "profile",
-    "modes": "mode",
-    "house_scope": "house",
-    "active": "selection",
-}
-
-
-# --------------------------------------------------------------------------
-# Export
-# --------------------------------------------------------------------------
-
-
-def export_document(
-    session: LiveSession, *, registry_ids: Mapping[str, str] | None = None
-) -> Mapping[str, object]:
-    """Write the live house's whole configuration as an export document.
-
-    The frozen `schemas/export-document` shape and nothing beside it, which is
-    what makes a file this writes one this can read: `engine/export.py`'s own
-    round trip is the property the phase is judged on, and a live path that
-    added a field of its own would be a second format wearing the first one's
-    name.
-
-    The modes are projected rather than passed through, and that is the one
-    place this differs from the facade. `OpenHouse.modes` holds mode
-    *documents*; a live session holds mode *labels* ("Home", "Away"), because
-    the label is what a person picks and `composition.mode_name` is what turns
-    it into the name the engine gates on. The projection that runs on every
-    rebuild (`composition.mode_documents`) is the one that runs here too, so an
-    exported mode is the mode the running engine gated on rather than a second
-    derivation of it.
-
-    `registry_ids` is keyed by **entity id**, and the key is worth stating
-    because `engine/export.py` keys its own by `(room, slot)`: that is the
-    engine's addressing, and a live caller does not think in rooms and slots --
-    it reads Home Assistant's entity registry, which answers "what is this
-    entity's registry id" and nothing about where the entity is bound. A map
-    that named a room and a slot would have to be rebuilt by every caller from
-    the thing it actually holds. An entity the map does not name keeps the
-    derived registry id (`engine/export.py`), which is the honest answer for a
-    caller that has no registry to read.
-
-    `exported_at` is the session's own clock and never the wall clock, for the
-    reason `LiveSession` exists: the clock is the one the engine reads, and a
-    document that stamped itself from somewhere else would date a backup by a
-    time the house never held.
-    """
-    return engine_export.export_backup(
-        house=session.engine.house,
-        profiles=session.profiles,
-        modes=mode_documents(session.modes),
-        registry_ids=_registry_overrides(session, registry_ids),
-        exported_at=session.clock.now.isoformat(),
-    )
-
-
-def _registry_overrides(
-    session: LiveSession, registry_ids: Mapping[str, str] | None
-) -> Mapping[tuple[str, str], str] | None:
-    """A caller's entity-keyed registry ids, keyed the way the writer wants them.
-
-    `None` when the caller gave none, so the writer's own derivation runs rather
-    than being overridden by an empty map -- the difference between "I have no
-    registry" and "every binding's registry id is a blank" is the difference
-    between a usable document and an invalid one.
-
-    The bindings are read from the *engine's* house rather than from
-    `session.rooms`, because the engine's house is the one the exported document
-    describes; a session whose rooms had drifted from its engine would export a
-    document that disagreed with the house it names, which is the failure the
-    session's rebuild-after-every-edit rule exists to prevent.
-    """
-    if registry_ids is None:
-        return None
-    overrides: dict[tuple[str, str], str] = {}
-    for room in session.engine.house.rooms:
-        for slot, entity_id in room.bindings.items():
-            found = registry_ids.get(entity_id)
-            if found is not None:
-                overrides[(room.id, slot)] = found
-    return overrides
-
-
-# --------------------------------------------------------------------------
-# Preview
-# --------------------------------------------------------------------------
-
-
-def preview(
-    session: LiveSession, document: Mapping[str, object]
-) -> Mapping[str, object]:
-    """Report what importing `document` would change, changing nothing.
-
-    The panel's `ImportPreview`, and the reason it is a command of its own
-    rather than the apply with a flag: a preview that *were* the apply would be
-    one refactor away from being it, and the whole promise of the tab is that a
-    person can look before they leap.
-
-    Three questions are answered, in the order a person asks them.
-
-    **Can this build read the file at all?** `compatible` is not a guess and not
-    a version comparison: the document is migrated
-    (`engine/migrations.py`), validated against the current
-    `schemas/export-document`, and *built* -- `engine/export.py`'s own import,
-    which validates the house against this session's vocabulary and the
-    profiles against this session's schema. A document that cannot be built is
-    a document that cannot be applied, so it is refused here with the reason the
-    builder gave rather than at the moment the user pressed Apply.
-
-    **What would change?** `engine/export.py`'s dry run between the session's
-    own export and the incoming one, leaf by leaf, so a nested binding and a
-    profile's delta are both reported by path. The comparison is against the
-    migrated document rather than the raw one, because a legacy 1.0.0 file
-    describes the same house in a different shape and flattening the two forms
-    against each other would report every binding as removed and re-added.
-
-    **Which bindings name a device this house does not have?** `engine/export.py`'s
-    re-link, given this house's own registry ids. A document's bindings carry a
-    registry id and an entity id, and the registry id is the one that survives a
-    re-pair: when it is one this house knows, the binding is silently pointed at
-    the entity this house holds -- which is the re-pair case working -- and when
-    it is not, the device is genuinely absent and the row asks the person to
-    choose. `entity_id` in such a row is `None` because the entity the document
-    named is the one that is gone; there is no counterpart to show.
-
-    Nothing here writes to the session. The dry run compares documents, the
-    re-link rewrites a copy, and a caller that called `preview` twice would get
-    the same answer twice.
-    """
-    format_version = str(document.get("format_version", ""))
-    migrated, failure = _readable(session, document)
-    if migrated is None:
-        return {
-            "format_version": format_version,
-            "compatible": False,
-            "diff": (),
-            "relink": (),
-            "notes": (failure,),
-        }
-
-    diff = engine_export.dry_run(export_document(session), migrated)
-    relink = _relink_requests(session, migrated)
-    return {
-        "format_version": format_version,
-        "compatible": True,
-        "diff": _diff_rows(diff),
-        "relink": relink,
-        "notes": _notes(session, migrated, diff, relink, declared=format_version),
-    }
-
-
-def _readable(
-    session: LiveSession, document: Mapping[str, object]
-) -> tuple[Mapping[str, object] | None, str]:
-    """`document` migrated and found importable, or the reason it is not.
-
-    The three checks run in the order a person can act on them, which is also
-    the order `OpenHouse.import_backup` runs them: whether this build reads the
-    version at all, whether the document is shaped like an export, and whether
-    it describes a house *this vocabulary* holds. The last is the one that
-    catches a document from another installation naming a room type or a slot
-    this house's catalog does not define, which is a document nothing is wrong
-    with that still cannot be imported here.
-
-    The failure is returned as a sentence rather than raised, because the
-    caller's whole job is to put it in `notes` -- the panel shows an
-    incompatible file's reason beside the file, and an exception would arrive as
-    an error banner with no preview to attach it to. `apply` calls this too and
-    raises, so there is one reading of the document and two ways of reporting
-    it.
-    """
-    if not isinstance(document, Mapping):
-        return None, "This file is not an export document: it is not a JSON object."
-    try:
-        migrated = engine_migrations.migrate_export(document)
-        engine_export.validate_export(migrated, _export_schema(session.root))
-        engine_export.import_backup(
-            migrated,
-            vocabulary=session.vocabulary,
-            profile_schema=session.profile_schema,
-        )
-    except (
-        engine_migrations.MigrationError,
-        engine_export.ExportError,
-        BindingError,
-        ProfileError,
-        KeyError,
-        TypeError,
-    ) as failure:
-        return None, f"This file cannot be imported: {_why(failure)}"
-    return migrated, ""
-
-
-def _why(failure: Exception) -> str:
-    """A failure as a sentence the panel can show.
-
-    A `KeyError`'s own message is the missing key in quotes and nothing else,
-    which reads as a typo rather than as a diagnosis; every other failure in the
-    list above already names what it found.
-    """
-    if isinstance(failure, KeyError) and failure.args:
-        return f"it has no {failure.args[0]!r} field"
-    return str(failure) or type(failure).__name__
-
-
-def _export_schema(root: Path) -> Mapping[str, object]:
-    """The current `schemas/export-document`, read from the tree at `root`.
-
-    Read from the tree rather than from a module constant so a session pointed
-    at another checkout validates against *that* checkout's schema, which is the
-    same rule `Vocabulary.load` and `load_profile_schema` follow.
-    """
-    versions = load_versions(EXPORT_CONCEPT, root=root)
-    current = current_version(versions)
-    if current is None:
-        raise LiveSessionError(f"no {EXPORT_CONCEPT} schema is present under {root}")
-    return cast("Mapping[str, object]", current.document)
-
-
-def _diff_rows(diff: engine_export.Diff) -> tuple[Mapping[str, object], ...]:
-    """The dry run's leaves as the panel's `ImportDiffRow` list.
-
-    `kind` is read off the two sides rather than off the change itself: the dry
-    run says only that two leaves differ, and "there was nothing here" is what
-    makes the difference an addition rather than a change. A leaf present in
-    both documents with equal values is never emitted, which is why the panel's
-    fourth kind -- `unchanged` -- has no row here: a dry run that listed what
-    would *not* change would be a diff nobody can read.
-    """
-    rows: list[Mapping[str, object]] = []
-    for change in diff.changes:
-        rows.append(
-            {
-                "kind": _kind(change.before, change.after),
-                "scope": _scope(change.path),
-                "path": change.path,
-                "before": _text(change.before),
-                "after": _text(change.after),
-            }
-        )
-    return tuple(rows)
-
-
-def _kind(before: object, after: object) -> str:
-    """Whether a changed leaf is an addition, a removal, or a change."""
-    if before is None:
-        return "add"
-    if after is None:
-        return "remove"
-    return "change"
-
-
-def _scope(path: str) -> str:
-    """The part of the configuration a leaf's path belongs to."""
-    segments = [segment for segment in path.split("/") if segment]
-    first = segments[0] if segments else ""
-    return _SCOPES.get(first, "document")
-
-
-def _text(value: object) -> str | None:
-    """One leaf as the panel's `before`/`after` column, which is text or nothing.
-
-    The panel renders both columns as text, and a delta may hold a number, a
-    boolean or a whole document -- `config` deltas are documents -- so the
-    projection is made here, once, rather than left to the encoder at the far
-    end where a nested mapping would arrive as `[object Object]`.
-    """
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return str(value)
-    return json.dumps(value, sort_keys=True)
-
-
-def _notes(
-    session: LiveSession,
-    migrated: Mapping[str, object],
-    diff: engine_export.Diff,
-    relink: Sequence[Mapping[str, object]],
-    *,
-    declared: str,
-) -> tuple[str, ...]:
-    """The sentences the panel shows beside the diff.
-
-    Each note is a fact the diff cannot express. A migration is invisible in a
-    diff of the migrated document, so a file written by an older build says so
-    -- which is why the version is the one the file *declares* and not the one
-    the migrated copy carries, since a successful migration has already
-    overwritten the latter and the note would never fire. A house name is not
-    imported (`apply` explains why), so a file naming another house says so
-    rather than letting the person wonder what the ignored field meant. And the
-    count of re-link rows is repeated as a sentence because the table's presence
-    is easy to miss when the list below it is long.
-    """
-    notes: list[str] = []
-    written = str(session.engine.house.name)
-    incoming = str(migrated.get("house", ""))
-    if incoming and incoming != written:
-        notes.append(
-            f"This file is for the house {incoming!r}; importing it keeps this "
-            f"house's name, {written!r}, which is the name Home Assistant holds."
-        )
-    if declared and declared != engine_migrations.CURRENT_EXPORT_VERSION:
-        notes.append(
-            f"This file is version {declared}, and it would be imported as "
-            f"{engine_migrations.CURRENT_EXPORT_VERSION}."
-        )
-    if relink:
-        notes.append(
-            f"{len(relink)} binding(s) name a device this house does not hold "
-            "and need re-linking."
-        )
-    if diff.empty:
-        notes.append("Nothing would change.")
-    return tuple(notes)
-
-
-# --------------------------------------------------------------------------
-# Re-link
-# --------------------------------------------------------------------------
-
-
-def _house_registry(session: LiveSession) -> dict[str, str]:
-    """This house's registry ids, and the entity each names.
-
-    Built by exporting the house and reading the result back, rather than by
-    re-deriving a registry id per binding here. `engine/export.py` owns the
-    derivation -- "the entity id's object part, or a caller's override" -- and a
-    second copy of it in this module would be a second answer to "what is this
-    binding's registry id", which is the one question a re-link turns on.
-
-    A registry id bound in two rooms maps to the last room's entity, which is
-    the honest collapse: a registry id is one device, and a device the house
-    binds twice is one device with two bindings rather than two devices. The
-    entity it names is then the one this house would re-link both bindings to,
-    which is what the wizard wants.
-    """
-    document = export_document(session)
-    registry: dict[str, str] = {}
-    for room in _sequence(document.get("rooms")):
-        bindings = room.get("bindings")
-        if not isinstance(bindings, Mapping):
-            continue
-        for binding in bindings.values():
-            if not isinstance(binding, Mapping):
-                continue
-            registry_id = binding.get("registry_id")
-            entity_id = binding.get("entity_id")
-            if isinstance(registry_id, str) and isinstance(entity_id, str):
-                registry[registry_id] = entity_id
-    return registry
-
-
-def _relink_requests(
-    session: LiveSession, document: Mapping[str, object]
-) -> tuple[Mapping[str, object], ...]:
-    """The panel's `RelinkRequest` rows: bindings no registry id here can resolve.
-
-    The test is `engine/export.py`'s own re-link run against this house's
-    registry: a binding whose registry id this house knows is *resolved* -- the
-    document is pointed at the entity the house holds, which is a re-pair
-    succeeding -- and one whose registry id this house does not know is left
-    alone and reported. So the rows are exactly the devices that are gone from
-    this house's point of view, and a document exported from this house and
-    re-imported after entity ids moved produces none.
-
-    The scope of the test is deliberately the registry id and not the entity id.
-    An entity id changes; that is what a re-pair *is*, and a preview that
-    reported a moved entity as a missing device would send a person to the
-    re-link wizard for the case the wizard is not for.
-    """
-    unresolved = set(
-        engine_export.relink(document, _house_registry(session)).unresolved
-    )
-    if not unresolved:
-        return ()
-    rows: list[Mapping[str, object]] = []
-    for room_id, slot, registry_id, entity_id in _document_bindings(document):
-        if registry_id not in unresolved:
-            continue
-        rows.append(
-            {
-                "room_id": room_id,
-                "slot": slot,
-                "registry_id": registry_id,
-                "entity_id": None,
-                "candidates": _candidates(session, slot=slot, entity_id=entity_id),
-            }
-        )
-    return tuple(rows)
-
-
-def _document_bindings(
-    document: Mapping[str, object],
-) -> tuple[tuple[str, str, str, str], ...]:
-    """Every binding a document names, as `(room, slot, registry id, entity id)`.
-
-    Read from the document rather than from `engine/export.py`'s re-link, which
-    returns a rewritten copy and no index of what it found. The migration has
-    already run by the time this does, so the `rooms` form is the only one there
-    is to read.
-    """
-    rows: list[tuple[str, str, str, str]] = []
-    for room in _sequence(document.get("rooms")):
-        room_id = room.get("id")
-        bindings = room.get("bindings")
-        if not isinstance(room_id, str) or not isinstance(bindings, Mapping):
-            continue
-        for slot, binding in bindings.items():
-            if not isinstance(binding, Mapping):
-                continue
-            registry_id = binding.get("registry_id")
-            entity_id = binding.get("entity_id")
-            if isinstance(registry_id, str) and isinstance(entity_id, str):
-                rows.append((room_id, str(slot), registry_id, entity_id))
-    return tuple(rows)
-
-
-def _candidates(
-    session: LiveSession, *, slot: str, entity_id: str
-) -> tuple[Mapping[str, object], ...]:
-    """The devices this house holds that could fill `slot`, best first.
-
-    The ranking is a stated rule rather than a list, because the panel renders
-    the list in the order it arrives and the order is therefore the whole of the
-    answer:
-
-    1. **A device already bound to this slot somewhere else in the house.** It is
-       the slot's own precedent: the house has used this device for this slot
-       before, and nothing about a re-pair changes that.
-    2. **A device in the same domain as the one the document named.** A light
-       group is filled by a light; the domain is all this module knows about a
-       slot, because the vocabulary deliberately does not publish
-       `accepts_domains` (`engine/vocabulary.py`).
-    3. **Everything else**, last, because a suggestion list that put the
-       kitchen's television above the hall's second lamp would be worse than no
-       list.
-
-    `score` is the panel's confidence, and it is the rank's own number rather
-    than a finer-grained guess this module has no basis for: 1.0, 0.5, 0.1. The
-    list is cut at `CANDIDATE_LIMIT`, so the ranking is also the cut.
-    """
-    adapter = session.adapter
-    if adapter is None:  # pragma: no cover - `build` always fills it
-        return ()
-    precedent = {
-        bound
-        for room in session.engine.house.rooms
-        if (bound := room.bindings.get(slot)) is not None
-    }
-    domain = entity_id.partition(".")[0]
-    reverse = {
-        entity: registry for registry, entity in _house_registry(session).items()
-    }
-    ranked: list[tuple[float, str]] = []
-    for held in adapter.list_entities():
-        if held in precedent:
-            score = 1.0
-        elif held.partition(".")[0] == domain:
-            score = 0.5
-        else:
-            score = 0.1
-        ranked.append((score, held))
-    ranked.sort(key=lambda row: (-row[0], row[1]))
-    return tuple(
-        _suggestion(adapter, held, score=score, registry_id=reverse.get(held))
-        for score, held in ranked[:CANDIDATE_LIMIT]
-    )
-
-
-def _suggestion(
-    adapter: HAAdapter,
-    entity_id: str,
-    *,
-    score: float,
-    registry_id: str | None,
-) -> Mapping[str, object]:
-    """One candidate as the panel's `BindingSuggestion`.
-
-    `friendly_name` is Home Assistant's own, so the wizard offers "Hall ceiling"
-    rather than `light.hall_ceiling`, and the object part of the id is the
-    fallback for an entity that has no name -- which is what the panel would
-    have shown anyway had the attribute been absent.
-    """
-    name = entity_id.partition(".")[2]
-    friendly = adapter.read_entity(entity_id).attributes.get("friendly_name")
-    return {
-        "entity_id": entity_id,
-        "registry_id": registry_id,
-        "friendly_name": friendly if isinstance(friendly, str) else name,
-        "domain": entity_id.partition(".")[0],
-        "score": score,
-    }
-
-
-# --------------------------------------------------------------------------
-# Apply
-# --------------------------------------------------------------------------
-
-
-def apply(session: LiveSession, document: Mapping[str, object]) -> Mapping[str, object]:
-    """Replace the session's configuration from an export, and rebuild.
-
-    `{applied, snapshot_id, diff}` -- the protocol's three keys
-    (`panel/src/api/protocol.ts`). `diff` is the preview's diff, computed before
-    anything was written: the panel shows what an import did, and recomputing it
-    afterwards would compare the new configuration against itself and report
-    nothing.
-
-    What is replaced is the *configuration*: the rooms and their bindings, the
-    profiles and the selections in force, and the mode labels. What is not
-    replaced is everything that is not in the document, and each omission is
-    deliberate rather than an oversight.
-
-    - **The house name.** It is the config entry's title in Home Assistant, which
-      is a fact about the installation rather than about the file; a backup that
-      renamed somebody's house would be renaming the entry it was restored into.
-    - **The installed packs.** The export document carries no installed set, so
-      there is nothing to restore and nothing to remove: an import takes the
-      house's shape, not its software.
-    - **The house scope.** The live composition declares the vocabulary's whole
-      house-slot list on every rebuild (`composition.house_document`), and an
-      import must not narrow it: the engine *raises* for a house-scoped slot the
-      scope omits before it can notice the slot is merely unbound, so a document
-      that trimmed the list would crash the tick of every house-scoped unit whose
-      slot is unbound.
-    - **The devices.** A live house does not own them. The simulator's import
-      adds the entities a document names to its adapter; Home Assistant already
-      holds its own, and a backup that created a `light.hall_ceiling` that no
-      integration provides would be a backup that invented hardware. A binding
-      to a device that is gone is exactly what `preview`'s re-link rows are for.
-
-    **`snapshot_id` is empty, and that is a finding rather than a placeholder.**
-    The panel's reply says `Snapshot <id> taken, so this can be undone`
-    (`panel/src/tabs/import-export.ts`), and the protocol types the field as a
-    string. The simulator can honour that because `OpenHouse.snapshot` produces
-    a document and `OpenHouse.undo_import` keeps one; the live path has neither
-    a snapshot store nor an undo, and `LiveSession.to_state` is deliberately
-    configuration-only -- it says so in its own docstring, because the engine's
-    runtime state does not survive a restart. So there is nothing here to mint
-    an id for, and this module returns the empty string rather than inventing a
-    format that would look like a promise. A caller that wants the tab's
-    sentence to be true has to give the session somewhere to keep the snapshot;
-    that is a change to `LiveSession`, not one this module can make.
-    """
-    migrated, failure = _readable(session, document)
-    if migrated is None:
-        raise LiveSessionError(failure)
-    backup = engine_export.import_backup(
-        migrated,
-        vocabulary=session.vocabulary,
-        profile_schema=session.profile_schema,
-    )
-    # No check that the house has a room: `schemas/house/1.0.0.json` requires
-    # `minItems: 1`, so a document describing an empty house was refused by
-    # `_readable` above and never reaches the edit below. The guarantee is the
-    # schema's, and restating it here would be a branch no input can take --
-    # and, worse, one that would have to be kept in step with the schema's.
-    diff = _diff_rows(engine_export.dry_run(export_document(session), migrated))
-    session.set_rooms(_live_rooms(backup.house))
-    session.set_profiles(backup.profiles)
-    labels = _mode_labels(backup.modes)
-    if labels:
-        # The modes are the one field with no setter that rebuilds, so they are
-        # written and one rebuild is spent on them. Only when the document
-        # carried modes: a document that declares none must leave the labels the
-        # session was configured with rather than emptying the mode set, which
-        # would silently switch off every behaviour that gates on a mode.
-        session.modes = labels
-        session.rebuild()
-    return {"applied": True, "snapshot_id": "", "diff": diff}
-
-
-def _live_rooms(house: House) -> tuple[LiveRoom, ...]:
-    """A house's rooms as the session's own room type.
-
-    The bindings are copied out rather than referenced, because `LiveRoom` is
-    the session's value and a shared mapping would let a later edit of one
-    appear in the other -- the aliasing the session's rebuild-after-every-edit
-    rule cannot protect against.
-
-    `auto_lighting` takes its default. A document carries no lighting
-    permission and inventing one either way would be a decision the file did not
-    make; the default is the one a newly added room gets, so an imported house
-    is a house whose rooms have not been switched off.
-    """
-    return tuple(
-        LiveRoom(
-            id=room.id,
-            name=room.name,
-            type=room.type,
-            bindings=dict(room.bindings),
-        )
-        for room in house.rooms
-    )
-
-
-def _mode_labels(modes: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
-    """A document's mode *names*, as the session's mode *labels*.
-
-    A round trip that is not quite the identity, and the loss is stated rather
-    than hidden: an export writes the name the engine gates on, and a live
-    session's labels are what a person reads ("Home") while its names are what
-    the engine reads ("home"). Re-importing a document therefore labels a mode
-    by its name, which is the same string for every mode that was not renamed
-    between the two. Recovering "Home" from "home" would mean guessing a
-    capitalisation the document does not carry.
-    """
-    labels: list[str] = []
-    seen: set[str] = set()
-    for mode in modes:
-        name = mode.get("name")
-        if not isinstance(name, str) or name in seen:
-            continue
-        seen.add(name)
-        labels.append(name)
-    return tuple(labels)
 
 
 # --------------------------------------------------------------------------
@@ -1001,6 +341,13 @@ _DISPOSITION: Mapping[Outcome, str] = {
         "was skipped, because a slot it needs is bound to nothing"
     ),
     Outcome.SKIPPED_DISABLED: "was skipped, because it is switched off for this house",
+    # The holder is named by the record's own `ModuleSuppression` input, so this
+    # clause says only which kind of skip it was -- and it has to, because the
+    # two skips above would otherwise be indistinguishable to a reader asking why
+    # a module they never switched off is not running.
+    Outcome.SKIPPED_SUPPRESSED: (
+        "was skipped, because another module is holding this one off"
+    ),
     Outcome.REFUSED_UNSAFE: (
         "was refused: the safety rule will not carry out a command that would "
         "leave a device unsafe"
@@ -1056,6 +403,8 @@ def _input_sentence(entry: Input) -> str:
         )
     if isinstance(entry, OverrideNote):
         return _override_sentence(entry)
+    if isinstance(entry, ModuleSuppression):
+        return _suppression_sentence(entry)
     if isinstance(entry, HazardReading):
         return f"It answered the {entry.kind} alert raised by {entry.entity_id}."
     if isinstance(entry, Repair):
@@ -1088,6 +437,20 @@ def _override_sentence(note: OverrideNote) -> str:
     return (
         f"The person's override on {note.entity_id} has ended "
         f"({_phrase(note.released)}), so the engine is acting again."
+    )
+
+
+def _suppression_sentence(entry: ModuleSuppression) -> str:
+    """A module held off by another, naming the one to go and switch off.
+
+    The sentence a person needs is the *who*, because the target's own switch is
+    exactly where they left it and looking at it would tell them nothing: the
+    pack named here is the one whose switch brings the target back.
+    """
+    return (
+        f"The {entry.module} module is being held off by the {entry.by} module "
+        f"(its {entry.behaviour} behaviour), which is a temporary override and "
+        f"leaves {entry.module}'s own switch alone."
     )
 
 

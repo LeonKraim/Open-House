@@ -30,9 +30,10 @@ path, but the manifest is the pack: nothing the engine evaluates comes from the
 pinned file.
 
 The manifest format is published and frozen as
-`schemas/pack-manifest/1.3.0.json`. That schema is the normative answer to what a
+`schemas/pack-manifest/1.4.0.json`. That schema is the normative answer to what a
 manifest may be, and the loader that applies it is `engine/manifest.py`. Every
-superseded version — `schemas/pack-manifest/1.2.0.json`,
+superseded version — `schemas/pack-manifest/1.3.0.json`,
+`schemas/pack-manifest/1.2.0.json`,
 `schemas/pack-manifest/1.1.0.json` and `schemas/pack-manifest/1.0.0.json` — is
 retained unedited, so a manifest written
 against an older format is still readable as what it was.
@@ -44,7 +45,7 @@ them can answer another's question:
 
 | Authority | Read from | Answers |
 | --- | --- | --- |
-| the schema | `schemas/pack-manifest/1.3.0.json` | what a document of this kind may be |
+| the schema | `schemas/pack-manifest/1.4.0.json` | what a document of this kind may be |
 | the licence vocabulary | `schemas/catalog/licenses.json` | what a licence code means, and where it sits in the published order |
 | the corpus | `catalog/behaviors.yaml` | what a row grants to a pack derived from it |
 | the marker | `packs/official/HANDWRITTEN` | which files a person wrote rather than a derivation produced |
@@ -140,6 +141,43 @@ a second time, and the slots a behaviour names are the entities it may reach.
 `priority` is the arbitration rank a behaviour competes at when two behaviours
 propose for one entity in one tick; it is optional, and a behaviour that states
 none takes the default `catalog/pack-policy.yaml` publishes, which is `0`.
+
+### Holding another pack off
+
+`suppresses` names whole packs, and a behaviour that names one holds that pack's
+module off for as long as the behaviour is on. It is the only clause in a manifest
+that reaches outside the declaring pack, and it reaches exactly one thing: another
+pack's module switch. Nothing about the target is written — its own switch stays
+where the household left it — so the suppression is temporary by construction and
+the moment the suppressing behaviour goes off, the target is back. That is also
+why what it names is packs and nothing finer: a behaviour, a setting or a slot
+would be one pack editing another pack's configuration, which an uninstall could
+not put back.
+
+```yaml
+behaviours:
+  - name: sleep_shutdown
+    trigger: state
+    condition: state
+    action: service
+    priority: 50
+    services: [light.turn_off]
+    slots: [light_group]
+    mode: sleep
+    suppresses: [roomba]
+```
+
+Bedtime is the shape this is modelled on: while that behaviour is on, the Roomba
+pack is held off even if its own module switch is on, and the panel says so on the
+Roomba module's card rather than leaving a running module with an on switch and no
+effect.
+
+A pack may not name itself: the suppression is derived from which modules are on,
+so a pack holding itself off would be on for an instant and off forever, a module
+that can never run with no switch anywhere that explains it. The validator refuses
+that as `self_suppression`. Naming a pack a house has not installed holds nothing
+off rather than failing, because a manifest does not know which house it will land
+in and a pack may name one it expects beside it.
 
 ## The forbidden terms, and why they are forbidden
 
@@ -289,7 +327,8 @@ tick over an installed, unenabled pack produces no proposal of the pack's.
 
 A published format version is a file that is never written to again, and each
 version names the one it replaces, with the arrow pointing backwards:
-`schemas/pack-manifest/1.2.0.json` supersedes `1.1.0`, which supersedes `1.0.0`.
+`schemas/pack-manifest/1.4.0.json` supersedes `1.3.0`, which supersedes `1.2.0`,
+which supersedes `1.1.0`, which supersedes `1.0.0`.
 The engine API version is published the same way, as
 `schemas/engine-api/1.0.0.json`, and it moves only when what a manifest may
 *declare* changes incompatibly — never when the engine's implementation changes,

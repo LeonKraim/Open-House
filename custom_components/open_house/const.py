@@ -79,6 +79,7 @@ SUBENTRY_ROOM = "room"
 PLATFORMS: tuple[Platform, ...] = (
     Platform.BINARY_SENSOR,
     Platform.SELECT,
+    Platform.SENSOR,
     Platform.SWITCH,
 )
 
@@ -102,6 +103,46 @@ MODES: tuple[str, ...] = ("Home", "Away", "Sleep", "Guest")
 
 #: The profiles offered before a pack supplies its own.
 PROFILES: tuple[str, ...] = ("Default",)
+
+#: Where a person's own packs live, relative to Home Assistant's config
+#: directory. Named here because three things have to agree about it -- the
+#: session that reads it, the Dev tab that writes it, and a person who wants to
+#: copy one out by hand -- and because the checkout is not it: the source tree is
+#: read-only in every real deployment, and a module belongs beside the house.
+PACKS_DIRECTORY: tuple[str, ...] = ("open_house", "packs")
+
+#: Where a hosted module's record lives -- what it is called, which automation
+#: runs it, what a person filled its inputs with and what it publishes. One file
+#: for the whole house (`ha_adapter.module_records.FILENAME` inside this
+#: directory), because the records are read together at setup and written
+#: together after an import, and a file each would be a directory listing where
+#: one read would do.
+MODULES_DIRECTORY: tuple[str, ...] = ("open_house",)
+
+#: Where the modules this house *offers* live -- one file each, named after the
+#: module (`ha_adapter.module_definitions`), under the same `open_house` directory
+#: as the records. A directory rather than a file for the reason the records are a
+#: file: an offer is a thing a person hands to somebody else, so it has to be one
+#: file a person can copy, and a house has one of these for every module it
+#: publishes and none at all before it has published any.
+DEFINITIONS_DIRECTORY: tuple[str, ...] = ("open_house", "modules")
+
+#: The signal the entity platform listens on for a module that did not exist when
+#: it was set up. A module is imported while the integration is already running,
+#: so its outputs' entities have to be added to a platform that has already
+#: finished loading -- a reload of the whole entry would take the engine, the
+#: rooms and the panel down with it to add one sensor.
+SIGNAL_MODULES_CHANGED = f"{DOMAIN}_modules_changed"
+
+#: The signal for a module that is *gone*, carrying its slug.
+#:
+#: A separate signal rather than the same one with a flag, because the two ask
+#: opposite things of the platform: `SIGNAL_MODULES_CHANGED` says "here is a
+#: record, make sure its outputs exist" and this says "this module is no longer
+#: here, take its outputs away". A platform that had to infer which of the two it
+#: was reading would need the record to say whether it exists, which is the
+#: absence it is being told about.
+SIGNAL_MODULE_REMOVED = f"{DOMAIN}_module_removed"
 
 #: The key naming the room's Home Assistant area id inside a room subentry's data.
 DATA_AREA_ID = "area_id"

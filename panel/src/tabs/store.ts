@@ -15,7 +15,7 @@
 
 import { html, nothing, type TemplateResult } from "lit";
 import { OpenHouseElement } from "../base.ts";
-import type { StoreEntry } from "../api/models.ts";
+import type { ModuleOfferRow, StoreEntry } from "../api/models.ts";
 
 const TIER_CHIP: Record<StoreEntry["tier"], string> = {
   official: "ok",
@@ -25,8 +25,9 @@ const TIER_CHIP: Record<StoreEntry["tier"], string> = {
 };
 
 export class StoreTab extends OpenHouseElement {
-  // `confirming` is a click that only arms a button, and `tierFilter` is a
-  // choice; both are invisible to Lit as plain fields (see base.ts).
+  // `confirming` is a click that only arms a button, `tierFilter` and the
+  // per-module pickers are choices; all are invisible to Lit as plain fields
+  // (see base.ts).
   static override properties = {
     ...OpenHouseElement.properties,
     entries: { state: true },
@@ -37,6 +38,12 @@ export class StoreTab extends OpenHouseElement {
     busy: { state: true },
     confirming: { state: true },
     tierFilter: { state: true },
+    offers: { state: true },
+    removing: { state: true },
+    moduleReplace: { state: true },
+    fileLabel: { state: true },
+    notice: { state: true },
+    moduleError: { state: true },
   };
 
   private entries: StoreEntry[] = [];
@@ -47,6 +54,17 @@ export class StoreTab extends OpenHouseElement {
   private busy: string | null = null;
   private confirming: string | null = null;
   private tierFilter: StoreEntry["tier"] | "all" = "all";
+
+  /** The modules this house made: what an import saved rather than installed. */
+  private offers: ModuleOfferRow[] = [];
+  /** Its own error, so a house that cannot answer for its modules still lists packs. */
+  private moduleError: ReturnType<OpenHouseElement["toError"]> | null = null;
+  /** The module whose Remove button has been armed. */
+  private removing: string | null = null;
+  /** Whether an imported file may take the place of a module of its name. */
+  private moduleReplace = false;
+  private fileLabel = "";
+  private notice: string | null = null;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -62,14 +80,111 @@ export class StoreTab extends OpenHouseElement {
     this.error = null;
     this.requestUpdate();
     try {
-      const response = await this.requireClient().storeIndex();
-      this.entries = response.entries;
-      this.generatedAt = response.generated_at;
-      this.cached = response.cached;
+      const index = await this.requireClient().storeIndex();
+      this.entries = index.entries;
+      this.generatedAt = index.generated_at;
+      this.cached = index.cached;
+    } catch (error) {
+      this.error = this.toError(error);
+    }
+    try {
+      // Asked separately, and its failure kept separate: the modules half is an
+      // addition to a screen whose subject is the pack index, and a house that
+      // cannot answer for its own modules still has an index worth showing.
+      const store = await this.requireClient().modulesStore();
+      this.offers = store.store;
+    } catch (error) {
+      this.moduleError = this.toError(error);
+    } finally {
+      this.isLoading = false;
+      this.requestUpdate();
+    }
+  }
+
+  /** Stop offering a definition. What is installed from it keeps running. */
+  private async removeModule(offer: ModuleOfferRow): Promise<void> {
+    this.busy = offer.slug;
+    this.error = null;
+    this.notice = null;
+    try {
+      const response = await this.requireClient().modulesRemove(offer.slug);
+      this.removing = null;
+      this.offers = response.store;
+      this.notice =
+        response.installed === 0
+          ? `${offer.title} is no longer offered.`
+          : `${offer.title} is no longer offered. ` +
+            `The ${response.installed} ` +
+            `${response.installed === 1 ? "room" : "rooms"} running it keep running.`;
     } catch (error) {
       this.error = this.toError(error);
     } finally {
-      this.isLoading = false;
+      this.busy = null;
+      this.requestUpdate();
+    }
+  }
+
+  /** One definition as a file, for a person to give to somebody else. */
+  private async download(offer: ModuleOfferRow): Promise<void> {
+    this.busy = offer.slug;
+    this.error = null;
+    this.notice = null;
+    try {
+      const document = await this.requireClient().modulesExport(offer.slug);
+      this.save(document, `${offer.slug}.json`);
+      this.notice = `${offer.title} downloaded. Send the file to somebody else to install.`;
+    } catch (error) {
+      this.error = this.toError(error);
+    } finally {
+      this.busy = null;
+      this.requestUpdate();
+    }
+  }
+
+  private save(document: unknown, filename: string): void {
+    const blob = new Blob([JSON.stringify(document, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = globalThis.document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  /**
+   * Read somebody else's module file into this house's store.
+   *
+   * Nothing is installed: reading a file is not consenting to run it, and the
+   * file never touches a room. A module this house already offers is refused
+   * unless the replace box is ticked, which is why that box is on the screen
+   * rather than a default.
+   */
+  private async onFile(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    this.fileLabel = file.name;
+    this.busy = "import";
+    this.error = null;
+    this.notice = null;
+    this.requestUpdate();
+    try {
+      const document = JSON.parse(await file.text()) as unknown;
+      const result = await this.requireClient().modulesImport(
+        document,
+        this.moduleReplace,
+      );
+      this.moduleReplace = false;
+      this.offers = result.store;
+      this.notice = result.replaced
+        ? `Imported ${result.imported}, replacing the one this house had.`
+        : `Imported ${result.imported}. Install it into any room below.`;
+    } catch (error) {
+      this.error = this.toError(error);
+    } finally {
+      this.busy = null;
       this.requestUpdate();
     }
   }
@@ -90,7 +205,7 @@ export class StoreTab extends OpenHouseElement {
   }
 
   protected override render(): TemplateResult {
-    if (this.isLoading && this.entries.length === 0) {
+    if (this.isLoading && this.entries.length === 0 && this.offers.length === 0) {
       return this.loading("Reading the pack index...");
     }
     const visible = this.entries.filter(
@@ -98,6 +213,8 @@ export class StoreTab extends OpenHouseElement {
     );
     return html`
       ${this.errorBanner(this.error)}
+      ${this.notice ? html`<div class="banner info">${this.notice}</div>` : null}
+      ${this.renderModules()}
       <div class="row spread wrap" style="margin-bottom:12px">
         <h1>Store</h1>
         <select
@@ -132,6 +249,174 @@ export class StoreTab extends OpenHouseElement {
             ${visible.map((entry) => this.renderEntry(entry))}
           </div>`}
     `;
+  }
+
+  // -- the modules this house made ------------------------------------------
+
+  /**
+   * The store's local half: modules a person imported and saved.
+   *
+   * These are not packs -- a pack is a catalog's, and installing one is picking
+   * it out of the index. A module is this house's own, and *installing* it means
+   * nothing more than keeping it: it is a file in this house's store, offered
+   * here as something you have. Putting it in a room is the other act, and it
+   * belongs where the room is -- the room's own page, under *Add module to
+   * room*. The two are different things and the screen keeps them apart: this
+   * one says what you have and where each copy is running, and never moves one.
+   */
+  private renderModules(): TemplateResult {
+    return html`<section class="card">
+      <div class="row spread wrap">
+        <div class="grow">
+          <h2>Modules you made</h2>
+          <p class="help">
+            What the Dev tab saved. A module is yours to keep: add it to a room
+            from that room's page, or to the whole house from the House page, as
+            many times as you like -- each room gets its own copy and its own
+            outputs. A module file is self-contained: somebody else needs
+            neither the blueprint nor the network to install it.
+          </p>
+        </div>
+      </div>
+      ${this.moduleError
+        ? html`<div class="banner warn">
+            Your modules could not be read: ${this.moduleError.message} The pack
+            index below is unaffected.
+          </div>`
+        : nothing}
+      ${this.offers.length === 0
+        ? html`<p class="muted">
+            None yet. Import an automation or a blueprint in the Dev tab and save
+            it as a module, or import a file somebody gave you below.
+          </p>`
+        : html`<div class="stack">
+            ${this.offers.map((offer) => this.renderModule(offer))}
+          </div>`}
+      ${this.renderImport()}
+    </section>`;
+  }
+
+  private renderModule(offer: ModuleOfferRow): TemplateResult {
+    const busy = this.busy === offer.slug;
+    const armed = this.removing === offer.slug;
+    // Addressed by slug rather than by position: a store row is one module, and
+    // a walk that clicked "the second Remove button" would be a walk that broke
+    // the day a module was added above it.
+    return html`<div class="nested" id="store-module-${offer.slug}">
+      <div class="row spread wrap">
+        <div class="grow">
+          <h3>${offer.title}</h3>
+          <p class="muted small">
+            <code>${offer.slug}</code>
+            ${offer.author ? html` &middot; ${offer.author}` : null}
+            &middot; v${offer.version} &middot; ${offer.licence}
+          </p>
+        </div>
+        <div class="row">
+          <span class="chip ok">installed</span>
+          ${offer.pinned
+            ? html`<span
+                class="chip warn"
+                title="This module names devices from this house, so it would install somewhere else only if that house holds the same devices."
+              >
+                your devices
+              </span>`
+            : html`<span class="chip">any house</span>`}
+        </div>
+      </div>
+      <p>${offer.description}</p>
+      <p class="help">
+        ${offer.blueprint ? html`From ${offer.blueprint}. ` : null}
+        ${offer.slots.length === 0
+          ? "Reaches through no slots."
+          : html`Reaches through ${offer.slots.join(", ")}.`}
+      </p>
+      <p class="help">
+        ${offer.deployed.length === 0
+          ? html`In no room yet. Add it to one from that room's page --
+              <em>Add module to room</em>.`
+          : html`In ${offer.deployed.map(
+              (where, index) => html`${index > 0 ? ", " : ""}${where.room_name}
+                ${where.running
+                  ? null
+                  : html`<span class="chip warn">not running</span>`}`,
+            )}.`}
+      </p>
+      <div class="row wrap" style="margin-top:8px">
+        <button
+          type="button"
+          id="store-download-${offer.slug}"
+          ?disabled=${busy}
+          @click=${() => void this.download(offer)}
+        >
+          Download the file
+        </button>
+        ${armed
+          ? html`<button
+                type="button"
+                class="danger"
+                ?disabled=${busy}
+                @click=${() => void this.removeModule(offer)}
+              >
+                Yes, stop offering it
+              </button>
+              <button type="button" @click=${() => (this.removing = null)}>
+                Cancel
+              </button>`
+          : html`<button
+              type="button"
+              id="store-remove-${offer.slug}"
+              @click=${() => (this.removing = offer.slug)}
+            >
+              Remove
+            </button>`}
+      </div>
+      ${armed
+        ? html`<p class="help">
+            Removing this stops it being offered. Anything already installed from
+            it keeps its own copy of the document and keeps running -- unbind the
+            room it is in to stop that.
+          </p>`
+        : nothing}
+    </div>`;
+  }
+
+  private renderImport(): TemplateResult {
+    return html`<div class="nested">
+      <h3>Install a module somebody gave you</h3>
+      <p class="help">
+        A <code>.json</code> file from this panel's Download. It carries the
+        blueprint and the answers, so nothing else is needed. Importing only
+        adds it here -- it is installed into a room afterwards, above.
+      </p>
+      <div class="field">
+        <div class="label-row">
+          <span class="label">Import a module file</span>
+        </div>
+        <input
+          type="file"
+          accept="application/json,.json"
+          aria-label="Choose a module file"
+          ?disabled=${!this.admin || this.busy === "import"}
+          @change=${(event: Event) => void this.onFile(event)}
+        />
+      </div>
+      <label class="toggle">
+        <input
+          type="checkbox"
+          .checked=${this.moduleReplace}
+          @change=${(event: Event) => {
+            this.moduleReplace = (event.target as HTMLInputElement).checked;
+          }}
+        />
+        <span>Replace a module this house already offers by that name</span>
+      </label>
+      ${this.fileLabel
+        ? html`<p class="muted small">
+            ${this.busy === "import" ? "Reading" : "Last file:"} ${this.fileLabel}
+          </p>`
+        : nothing}
+    </div>`;
   }
 
   private renderEntry(entry: StoreEntry): TemplateResult {

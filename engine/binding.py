@@ -275,7 +275,9 @@ class House:
         return any(room.id == room_id for room in self.rooms)
 
 
-def resolve_slot(house: House, scope: Scope, slot: str) -> SlotBinding:
+def resolve_slot(
+    house: House, scope: Scope, slot: str, *, own: str | None = None
+) -> SlotBinding:
     """Resolve `slot` in `scope` to the entities bound to it.
 
     A room scope returns that room's binding for the slot, and falls back to the
@@ -289,8 +291,32 @@ def resolve_slot(house: House, scope: Scope, slot: str) -> SlotBinding:
     makes it *global*: one entity a person bound once, standing in for the slot
     everywhere -- in the house scope, and in every room that did not bind one of
     its own.
+
+    `own` is the other way a slot can resolve, and the narrow one: the entity one
+    *module* points this slot at instead of the house's binding, so a pack that
+    would otherwise act on the room's `light_group` can be aimed at a lamp of its
+    own without rebinding the room. It wins over both the room's binding and the
+    house's, because it is the most specific statement of the three and the only
+    one that is about a single module rather than about the house. The slot still
+    has to be one the vocabulary carries: an override names an entity, never a
+    slot, so a name no controlled vocabulary defines is refused here exactly as it
+    is without one.
+
+    `required` is the slot definition's own answer where there is one, and
+    `False` where the override names a slot the vocabulary does not carry at house
+    scope -- the declaration's own `required` is what makes a slot required, and
+    an overridden slot nothing declares is nobody's requirement.
     """
     definition = house.vocabulary.slots.get(slot)
+    if own is not None:
+        if definition is None:
+            where = (
+                "the house scope"
+                if isinstance(scope, HouseScope)
+                else f"the room {scope.room_id!r}"
+            )
+            raise UnknownSlotError(where, slot, "no controlled vocabulary defines")
+        return SlotBinding(slot=slot, entities=(own,), required=definition.required)
     if isinstance(scope, HouseScope):
         if definition is None:
             raise UnknownSlotError(
@@ -302,9 +328,11 @@ def resolve_slot(house: House, scope: Scope, slot: str) -> SlotBinding:
                 slot,
                 "is not among the slots the house makes available at house scope",
             )
-        own = house.bindings.get(slot)
-        if own is not None:
-            return SlotBinding(slot=slot, entities=(own,), required=definition.required)
+        own_binding = house.bindings.get(slot)
+        if own_binding is not None:
+            return SlotBinding(
+                slot=slot, entities=(own_binding,), required=definition.required
+            )
         return SlotBinding(
             slot=slot,
             entities=tuple(

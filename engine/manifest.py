@@ -81,6 +81,7 @@ REASONS: tuple[str, ...] = (
     "override_without_default",
     "option_mismatch",
     "unknown_option",
+    "self_suppression",
 )
 
 #: The clause `1.2.0` retired. Named here because the failure has to name it: a
@@ -375,7 +376,46 @@ def _semantic_failures(
     failures.extend(_derivation_failures(manifest, artifacts))
     failures.extend(_i18n_failures(manifest))
     failures.extend(_option_failures(document))
+    failures.extend(_suppression_failures(manifest))
     return tuple(failures)
+
+
+def _suppression_failures(manifest: Manifest) -> list[Failure]:
+    """The one check a `suppresses` clause needs, and the one it must not have.
+
+    A pack may not name itself. "This behaviour holds this pack off" is a pack
+    saying "I am off", which is the module switch and not this clause, and the
+    engine could not honour it: the suppression is derived from which modules are
+    currently on, so a pack that suppressed itself would go off the instant it was
+    on and come back the instant it was off -- a module that can never run, with
+    no switch anywhere that explains what a person is seeing.
+
+    Deliberately *not* checked: whether the named pack exists. A manifest does not
+    know which house it will land in (`mode`'s docstring makes the same argument
+    about a mode name), and a pack may name one it expects beside it -- a house
+    without that pack simply has nothing held off. Refusing an unknown name here
+    would make a pack's validity depend on which other packs a particular checkout
+    happened to carry.
+    """
+    own = manifest.name
+    failures: list[Failure] = []
+    for index, behaviour in enumerate(_rows(manifest.document, "behaviours")):
+        named = behaviour.get("suppresses")
+        if not isinstance(named, list):
+            continue
+        if own in named:
+            failures.append(
+                Failure(
+                    reason="self_suppression",
+                    path=f"behaviours[{index}].suppresses",
+                    message=(
+                        f"the behaviour {behaviour.get('name', '?')!r} holds off "
+                        f"its own pack {own!r}; a pack that suppresses itself can "
+                        "never run, and its own switch is what turns a pack off"
+                    ),
+                )
+            )
+    return failures
 
 
 #: What a `default` has to be for each option `type`, so the check below is a

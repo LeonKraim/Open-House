@@ -1,0 +1,140 @@
+name: dynamic_lighting
+version: 1.0.0
+description: Daylight and evening colour on a lux reading.
+kind: module
+engine_api: '>=1.0.0 <2.0.0'
+license: mit
+requires_slots:
+- ambient_light_sensor
+- light_group
+provides:
+- path: dynamic_lighting/dynamic_lighting.yaml
+  class: automation
+options:
+- key: day_color_temp
+  type: integer
+  default: 5500
+  title: Day Color Temp (Kelvin)
+  description: The color temperature for daytime (e.g., 5500K).
+  minimum: 3000.0
+  maximum: 6500.0
+  unit: K
+- key: evening_color_temp
+  type: integer
+  default: 2300
+  title: Evening Color Temp (Kelvin)
+  description: The color temperature for evening (e.g., 2300K).
+  minimum: 1800.0
+  maximum: 3500.0
+  unit: K
+- key: min_lux_clear
+  type: integer
+  default: 300
+  title: Min Lux (Clear Weather)
+  description: Lowest lux threshold on clear days.
+  minimum: 0.0
+  maximum: 2000.0
+- key: max_lux_clear
+  type: integer
+  default: 950
+  title: Max Lux (Clear Weather)
+  description: Highest lux threshold on clear days.
+  minimum: 500.0
+  maximum: 3000.0
+- key: min_lux_cloudy
+  type: integer
+  default: 300
+  title: Min Lux (Cloudy Weather)
+  description: Lowest lux threshold on cloudy days.
+  minimum: 0.0
+  maximum: 2000.0
+- key: max_lux_cloudy
+  type: integer
+  default: 1200
+  title: Max Lux (Cloudy Weather)
+  description: Highest lux threshold on cloudy days.
+  minimum: 500.0
+  maximum: 3000.0
+- key: start_time
+  type: string
+  default: '10:00:00'
+  title: Start Time
+  description: Time of day when the automation is allowed to run.
+- key: end_time
+  type: string
+  default: '21:00:00'
+  title: End Time
+  description: Time of day when the automation stops running.
+- key: transition_time
+  type: integer
+  default: 30
+  title: Transition Time (seconds)
+  description: Duration (in seconds) for fading brightness and color changes.
+  minimum: 0.0
+  maximum: 600.0
+  unit: seconds
+- key: trigger_interval
+  type: integer
+  default: 3
+  title: Trigger Interval (minutes)
+  description: The interval (in minutes) at which the automation checks the lux sensor (1–5).
+  minimum: 1.0
+  maximum: 5.0
+  unit: minutes
+- key: min_brightness_percent
+  type: integer
+  default: 20
+  title: Minimum Brightness (%)
+  description: Brightness level as a percentage when ambient light is high (range 5–50%).
+  minimum: 5.0
+  maximum: 50.0
+  unit: '%'
+- key: max_brightness_percent
+  type: integer
+  default: 100
+  title: Maximum Brightness (%)
+  description: Brightness level as a percentage when ambient light is low (range 50–100%).
+  minimum: 50.0
+  maximum: 100.0
+  unit: '%'
+- key: color_transition_minutes
+  type: integer
+  default: 60
+  title: Color Transition Duration (minutes)
+  description: Minutes from sunset over which the color temperature transitions (range 20–90).
+  minimum: 20.0
+  maximum: 90.0
+  unit: minutes
+- key: log_to_logbook
+  type: boolean
+  default: true
+  title: Log to Logbook
+  description: If off, no entries will be sent to the Home Assistant logbook.
+behaviours:
+- name: daylight
+  trigger: time_pattern
+  condition: numeric_state
+  action: service
+  priority: 10
+  services:
+  - light.turn_on
+  slots:
+  - ambient_light_sensor
+  - light_group
+  scope: room
+- name: evening_off
+  trigger: time_pattern
+  action: service
+  priority: 10
+  services:
+  - light.turn_off
+  slots:
+  - ambient_light_sensor
+  - light_group
+  scope: room
+i18n:
+  default:
+    pack: Dynamic Lighting
+    description: Daylight and evening colour on a lux reading.
+    daylight: Daylight
+    evening_off: Evening off

@@ -1,14 +1,15 @@
 /**
- * The tab registry: the nine screens, in the order spec.txt names them.
+ * The tab registry: the screens, in the order a person meets them.
  *
  * House sits beside Rooms because it is the same question one level up -- what
  * is in this room, what is in the house -- and a person who has just bound a
  * light in a room looks next at what that made available to the whole house.
  *
  * The order is not cosmetic. Overview first is the "is anything wrong" screen,
- * and Import/Export last is the "I am done" screen; the order in the spec is
- * the order a person meets them, and reordering the array reorders the sidebar
- * of the panel to match.
+ * and Dev last is the one that is not for a person's house at all -- it is the
+ * workbench where an automation becomes a module and a module becomes
+ * automations again, which is the last thing a person picks up; reordering the
+ * array reorders the sidebar of the panel to match.
  *
  * `adminOnly` is a UI affordance, not a boundary. The server refuses an
  * admin-only command from a non-admin regardless of what the panel shows (see
@@ -47,13 +48,6 @@ export const TABS: readonly TabDefinition[] = [
     tag: "open-house-tab-house",
   },
   {
-    id: "modules",
-    label: "Modules",
-    iconName: "mdi:puzzle-outline",
-    adminOnly: false,
-    tag: "open-house-tab-modules",
-  },
-  {
     id: "profiles",
     label: "Profiles",
     iconName: "mdi:tune-variant",
@@ -82,11 +76,11 @@ export const TABS: readonly TabDefinition[] = [
     tag: "open-house-tab-health",
   },
   {
-    id: "import-export",
-    label: "Import/Export",
-    iconName: "mdi:import-export",
+    id: "dev",
+    label: "Dev",
+    iconName: "mdi:flask-outline",
     adminOnly: true,
-    tag: "open-house-tab-import-export",
+    tag: "open-house-tab-dev",
   },
 ] as const;
 

@@ -45,7 +45,11 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers.event import async_track_state_change_event
 
-from . import _bootstrap  # noqa: F401  # imported for its import-path side effect
+from . import (
+    _bootstrap,  # noqa: F401  # imported for its import-path side effect
+    modules,
+    slot_rules,
+)
 from .const import (
     DATA_AREA_ID,
     DATA_BINDINGS,
@@ -57,7 +61,7 @@ from .const import (
 )
 from .repairs import async_sync_startup_issues
 from .rooms_sync import async_import_areas
-from .runtime import OpenHouseRuntime, RoomRuntime
+from .runtime import HostedModule, OpenHouseRuntime, RoomRuntime
 from .transport import HassTransport
 
 if TYPE_CHECKING:
@@ -90,6 +94,11 @@ DATA_PANELS = f"{DOMAIN}_panels"
 #: two into one key would make every platform's lookup depend on whether an engine
 #: happened to be built.
 DATA_AUTOMATION = f"{DOMAIN}_automation"
+
+#: The slot-rule watchers, keyed by entry, for the same reason the automation is:
+#: a watcher is the runtime's *listener* rather than a view of it, and
+#: `async_unload_entry` has to find the one this entry started to stop it.
+DATA_SLOT_RULES = f"{DOMAIN}_slot_rules"
 
 
 def _engine_modules() -> tuple[Any, Any] | None:
@@ -187,6 +196,13 @@ async def async_setup(hass: HomeAssistant, config: Mapping[str, Any]) -> bool:
     websocket_api = await hass.async_add_executor_job(_import_websocket_api)
     if websocket_api is not None:
         websocket_api.async_register_websocket_api(hass)
+    # The one service a hosted module's automation calls, registered here rather
+    # than per entry for the same reason the commands are: an automation that
+    # publishes an output is Home Assistant's own and knows nothing about config
+    # entries, so the service has to exist as long as the instance does.
+    from .modules import async_register_services
+
+    async_register_services(hass)
     registered: set[str] = hass.data.setdefault(DATA_PANELS, set())
     if PANEL_URL_PATH not in registered:
         await panel_custom.async_register_panel(
@@ -217,6 +233,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             room.name = area.name
         rooms[subentry_id] = room
     runtime = OpenHouseRuntime(entry_id=entry.entry_id, rooms=rooms)
+    # The modules this house hosts, read before the platforms are forwarded to:
+    # the sensor platform builds one entity per declared output, so it needs the
+    # records to exist by the time it is set up. A records file that will not
+    # parse is logged and stepped over rather than allowed to fail the entry --
+    # the rooms, the panel and the engine have nothing to do with it -- and the
+    # exception names the file, which is what a person needs to fix it.
+    try:
+        records = await modules.async_records(hass)
+    except Exception:
+        _LOGGER.exception(
+            "Open House could not read this house's module records, so no hosted "
+            "module will load and no output will publish; the file is %s",
+            modules.records_path(hass),
+        )
+        records = ()
+    runtime.modules = {record.slug: HostedModule(record=record) for record in records}
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -242,9 +274,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # `None` when it can be imported but a session cannot be composed. Either way
     # the instance is left with its entities, its repairs and its panel rather
     # than a failed entry.
-    modules = await hass.async_add_executor_job(_engine_modules)
-    if modules is not None:
-        await _async_start_engine(hass, entry, runtime, *modules)
+    # Named `engine_modules` rather than `modules`, which is the imported
+    # `modules` module: a local of that name anywhere in this function makes
+    # every earlier use of the import an `UnboundLocalError`, and the failure
+    # arrives as "cannot access local variable 'modules'" pointing at the read
+    # of the records file rather than at the line that shadowed it.
+    engine_modules = await hass.async_add_executor_job(_engine_modules)
+    if engine_modules is not None:
+        await _async_start_engine(hass, entry, runtime, *engine_modules)
 
     # Areas are the source of truth for rooms, so the entry is brought into step
     # with Home Assistant's area registry here -- an area made while the
@@ -292,6 +329,18 @@ async def _async_start_engine(
         if started is not None:
             hass.data.setdefault(DATA_AUTOMATION, {})[entry.entry_id] = started
             entry.async_on_unload(started.async_stop)
+
+        # A slot may be decided by *logic* rather than by a device a person
+        # picked (`ha_adapter.slot_rules`), and a slot is a standing fact rather
+        # than a run -- so something has to be listening for the world moving.
+        # This is the only listener of its own in the integration, and it is
+        # started beside the automation for that reason: both are "make the house
+        # act", they are stopped together, and the watcher needs the host to write
+        # the setting an automation is then built from.
+        if session_host is not None:
+            watcher = await slot_rules.async_setup_slot_rules(hass, entry, session_host)
+            hass.data.setdefault(DATA_SLOT_RULES, {})[entry.entry_id] = watcher
+            entry.async_on_unload(watcher.async_stop)
     except Exception:
         _LOGGER.exception(
             "Open House could not start its engine for entry %s; the rooms and "
@@ -313,6 +362,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         automation = hass.data.get(DATA_AUTOMATION, {}).pop(entry.entry_id, None)
         if automation is not None:
             automation.async_stop()
+        watcher = hass.data.get(DATA_SLOT_RULES, {}).pop(entry.entry_id, None)
+        if watcher is not None:
+            watcher.async_stop()
     return unloaded
 
 

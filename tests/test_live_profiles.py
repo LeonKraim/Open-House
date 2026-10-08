@@ -14,25 +14,34 @@ renamed key is a screen that renders nothing rather than a test that fails.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
 import pytest
 
+from engine.behaviours.declared import option_key, slot_rule_key
 from engine.binding import RoomScope
 from engine.config import Layer
 from engine.install import InstalledPack, InstalledSet
-from engine.profiles import ProfileSet, load_profile_schema
+from engine.profiles import ProfileKind, ProfileSet, load_profile_schema
 from engine.solar import Location
-from ha_adapter.composition import LiveRoom, room_id
+from ha_adapter.composition import LiveRoom, mode_name, room_id
 from ha_adapter.live import LiveSession, LiveSessionError
 from ha_adapter.live_profiles import (
     activate,
+    activate_house,
     active_profiles,
+    capture,
+    deactivate_house,
+    export_document,
+    import_document,
     options,
     profiles,
+    remember,
     set_option,
 )
+from ha_adapter.module_records import ModuleRecord, Variant, from_documents
 from ha_adapter.testing import FakeHaTransport
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -152,12 +161,13 @@ def _room_profile(name: str, axis: str, **deltas: object) -> dict[str, object]:
     }
 
 
-def _house_profile(name: str) -> dict[str, object]:
+def _house_profile(name: str, **extra: object) -> dict[str, object]:
     return {
         "name": name,
         "kind": "house",
         "description": f"{name} house profile",
         "selections": {},
+        **extra,
     }
 
 
@@ -385,6 +395,718 @@ def test_activating_a_profile_for_an_unknown_room_is_refused() -> None:
     session = _session(profiles_=_profile_set((_room_profile("evening", "lighting"),)))
     with pytest.raises(LiveSessionError, match="no room 'kitchen'"):
         activate(session, room_id="kitchen", axis="lighting", profile="evening")
+
+
+# --------------------------------------------------------------------------
+# activate_house and deactivate_house: the house's own switch
+# --------------------------------------------------------------------------
+
+
+def test_a_house_profile_is_selected_for_every_room_it_bundles() -> None:
+    """The bundle is applied room by room, and the engine sees each one.
+
+    A house profile is the one profile kind that is not selected *in* a room, so
+    the chain worth pinning is the whole one: the activation reaches each room's
+    selection, the selection reaches the engine's resolver (a bundled delta that
+    never resolved would be a house profile that reads as applied and changes
+    nothing), and the house profile reads back as the one in force.
+    """
+    session = _session(
+        profiles_=_profile_set(
+            (
+                _room_profile("evening", "lighting", **{QUIET: 60.0}),
+                _house_profile(
+                    "vacation", selections={"hall": {"lighting": "evening"}}
+                ),
+            )
+        )
+    )
+
+    activate_house(session, profile="vacation")
+
+    assert session.profiles.selection("hall") == {"lighting": "evening"}
+    resolved = session.engine.settings.resolve(QUIET, RoomScope("hall"))
+    assert resolved.value == 60.0
+    assert resolved.layer is Layer.PROFILE
+    assert session.profiles.house_profile == "vacation"
+
+
+def test_a_house_profiles_modes_are_activated_on_the_rebuilt_engine() -> None:
+    """A mode a profile carries is activated on the engine the rebuild produced.
+
+    The house profile here bundles no room at all, so the *only* thing this
+    activation can put into force is the mode -- which makes the mode itself the
+    assertion rather than a coincidence of some room's selection. The document
+    names the mode the way the engine knows it (`mode_name`), because the
+    integration's display labels are projected once at the outer edge and a
+    profile is already inside it.
+    """
+    session = _session(
+        profiles_=_profile_set((_house_profile("vacation", modes=["away"]),))
+    )
+    assert session.engine.modes.active == frozenset()
+
+    activate_house(session, profile="vacation")
+
+    assert mode_name("Away") in session.engine.modes.active
+
+
+def test_activating_a_house_profile_is_refused_for_a_room_profile() -> None:
+    session = _session(profiles_=_profile_set((_room_profile("evening", "lighting"),)))
+    with pytest.raises(LiveSessionError, match="is a room profile, not a house one"):
+        activate_house(session, profile="evening")
+
+
+def test_activating_an_unknown_house_profile_is_refused_by_name() -> None:
+    session = _session(profiles_=_profile_set((_house_profile("vacation"),)))
+    with pytest.raises(LiveSessionError, match="'guests' is not held by this set"):
+        activate_house(session, profile="guests")
+
+
+def test_taking_the_house_off_its_profile_leaves_the_selections_alone() -> None:
+    """ "Off" is not "put everything back": this house does not remember before.
+
+    The engine's rule and not a second one here, so the assertion is on both
+    halves at once -- the house profile is released *and* the room selections it
+    set are still in force, down to the resolver's layer.
+    """
+    session = _session(
+        profiles_=_profile_set(
+            (
+                _room_profile("evening", "lighting", **{QUIET: 60.0}),
+                _house_profile(
+                    "vacation", selections={"hall": {"lighting": "evening"}}
+                ),
+            )
+        )
+    )
+    activate_house(session, profile="vacation")
+
+    deactivate_house(session)
+
+    assert session.profiles.house_profile is None
+    assert session.profiles.selection("hall") == {"lighting": "evening"}
+    assert (
+        session.engine.settings.resolve(QUIET, RoomScope("hall")).layer is Layer.PROFILE
+    )
+
+
+# --------------------------------------------------------------------------
+# capture: a profile taken *from* the house rather than written for it
+# --------------------------------------------------------------------------
+
+
+def test_capture_names_the_whole_house_and_every_part_of_it() -> None:
+    """One name for everything a house is configured to be.
+
+    The parts the session holds are read off it -- the packs installed, the
+    rooms and what each answers with, the house's settings and each room's, the
+    placements, whether a module is bound at house scope, and which room profile
+    each room is on -- and the hosted modules, which the session cannot supply,
+    are handed in and carried through unreshaped.
+    """
+    session = _session(
+        installed=_installed_with_motion(),
+        profiles_=_profile_set(
+            (_room_profile("evening", "lighting", **{QUIET: 60.0}),)
+        ),
+    )
+    activate(session, room_id="hall", axis="lighting", profile="evening")
+    session.set_house_settings({SUN: 4.0})
+    session.set_room_settings("hall", {LUX: 30.0})
+    session.set_house_binding("lock", "lock.front_door")
+    session.place_module("motion_pack", "hall")
+
+    taken = capture(
+        session,
+        name="tuesday",
+        description="Tuesday morning.",
+        modules=[{"slug": "hall_motion", "settings": {"max_brightness_percent": 60}}],
+    )
+
+    assert taken.kind is ProfileKind.HOUSE
+    assert taken.snapshot is True
+    assert taken.selections == {"hall": {"lighting": "evening"}}
+    assert taken.setup["house_settings"] == {SUN: 4.0}
+    assert taken.setup["room_settings"] == {"hall": {LUX: 30.0}}
+    assert taken.setup["house_bindings"] == {"lock": "lock.front_door"}
+    assert taken.setup["module_rooms"] == {"motion_pack": "hall"}
+    assert taken.setup["modules"] == [
+        {"slug": "hall_motion", "settings": {"max_brightness_percent": 60}}
+    ]
+    # The rooms travel as the session writes them, so what a restore reads back
+    # is the shape `from_state` reads rather than a projection of it.
+    rooms = taken.setup["rooms"]
+    assert [row["id"] for row in rooms] == [room_id("hall")]  # type: ignore[union-attr]
+    assert taken.setup["installed"] != {}
+    # Taking is naming and not putting: the house is where it was, and the
+    # profile is a thing it *could* be put back on.
+    assert session.profiles.house_profile is None
+
+
+def test_a_house_put_back_on_a_taken_profile_is_set_where_a_person_would_set_it() -> (
+    None
+):
+    """The one thing that makes "taken" different from "written".
+
+    A written profile's deltas resolve *above* the house, so a key it names is a
+    key nobody can set while it is on. A taken profile is the house's own
+    settings put back, so the proof is the layer and not only the value: the
+    resolver answers with `ROOM`, which is the layer a person's own edit would
+    have written, and the settings maps read back as the captured ones.
+    """
+    session = _session(
+        profiles_=_profile_set((_room_profile("evening", "lighting", **{QUIET: 60.0}),))
+    )
+    session.set_house_settings({SUN: 4.0})
+    session.set_room_settings("hall", {LUX: 30.0})
+    capture(session, name="tuesday", description="Tuesday morning.")
+
+    # The house moves on, and then goes back.
+    session.set_house_settings({SUN: 20.0})
+    session.set_room_settings("hall", {LUX: 5.0})
+
+    activate_house(session, profile="tuesday")
+
+    assert dict(session.house_settings) == {SUN: 4.0}
+    assert session.room_settings_for("hall") == {LUX: 30.0}
+    resolved = session.engine.settings.resolve(LUX, RoomScope("hall"))
+    assert resolved.value == 30.0
+    assert resolved.layer is Layer.ROOM
+    assert session.profiles.house_profile == "tuesday"
+
+
+def test_a_slot_rule_is_captured_and_put_back_with_the_room_it_was_set_in() -> None:
+    """**A rule is a room setting, so a profile that drops it is a silent un-ruling.**
+
+    A slot rule is recorded per module per slot in the room's own layer
+    (`ha_adapter.live_modules.set_slot_rule`, whose own write is proved in
+    `tests/test_module_slot_override.py`), and restoring a house profile is
+    *putting the house back* -- everything done since the profile was taken goes,
+    including settings maps that are written whole (`_snapshot` reads
+    `LiveSession.to_state`, which carries the layers as they are). So a rule a
+    profile did not carry is a rule a profile switch quietly takes away, and the
+    slot it was deciding silently back on the room's binding. That is the failure
+    this asserts against, in both directions.
+
+    Recorded through `remember_setting` rather than through `set_slot_rule`
+    because this is a test about the *profile* layer and not about the writer: the
+    writer reads the module's own reach, and the only pack this file installs
+    carries one of the engine's built-in behaviours, which has no declared `slots`
+    for that read to walk.
+    """
+    session = _session(installed=_installed_with_motion())
+    session.place_module("motion_pack", "hall")
+    _record_rule(session, "hall", kind="template", value="{{ 'light.hall' }}")
+
+    capture(session, name="tuesday", description="Tuesday morning.")
+
+    # The house moves on: the rule is taken back off.
+    _clear_rule(session, "hall")
+    assert _rule_kind(session, "hall") is None
+
+    activate_house(session, profile="tuesday")
+
+    assert _rule_kind(session, "hall") == "template"
+    assert _rule_value(session, "hall") == "{{ 'light.hall' }}"
+
+    # And a rule set *after* the profile was taken is put away by restoring it,
+    # because restoring is putting the house back rather than adding what it
+    # never had (`test_putting_a_house_back_takes_off_what_it_did_not_have`).
+    _clear_rule(session, "hall")
+    _record_rule(session, "hall", kind="template", value="{{ 'light.study' }}")
+    activate_house(session, profile="tuesday")
+    assert _rule_value(session, "hall") == "{{ 'light.hall' }}"
+
+
+def _rule_fact(room: str, fact: str) -> str:
+    return option_key("motion_pack", slot_rule_key("light_group", fact))
+
+
+def _record_rule(session: LiveSession, room: str, *, kind: str, value: object) -> None:
+    """A rule written the way `set_slot_rule` writes one: two keys, one scope."""
+    scope = RoomScope(room)
+    session.remember_setting(_rule_fact(room, "kind"), scope, kind)
+    session.remember_setting(_rule_fact(room, "rule"), scope, value)
+
+
+def _clear_rule(session: LiveSession, room: str) -> None:
+    """...and cleared the way it clears one: every fact the last rule may have."""
+    scope = RoomScope(room)
+    for fact in ("kind", "rule", "when"):
+        session.forget_setting(_rule_fact(room, fact), scope)
+
+
+def _rule_kind(session: LiveSession, room: str) -> object:
+    return session.setting(_rule_fact(room, "kind"), RoomScope(room))
+
+
+def _rule_value(session: LiveSession, room: str) -> object:
+    return session.setting(_rule_fact(room, "rule"), RoomScope(room))
+
+
+def test_a_written_house_profiles_deltas_stay_deltas() -> None:
+    """The other kind is untouched by any of this: a delta is an instruction.
+
+    Restoring is what a *snapshot* does, so a house profile with deltas and no
+    settings must write nothing into the house's own layer -- otherwise every
+    hand-written profile would silently become a setting its author can no
+    longer edit.
+    """
+    session = _session(
+        profiles_=_profile_set((_house_profile("vacation", deltas={QUIET: 90.0}),))
+    )
+
+    activate_house(session, profile="vacation")
+
+    assert dict(session.house_settings) == {}
+    resolved = session.engine.settings.resolve(QUIET, RoomScope("hall"))
+    assert resolved.value == 90.0
+    assert resolved.layer is Layer.PROFILE
+
+
+def test_putting_a_house_back_takes_off_what_it_did_not_have() -> None:
+    """Restoring is putting the house back, not adding what is missing.
+
+    Everything done since the profile was taken has to go, or the state somebody
+    took the profile in order to leave would still be half in force: a pack
+    installed since, a module placed since, a slot bound since, a room setting
+    since. The snapshot here holds none of them.
+    """
+    session = _session(
+        installed=_installed_with_motion(),
+        profiles_=_profile_set((_house_profile("tuesday", setup={}),)),
+    )
+    session.set_house_settings({SUN: 20.0})
+    session.set_room_settings("hall", {LUX: 5.0})
+    session.set_house_binding("lock", "lock.front_door")
+    session.place_module("motion_pack", "hall")
+
+    activate_house(session, profile="tuesday")
+
+    assert dict(session.house_settings) == {}
+    assert session.room_settings_for("hall") == {}
+    assert dict(session.house_bindings) == {}
+    assert dict(session.module_rooms) == {}
+    assert dict(session.installed.packs) == {}
+
+
+def test_a_snapshot_puts_back_the_packs_the_rooms_and_the_placements() -> None:
+    """The half a house is *made of*: what is installed, and where it was put."""
+    taken = _session(installed=_installed_with_motion())
+    taken.place_module("motion_pack", "hall")
+    taken.set_house_binding("lock", "lock.front_door")
+    profile = capture(taken, name="tuesday", description="Tuesday morning.")
+
+    session = _session(profiles_=_profile_set((profile.to_document(),)))
+
+    activate_house(session, profile="tuesday")
+
+    assert sorted(session.installed.packs) == ["motion_pack"]
+    assert dict(session.module_rooms) == {"motion_pack": "hall"}
+    assert dict(session.house_bindings) == {"lock": "lock.front_door"}
+
+
+def test_a_snapshot_of_a_room_this_house_no_longer_has_is_skipped() -> None:
+    """A room the house has since removed is a room it cannot be set back to.
+
+    `set_room_settings` refuses a room that is not here -- silently recording a
+    value no reader could reach -- so the restore skips it rather than failing
+    the whole activation on a room that has been knocked through into the
+    kitchen.
+    """
+    session = _session(
+        profiles_=_profile_set(
+            (
+                _house_profile(
+                    "tuesday",
+                    setup={
+                        "house_settings": {SUN: 4.0},
+                        "room_settings": {"attic": {LUX: 30.0}, "hall": {LUX: 8.0}},
+                    },
+                ),
+            )
+        )
+    )
+
+    activate_house(session, profile="tuesday")
+
+    assert dict(session.house_settings) == {SUN: 4.0}
+    assert session.room_settings_for("hall") == {LUX: 8.0}
+    assert session.room_settings_for("attic") == {}
+
+
+def test_a_taken_module_keeps_the_configuration_it_was_on() -> None:
+    """A hosted module travels whole, down to which of its answers are in force.
+
+    A module can hold several configurations and be switched between them, and
+    the one it is *on* is the module's own flat answers while `variants` keeps
+    the rest. A snapshot that carried the name and not those answers would put
+    the module back on whatever configuration it was on when the profile came
+    off, so somebody who set it to Evening, took a profile and then set it to
+    Morning would get Morning back.
+
+    The row survives a file's worth of packaging -- a snapshot is stored,
+    exported and read back -- so this reads it through `from_documents`, the one
+    door a restore reads it by, rather than off the record that wrote it.
+    """
+    session = _session()
+    taken = capture(
+        session,
+        name="tuesday",
+        description="Tuesday morning.",
+        modules=[
+            ModuleRecord(
+                slug="hall_motion",
+                title="Hall motion",
+                source="{}",
+                bindings={"brightness": {"kind": "value", "value": 40}},
+                settings=("brightness",),
+                variant="Morning",
+                variants={
+                    "Evening": Variant(
+                        bindings={"brightness": {"kind": "value", "value": 10}},
+                        settings=("dim_level",),
+                    )
+                },
+            ).as_json()
+        ],
+    )
+
+    document = json.loads(json.dumps(taken.to_document()))
+    rows = document["setup"]["modules"]
+    (record,) = from_documents(rows)
+
+    assert record.variant == "Morning"
+    assert record.settings == ("brightness",)
+    assert record.bindings == {"brightness": {"kind": "value", "value": 40}}
+    # The configuration it was *not* on is still there to switch back to, which
+    # is the half a snapshot holding only the answers in force would drop.
+    assert set(record.configurations) == {"Morning", "Evening"}
+    assert record.held_configurations["Evening"].settings == ("dim_level",)
+
+
+def test_a_taken_profile_learns_an_edit_made_while_the_house_is_on_it() -> None:
+    """The edit lands in the profile as well as in the house.
+
+    Which is the difference between a profile a house lives on and a photograph
+    of one it keeps being dragged back to: a setting changed while the house is
+    on a taken profile is the house it now is, so switching away and back brings
+    *this* house back. The proof is the round trip, not the capture: what is
+    asserted is what the house reads as after leaving the profile and returning.
+    """
+    session = _session()
+    session.set_house_settings({SUN: 4.0})
+    capture(session, name="tuesday", description="Tuesday morning.")
+    activate_house(session, profile="tuesday")
+
+    session.set_house_settings({SUN: 20.0})
+    session.set_room_settings("hall", {LUX: 5.0})
+    learned = remember(session, modules=[])
+
+    assert learned is not None
+    assert learned.setup["house_settings"] == {SUN: 20.0}
+    assert learned.setup["room_settings"] == {"hall": {LUX: 5.0}}
+
+    session.set_house_settings({SUN: 1.0})
+    session.set_room_settings("hall", {LUX: 99.0})
+    activate_house(session, profile="tuesday")
+
+    assert dict(session.house_settings) == {SUN: 20.0}
+    assert session.room_settings_for("hall") == {LUX: 5.0}
+
+
+def test_a_written_profiles_deltas_are_left_alone() -> None:
+    """A hand-written profile is an instruction, and an instruction is not learned.
+
+    Its deltas resolve *above* the house, so writing the house's own settings
+    into it would be turning "keep the house quieter than it says" into a value
+    the author can no longer edit -- and the deltas it does carry stay exactly
+    where they were.
+    """
+    session = _session(
+        profiles_=_profile_set((_house_profile("vacation", deltas={QUIET: 90.0}),))
+    )
+    activate_house(session, profile="vacation")
+    session.set_house_settings({SUN: 4.0})
+
+    assert remember(session, modules=[]) is None
+    held = session.profiles.profile("vacation")
+    assert held.setup == {}
+    assert held.deltas == {QUIET: 90.0}
+
+
+def test_a_house_on_no_profile_has_nothing_to_tell() -> None:
+    """The ordinary case, and the one that must not cost anything."""
+    session = _session()
+    session.set_house_settings({SUN: 4.0})
+
+    assert remember(session, modules=[]) is None
+
+
+def test_what_a_profile_learns_carries_the_modules_as_they_now_are() -> None:
+    """A module is the one part the session cannot supply, so it is handed in.
+
+    And it is handed in *as it now is*: a module's own settings can be what a
+    person changed, so the rows a caller passes are the ones the profile ends up
+    holding rather than the ones it was taken with.
+    """
+    session = _session()
+    capture(session, name="tuesday", description="Tuesday morning.")
+    activate_house(session, profile="tuesday")
+
+    learned = remember(
+        session,
+        modules=[{"slug": "hall_motion", "variant": "Evening"}],
+    )
+
+    assert learned is not None
+    assert learned.setup["modules"] == [{"slug": "hall_motion", "variant": "Evening"}]
+
+
+def test_taking_a_name_the_house_already_holds_is_refused_as_a_session_error() -> None:
+    """A refusal crosses the seam as the session's one failure type.
+
+    `live.py` fixes `LiveSessionError` as the thing a websocket handler turns
+    into an error code, so the `ProfileError` underneath must not be the one a
+    caller has to catch; the message is kept verbatim so the code's detail still
+    names what clashed.
+    """
+    session = _session(profiles_=_profile_set((_house_profile("tuesday"),)))
+    with pytest.raises(LiveSessionError, match="'tuesday' is declared twice"):
+        capture(session, name="tuesday", description="Tuesday morning.")
+
+
+# --------------------------------------------------------------------------
+# export_document and import_document: the file
+# --------------------------------------------------------------------------
+
+
+def test_exporting_one_profile_is_that_profiles_own_document() -> None:
+    """No envelope: one profile out is one profile document, byte for byte.
+
+    The document is the frozen `schemas/profile/` shape and not a wrapper around
+    it, so it must be identical to what the profile itself writes -- a wrapper
+    would be a second definition of a profile document, and the two would drift.
+    """
+    held = _profile_set(
+        (
+            _room_profile("evening", "lighting", **{QUIET: 60.0}),
+            _house_profile("vacation"),
+        )
+    )
+    session = _session(profiles_=held)
+
+    document = export_document(session, profile="evening")
+
+    assert document == held.profile("evening").to_document()
+    assert "profiles" not in document
+
+
+def test_exporting_every_profile_carries_the_profiles_and_nothing_house_specific() -> (
+    None
+):
+    """The set form drops `selections` and `house_profile` on purpose.
+
+    A profile names settings and is portable; a selection names *this house's*
+    rooms. A file carrying them would half-apply in a house whose rooms are named
+    differently -- which is the failure `ProfileSet.export_document` refuses by
+    not writing the fields at all, so their absence is the assertion.
+    """
+    session = _session(
+        profiles_=_profile_set(
+            (_room_profile("evening", "lighting"), _house_profile("vacation"))
+        )
+    )
+
+    document = export_document(session)
+
+    assert set(document) == {"profiles"}
+    assert [row["name"] for row in document["profiles"]] == ["evening", "vacation"]
+
+
+def test_exporting_an_unknown_profile_is_refused_by_name() -> None:
+    session = _session(profiles_=_profile_set((_room_profile("evening", "lighting"),)))
+    with pytest.raises(LiveSessionError, match="'night' is not held by this set"):
+        export_document(session, profile="night")
+
+
+def test_an_exported_set_imports_into_a_house_that_holds_nothing() -> None:
+    """The round trip the feature exists for: out of one house, into another."""
+    source = _session(
+        profiles_=_profile_set(
+            (
+                _room_profile("evening", "lighting", **{QUIET: 60.0}),
+                _house_profile("vacation"),
+            )
+        )
+    )
+    target = _session()
+
+    answer = import_document(target, document=export_document(source))
+
+    assert answer["imported"] == ["evening", "vacation"]
+    assert answer["replaced"] == []
+    assert [row["name"] for row in answer["profiles"]] == ["evening", "vacation"]
+    assert target.profiles.profile("evening").deltas == {QUIET: 60.0}
+
+
+def test_a_single_profile_document_imports_as_one_profile() -> None:
+    """The other accepted form: a file that is one profile, not a set of them."""
+    session = _session()
+
+    answer = import_document(
+        session, document=_room_profile("evening", "lighting", **{QUIET: 60.0})
+    )
+
+    assert answer["imported"] == ["evening"]
+    assert answer["profiles"][0]["axis"] == "lighting"
+
+
+def test_importing_refuses_every_name_the_house_already_holds() -> None:
+    """The refusal names all of them, not the first: one rerun fixes the file.
+
+    A message that stopped at the first conflict would turn a file with three
+    clashes into three refusals and three round trips.
+    """
+    session = _session(
+        profiles_=_profile_set(
+            (_room_profile("evening", "lighting"), _room_profile("night", "lighting"))
+        )
+    )
+
+    with pytest.raises(
+        LiveSessionError, match="already holds 'evening', 'night'"
+    ) as refusal:
+        import_document(
+            session,
+            document={
+                "profiles": [
+                    _room_profile("evening", "lighting"),
+                    _room_profile("night", "lighting"),
+                ]
+            },
+        )
+    assert "replace" in str(refusal.value)
+
+
+def test_importing_with_replace_reports_which_ones_it_overwrote() -> None:
+    session = _session(
+        profiles_=_profile_set(
+            (_room_profile("evening", "lighting", **{QUIET: 300.0}),)
+        )
+    )
+
+    answer = import_document(
+        session,
+        document={
+            "profiles": [
+                _room_profile("evening", "lighting", **{QUIET: 60.0}),
+                _room_profile("night", "lighting"),
+            ]
+        },
+        replace=True,
+    )
+
+    assert answer["imported"] == ["night"]
+    assert answer["replaced"] == ["evening"]
+    assert session.profiles.profile("evening").deltas == {QUIET: 60.0}
+
+
+def test_replacing_a_profile_takes_the_selection_that_named_it_off() -> None:
+    """A replaced profile is a *different* profile that reuses the name.
+
+    The axis, the deltas and the kind may all have changed, so a room left
+    pointing at the name would be on a profile whose meaning moved underneath it
+    with nothing on the screen saying so. `ProfileSet.remove` clears the
+    selection, and the assertion is on the engine -- the resolver has to fall
+    back off the profile layer, or the clearing never happened.
+    """
+    session = _session(
+        profiles_=_profile_set((_room_profile("evening", "lighting", **{QUIET: 60.0}),))
+    )
+    activate(session, room_id="hall", axis="lighting", profile="evening")
+    assert (
+        session.engine.settings.resolve(QUIET, RoomScope("hall")).layer is Layer.PROFILE
+    )
+
+    import_document(
+        session,
+        document=_room_profile("evening", "lighting", **{QUIET: 900.0}),
+        replace=True,
+    )
+
+    assert session.profiles.selection("hall") == {}
+    resolved = session.engine.settings.resolve(QUIET, RoomScope("hall"))
+    assert resolved.layer is Layer.BUILTIN
+
+
+def test_a_refused_import_leaves_the_set_exactly_as_it_was() -> None:
+    """The two-pass property: one bad profile refuses the whole file.
+
+    The one-pass version has an outcome that is both "the import was refused" and
+    "the house now holds half of that file", which is the state a person meets
+    once and never trusts again. So the good profile of this pair must be absent
+    afterwards -- and the assertion names it, because a check on the *count* would
+    pass for a set that had swapped one profile for another.
+    """
+    session = _session(profiles_=_profile_set((_room_profile("night", "lighting"),)))
+
+    with pytest.raises(LiveSessionError, match="axis"):
+        import_document(
+            session,
+            document={
+                "profiles": [
+                    _room_profile("evening", "lighting"),
+                    # A room profile with no axis: the schema's own refusal.
+                    {"name": "broken", "kind": "room", "description": "no axis"},
+                ]
+            },
+        )
+
+    assert sorted(session.profiles.profiles) == ["night"]
+
+
+def test_a_document_that_names_one_profile_twice_is_refused() -> None:
+    """Two profiles, one name: which of them the house ends up with is a race."""
+    session = _session()
+
+    with pytest.raises(LiveSessionError, match="names 'evening' more than once"):
+        import_document(
+            session,
+            document={
+                "profiles": [
+                    _room_profile("evening", "lighting", **{QUIET: 60.0}),
+                    _room_profile("evening", "climate"),
+                ]
+            },
+        )
+    assert session.profiles.profiles == {}
+
+
+def test_a_document_whose_profiles_is_not_a_list_is_refused() -> None:
+    session = _session()
+    with pytest.raises(LiveSessionError, match="'profiles' is not a list"):
+        import_document(session, document={"profiles": {"name": "evening"}})
+
+
+def test_a_profile_in_the_set_that_is_not_an_object_is_refused() -> None:
+    session = _session()
+    with pytest.raises(LiveSessionError, match="is not an object"):
+        import_document(session, document={"profiles": ["evening"]})
+
+
+def test_importing_nothing_changes_nothing() -> None:
+    """An empty set file is a no-op, not a rebuild: nothing was added to see."""
+    session = _session(profiles_=_profile_set((_room_profile("night", "lighting"),)))
+
+    answer = import_document(session, document={"profiles": []})
+
+    assert answer == {
+        "imported": [],
+        "replaced": [],
+        "profiles": list(profiles(session)),
+    }
 
 
 # --------------------------------------------------------------------------

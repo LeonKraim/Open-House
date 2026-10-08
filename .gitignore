@@ -29,6 +29,11 @@ secrets.yaml
 # repository's packages read-only beside it at `/openhouse-src`.
 docker/ha-config/
 
+# Node-RED's own state: the flows this machine's editor holds, which include the
+# ones Open House pushed for a module it no longer hosts. Same rule as
+# `ha-config/` -- it is this machine's, not the repository's.
+docker/node-red-data/
+
 # Python
 __pycache__/
 *.py[cod]

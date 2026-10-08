@@ -186,7 +186,19 @@ async function toRoomList(page) {
     else if (!(await page.evaluate(() => window.__deepAll("#tab-rooms").length > 0)))
       return false;
     else await click(page, "#tab-rooms");
-    await sleep(900);
+    // Waited for rather than slept past, and for the same reason every other
+    // wait in this file exists: while Home Assistant is still booting, a
+    // command sent to it is answered *late* rather than never, and a list that
+    // had four seconds of patience reported a rooms tab that had not answered
+    // yet. The retry above still stands, so a tab that really is stuck still
+    // fails -- it just has to be stuck for a minute rather than four seconds.
+    await page
+      .waitForFunction(
+        () => window.__deepAll("open-house-tab-rooms tbody tr").length > 0,
+        null,
+        { timeout: 60000, polling: 500 },
+      )
+      .catch(() => {});
   }
   return page.evaluate(() => window.__deepAll("open-house-tab-rooms tbody tr").length > 0);
 }
@@ -254,9 +266,8 @@ async function openRoom(page, name) {
   }, name);
   if (!target) return false;
   await page.mouse.click(target.x, target.y);
-  for (let attempt = 0; attempt < 24; attempt += 1) {
-    await sleep(500);
-    const settled = await page.evaluate(() => {
+  const settled = () =>
+    page.evaluate(() => {
       const settings = window.__deepAll("open-house-room-settings")[0];
       if (!settings) return false;
       // Settled means one of the three things this page can finish on: the
@@ -271,9 +282,17 @@ async function openRoom(page, name) {
         text.includes("no longer in the house")
       );
     });
-    if (settled) break;
+  // The answer is *whether the page settled*, and this walk used to throw it
+  // away -- it returned "the element is in the document", which is true the
+  // instant the click lands, so a page that was still reading answered as an
+  // open room and every read after it was taken against a blank one. It also
+  // has to be patient: the first commands a freshly booted panel sends are
+  // answered late rather than never, and this page needs two of them.
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await sleep(500);
+    if (await settled()) return true;
   }
-  return page.evaluate(() => window.__deepAll("open-house-room-settings").length > 0);
+  return false;
 }
 
 /** Leave the room settings page and come back to the room list. */
@@ -334,24 +353,42 @@ async function bindSlot(page, slotLabel) {
   await page.mouse.click(at.x, at.y);
   await sleep(1200);
 
+  // The picker is found by its own markup -- the search box it is the only one
+  // to carry -- and not by a `role="group"`, which stopped naming it: two other
+  // groups on this page answer to that now (the "where it applies" menu, and
+  // the import screen's own checks), so the walk was reading a group with no
+  // candidates in it and pressing a Cancel button it does not have.
   const picker = await page.evaluate(() => {
-    const group = window.__deepAll('open-house-room-settings [role="group"]')[0];
-    if (!group) return { present: false };
-    const uses = [...group.querySelectorAll("button")].filter(
-      (b) => (b.textContent ?? "").trim() === "Use this",
+    const card = window
+      .__deepAll("open-house-room-settings .card")
+      .find((c) => c.querySelector('input[aria-label="Search devices"]'));
+    if (!card) return { present: false };
+    const at = (label) => {
+      const button = [...card.querySelectorAll("button")].find(
+        (b) => (b.textContent ?? "").trim() === label,
+      );
+      if (!button) return null;
+      button.scrollIntoView({ block: "center" });
+      const r = button.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    };
+    const buttons = [...card.querySelectorAll("button")].map((b) =>
+      (b.textContent ?? "").trim(),
     );
     return {
       present: true,
-      uses: uses.length,
-      text: window.__deepText(group).replace(/\s+/g, " ").trim().slice(0, 160),
+      uses: buttons.filter((b) => b === "Use this").length,
+      use: at("Use this"),
+      cancel: at("Cancel"),
+      text: window.__deepText(card).replace(/\s+/g, " ").trim().slice(0, 160),
     };
   });
   if (!picker.present) return "no-picker";
   if (picker.uses === 0) {
-    await click(page, 'open-house-room-settings [role="group"] button', { nth: "Cancel" });
+    if (picker.cancel) await page.mouse.click(picker.cancel.x, picker.cancel.y);
     return `no-candidate (${picker.text})`;
   }
-  await click(page, 'open-house-room-settings [role="group"] button', { nth: "Use this" });
+  await page.mouse.click(picker.use.x, picker.use.y);
   await sleep(2200);
   return "bound";
 }
@@ -359,20 +396,24 @@ async function bindSlot(page, slotLabel) {
 /** The Modules card of the open room: one row per installed module. */
 const moduleRows = (page) =>
   page.evaluate(() => {
-    const card = window
-      .__deepAll("open-house-room-settings .card")
-      .find((c) => (c.querySelector("h2")?.textContent ?? "").trim() === "Modules");
-    if (!card) return null;
-    return [...card.querySelectorAll("tbody tr")].map((row) => ({
-      text: window.__deepText(row).replace(/\s+/g, " ").trim(),
-      actions: [...row.querySelectorAll("button")].map((b) =>
-        (b.textContent ?? "").trim(),
-      ),
-      behaviours: [...row.querySelectorAll(".chip")].map((chip) => ({
-        label: (chip.textContent ?? "").trim(),
-        on: chip.classList.contains("ok"),
+    // One card per module, found by the pack it names rather than by a card
+    // headed "Modules": that heading is a section now, and the cards under it
+    // are the room's own -- each `data-pack`, which is also how a person's
+    // click is aimed at one module rather than at a position in a list.
+    const cards = window.__deepAll("open-house-room-settings .card[data-pack]");
+    if (cards.length === 0) return null;
+    return cards.flatMap((card) =>
+      [...card.querySelectorAll("tbody tr")].map((row) => ({
+        text: window.__deepText(row).replace(/\s+/g, " ").trim(),
+        actions: [...row.querySelectorAll("button")].map((b) =>
+          (b.textContent ?? "").trim(),
+        ),
+        behaviours: [...row.querySelectorAll(".chip")].map((chip) => ({
+          label: (chip.textContent ?? "").trim(),
+          on: chip.classList.contains("ok"),
+        })),
       })),
-    }));
+    );
   });
 
 /**
@@ -619,12 +660,15 @@ try {
 
   // -- step 6: every screen renders ----------------------------------------
   //
-  // Eight tabs, and the walk has been through four of them as a side effect.
-  // This visits all eight in the order the sidebar lists them and reports what
-  // each one answered, because "the tab throws" is exactly the sort of break a
-  // walk that only exercises rooms would never see.
+  // Every tab there is, and the walk has been through four of them as a side
+  // effect. This visits them all in the order the sidebar lists them and reports
+  // what each one answered, because "the tab throws" is exactly the sort of break
+  // a walk that only exercises rooms would never see. The list is the sidebar's
+  // (`panel/src/tabs/types.ts`), so a tab added or taken away there belongs here
+  // too -- the Modules tab was removed, and a walk still clicking `#tab-modules`
+  // would report a tab that no longer exists as one that renders nothing.
   log("\n== step 6: every tab");
-  const TABS = ["overview", "rooms", "modules", "profiles", "store", "activity", "health", "import-export"];
+  const TABS = ["overview", "rooms", "house", "profiles", "store", "activity", "health", "dev"];
   for (const tab of TABS) {
     await click(page, `#tab-${tab}`);
     await sleep(1800);

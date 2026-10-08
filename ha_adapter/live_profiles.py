@@ -56,28 +56,34 @@ through the unit those ids resolve to.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import cast
 
 import jsonschema
 
 from engine.behaviours import scope_key
 from engine.behaviours.base import BehaviourScope
-from engine.behaviours.declared import option_key, reach_key
+from engine.behaviours.declared import option_key, reach_key, slot_label_key
 from engine.binding import HouseScope, RoomScope
-from engine.install import InstalledPack
+from engine.install import InstalledPack, InstalledSet
 from engine.profiles import Profile, ProfileError, ProfileKind
 
 from .live import HOUSE, LiveSession, LiveSessionError
 
 __all__ = [
     "activate",
+    "activate_house",
     "active_profiles",
+    "capture",
+    "deactivate_house",
+    "export_document",
     "humanize",
+    "import_document",
     "option_properties",
     "options",
     "profiles",
     "reach_properties",
+    "remember",
     "set_option",
 ]
 
@@ -149,12 +155,18 @@ def set_option(
 ) -> tuple[Mapping[str, object] | None, Mapping[str, object]]:
     """Set one option for a room, or refuse it naming what is wrong.
 
-    The write is an *override* at the room scope, which is the top of the
-    resolver's stack and the layer `engine/config.py` reserves for exactly this:
-    a setting a person changed that outranks the built-in default and the room's
-    own layer without editing either. It is engine state rather than wiring, so
-    this does not rebuild -- the next tick reads the new value through the same
-    resolver the tick after it will.
+    The value is written twice and the two writes are for two different times,
+    which is `LiveSession.remember_setting`'s whole contract. As an *override* on
+    the running engine it is the top of the resolver's stack and takes effect on
+    the next tick; as a value in the session's own settings -- the room's or the
+    house's, following `room_id` -- it survives a rebuild and a restart. Until
+    this was one call it wrote only the override, and the override layer is
+    in-memory by definition (`engine/config.py`), so a person who tuned a pack's
+    duration in the Kitchen lost it the moment any profile was activated, because
+    activating one rebuilds.
+
+    It is engine state rather than wiring, so nothing here rebuilds -- the next
+    tick reads the new value through the same resolver the tick after it will.
 
     The validation is against the schema this module just produced and not
     against a second table of what is legal: a value the schema rejects is a
@@ -176,7 +188,7 @@ def set_option(
             f"the value {value!r} is not accepted for the option {key!r}: {rejection}"
         )
     scope = HouseScope() if room_id == HOUSE else RoomScope(room_id)
-    session.engine.settings.set_override(key, scope, value)
+    session.remember_setting(key, scope, value)
     return options(session, room_id=room_id)
 
 
@@ -260,10 +272,351 @@ def activate(session: LiveSession, *, room_id: str, axis: str, profile: str) -> 
         session.profiles.select(room_id, axis, profile)
     except ProfileError as refusal:
         raise LiveSessionError(str(refusal)) from refusal
+    _rebuilt(session)
+
+
+def activate_house(session: LiveSession, *, profile: str) -> None:
+    """Put the *house* on a house profile, applying the room selections it bundles.
+
+    A house profile is not selected in a room -- it is the thing that selects a
+    profile for each room at once -- so it has a door of its own rather than a
+    room id this path would have to invent. `ProfileSet.select` refuses a house
+    profile by design, and the panel used to reach this by sending the literal
+    room id `"house"`, which is the one room no house has.
+
+    A profile that was *taken* from a house carries that house's settings as well
+    as its selections, and those are written back where a person's own edits are
+    written -- see `_restored`. A profile written by hand carries deltas instead
+    and is applied the way it always was: its deltas resolve above the base for
+    as long as it is in force.
+    """
+    try:
+        held = session.profiles.profile(profile)
+        session.profiles.activate_house_profile(profile)
+    except ProfileError as refusal:
+        raise LiveSessionError(str(refusal)) from refusal
+    if held.snapshot:
+        _restored(session, held)
+    _rebuilt(session)
+
+
+def _restored(session: LiveSession, profile: Profile) -> None:
+    """Put a taken profile's house back, through the doors a person's edits use.
+
+    Every setting here lands where a person's own edit of that part would have
+    landed -- which is the whole difference between a profile that was written
+    and one that was taken. A hand-written profile's deltas are resolved *over*
+    the house's settings, so a key it names is a key nobody can set until the
+    profile comes off; a house put back on a taken profile has to be a house
+    somebody can carry on setting, or the next edit they make would be silently
+    outranked by the profile they took a week ago.
+
+    **The parts are restored whole, not merged.** A pack the house has installed
+    and the snapshot does not is *removed*, a module placed in a room the
+    snapshot does not place it in is moved, a binding the snapshot does not name
+    is taken off. Restoring is putting the house back rather than adding what is
+    missing: a merge would leave everything done since the profile was taken
+    still in force, which is the state somebody takes a profile in order to
+    leave.
+
+    **Rooms are the one thing that cannot be restored from here.** A room is a
+    configuration subentry and this is the session, so the room *list* and each
+    room's own slot bindings are the caller's (see `restore_rooms`) -- what this
+    restores is a room's settings, and only for the rooms that are still here. A
+    room the house has since gained is left alone rather than given settings
+    nobody ever chose for it.
+
+    This rebuilds once per call it makes and `_rebuilt` rebuilds again, which is
+    the price of using the doors a person's edits use rather than writing the
+    fields behind them: a rule stated in two places is a rule that can be stated
+    two ways.
+    """
+    setup = profile.setup
+    session.set_installed(
+        InstalledSet.from_document(_mapping(setup.get("installed"), "installed"))
+    )
+    session.set_house_settings(_mapping(setup.get("house_settings"), "house_settings"))
+    recorded = _nested(setup.get("room_settings"), "room_settings")
+    for room in session.rooms:
+        session.set_room_settings(room.id, recorded.get(room.id, {}))
+
+    bound = _mapping(setup.get("house_bindings"), "house_bindings")
+    for slot in set(session.house_bindings) - set(bound):
+        session.set_house_binding(slot, None)
+    for slot, entity in bound.items():
+        session.set_house_binding(slot, None if entity is None else str(entity))
+
+    placed = _mapping(setup.get("module_rooms"), "module_rooms")
+    for pack in set(session.module_rooms) - set(placed):
+        session.forget_module(pack)
+    for pack, room_id in placed.items():
+        session.place_module(pack, str(room_id))
+
+
+def capture(
+    session: LiveSession,
+    *,
+    name: str,
+    description: str,
+    modules: Sequence[Mapping[str, object]] = (),
+) -> Profile:
+    """Take a profile from the house: the whole house, named.
+
+    The other way a profile comes to exist -- written *for* a house by hand, or
+    read *off* one. Everything a house is configured to be is here: the packs
+    installed into it, its rooms and what each of them answers with, which room
+    profile each room is running on each axis, the house's own settings and each
+    room's, where each module was placed, and every module hosted in it with the
+    configuration that module is on.
+
+    `modules` is the one part the session cannot supply. A hosted module is the
+    integration's -- a record in `modules.json` with its bindings, settings,
+    picks, conditions, flows and its named configurations -- and the session
+    knows only the placement of the *pack* it was made from. So the caller reads
+    the records and hands them in, and they are carried through as they arrived:
+    see `ProfileSet.capture` for why nothing here reshapes them.
+
+    What is deliberately *not* captured is the mode the house is on, and the
+    library of profiles itself. A mode is the one part of a house that is a
+    *moment* rather than a setting -- the session does not persist them and the
+    engine starts fresh on every restart -- so a profile that carried one would
+    put a house back into an instant rather than into a way of being; a
+    profile's `modes` are a hand-written profile's own business and are left
+    empty here. The library is left out because a profile that held the library
+    would hold itself: what a house is *on* is the selections, and those are
+    captured.
+
+    Nothing about the house changes: taking a profile is naming what it is, and
+    putting it back on it is `activate_house`.
+    """
+    setup = _snapshot(session, modules)
+    try:
+        return session.profiles.capture(
+            name=name,
+            description=description,
+            selections=session.profiles.selections(),
+            setup=setup,
+        )
+    except ProfileError as refusal:
+        raise LiveSessionError(str(refusal)) from refusal
+
+
+def remember(
+    session: LiveSession, *, modules: Sequence[Mapping[str, object]]
+) -> Profile | None:
+    """Let the house profile in force learn the house as it now is, when it can.
+
+    A taken profile *is* a house, so a house on one is a house that agrees with
+    it -- until somebody changes something. This is the change being written to
+    the profile as well as to the house, which is what makes a profile something
+    a house can live on rather than a photograph of a house it will be dragged
+    back to: bound a slot, turned a module down, set a room's quiet timeout, and
+    the profile is still the house you are looking at, so switching away and back
+    brings *this* house back and not the one from before the edits.
+
+    **Only what was taken is learned, and only a house that is on it.** There may
+    be no house profile at all, and then there is nothing to tell. A *written*
+    profile with deltas is left alone deliberately: its deltas are an instruction
+    -- "keep the house quieter than it says" -- and an instruction that quietly
+    rewrote itself into the house it was written over would be a rule its author
+    can no longer edit. So this answers `None` for both, and a `Profile` when
+    something was learned.
+
+    **The caller says what the modules are, and this reads nothing.** A hosted
+    module is a file rather than anything the session holds (see `capture`), and
+    the rows go in rather than being looked up here because the one thing that
+    knows where that file lives is the integration. They are the module rows *as
+    they now are* -- a module's own settings can be what changed -- so a caller
+    that has just written a module hands in what it wrote.
+
+    Learning is not saving: this moves the profile in the set the session holds,
+    and `Host.async_save` is what writes the set down. See `_snapshot` for the
+    parts, and `_restored` for the reverse journey.
+    """
+    name = session.profiles.house_profile
+    if name is None:
+        return None
+    held = session.profiles.profile(name)
+    if not held.snapshot:
+        return None
+    try:
+        return session.profiles.retake(
+            name,
+            selections=session.profiles.selections(),
+            setup=_snapshot(session, modules),
+        )
+    except ProfileError as refusal:
+        raise LiveSessionError(str(refusal)) from refusal
+
+
+def _snapshot(
+    session: LiveSession, modules: Sequence[Mapping[str, object]]
+) -> dict[str, object]:
+    """The parts of a house a taken profile is made of, read off the session.
+
+    One function for the two ways a profile comes to hold a house -- `capture`,
+    which takes one, and `remember`, which takes one again -- because the two
+    differ in *when* they are called and not in what a house is. Written twice,
+    they would be two answers to "which parts is a house", free to disagree
+    exactly at the part somebody had just changed.
+
+    The modules are the one part the session cannot supply and the caller does:
+    see `capture`.
+    """
+    state = session.to_state()
+    return {
+        "installed": state["installed"],
+        "rooms": state["rooms"],
+        "house_settings": state["house_settings"],
+        "room_settings": state["room_settings"],
+        "module_rooms": state["module_rooms"],
+        "house_bindings": dict(session.house_bindings),
+        "modules": [dict(row) for row in modules],
+    }
+
+
+def deactivate_house(session: LiveSession) -> None:
+    """Take the house off its house profile. The selections it set stay.
+
+    "The selections stay" is the engine's own rule and not a second one here
+    (`ProfileSet.deactivate_house_profile`): a house profile is a bundle of room
+    profiles, and taking the bundle off is not the same act as moving every room
+    back to whatever it was on before -- a fact this house no longer holds.
+    """
+    session.profiles.deactivate_house_profile()
+    _rebuilt(session)
+
+
+def _rebuilt(session: LiveSession) -> None:
+    """Rebuild, then activate the modes the new selections carry.
+
+    One function because the two steps are one act and three callers perform it:
+    the profile layer is supplied when the engine is built
+    (`build_live_house`'s `profile_settings`), so a profile that changed a
+    setting has to be visible to the very next tick, and a mode a profile
+    activates has to be turned on on the engine the rebuild produced rather than
+    on the one it replaced.
+    """
     session.rebuild()
     for name in session.profiles.modes():
         if name in session.engine.modes.declared:
             session.engine.modes.activate(name)
+
+
+# -- Export and import -------------------------------------------------------
+
+
+def export_document(
+    session: LiveSession, *, profile: str | None = None
+) -> Mapping[str, object]:
+    """One profile, or every profile, as the document the importer reads back.
+
+    The two halves of the feature are one operation with two answers, because
+    both produce *a profile document* -- the frozen `schemas/profile/` shape --
+    and a second function for "all" would be a second place deciding what a
+    profile document is. Without a name the answer is a set document
+    (`{"profiles": [...]}`, `Profile.export`), which is the form `import_document`
+    reads back unchanged.
+
+    Nothing here reads a room: a profile names settings, not this house's
+    hardware, which is what makes an export portable.
+    """
+    try:
+        return session.profiles.export_document(profile)
+    except ProfileError as refusal:
+        raise LiveSessionError(str(refusal)) from refusal
+
+
+def import_document(
+    session: LiveSession, *, document: Mapping[str, object], replace: bool = False
+) -> Mapping[str, object]:
+    """Add the profiles a document names, answering what was added and replaced.
+
+    **Every document is validated before any of them is applied.** The set is
+    changed in two passes -- parse them all, then write them all -- because the
+    one-pass version has a failure mode a person would meet exactly once and
+    never trust again: a file whose third profile is malformed would leave the
+    first two imported and report a failure, so "the import was refused" and "the
+    house is now half of that file" would both be true.
+
+    A name the house already holds is refused unless `replace` is set, and the
+    refusal names every conflict rather than the first. A *replacement* goes
+    through `ProfileSet.remove`, which takes any selection that named the old
+    profile off with it, so a room is never left pointing at a profile whose axis
+    has changed underneath it.
+    """
+    documents = _profile_documents(document)
+    parsed = _parsed(session, documents)
+    names = [profile.name for profile in parsed]
+    duplicated = sorted({name for name in names if names.count(name) > 1})
+    if duplicated:
+        raise LiveSessionError(
+            f"the document names {_names(duplicated)} more than once"
+        )
+    held = session.profiles.profiles
+    conflicts = sorted(name for name in names if name in held)
+    if conflicts and not replace:
+        raise LiveSessionError(
+            f"this house already holds {_names(conflicts)}; "
+            "import again with replace set to overwrite them"
+        )
+    for name in conflicts:
+        session.profiles.remove(name)
+    for entry in documents:
+        session.profiles.add(entry)
+    if names:
+        _rebuilt(session)
+    return {
+        "imported": [name for name in names if name not in conflicts],
+        "replaced": conflicts,
+        "profiles": list(profiles(session)),
+    }
+
+
+def _profile_documents(
+    document: Mapping[str, object],
+) -> tuple[Mapping[str, object], ...]:
+    """The profile documents a file holds, in either accepted form.
+
+    A file is either one profile -- what "export this profile" writes, and the
+    shape a person is most likely to be handed by somebody else -- or a set of
+    them, what "export all profiles" writes. The two are told apart by the set's
+    own key, which is also the key `ProfileSet.to_document` persists under, so a
+    state file is importable as-is.
+    """
+    held = document.get("profiles")
+    if held is None:
+        return (document,)
+    if not isinstance(held, list):
+        raise LiveSessionError("the document's 'profiles' is not a list")
+    for entry in held:
+        if not isinstance(entry, Mapping):
+            raise LiveSessionError("a profile in the document is not an object")
+    return tuple(cast("list[Mapping[str, object]]", held))
+
+
+def _parsed(
+    session: LiveSession, documents: Sequence[Mapping[str, object]]
+) -> tuple[Profile, ...]:
+    """Every document parsed against the frozen schema, or a refusal naming one.
+
+    Parsing is the same act `ProfileSet.add` performs, done here first so that a
+    refusal happens before anything in the set has changed.
+    """
+    parsed: list[Profile] = []
+    for index, entry in enumerate(documents):
+        try:
+            parsed.append(
+                Profile.from_document(entry, schema=session.profile_schema, index=index)
+            )
+        except ProfileError as refusal:
+            raise LiveSessionError(str(refusal)) from refusal
+    return tuple(parsed)
+
+
+def _names(names: Sequence[str]) -> str:
+    """The names as a sentence reads them, because a refusal is read by a person."""
+    return ", ".join(repr(name) for name in names)
 
 
 # --------------------------------------------------------------------------
@@ -329,7 +682,9 @@ def _declarations(session: LiveSession, room_id: str) -> dict[str, dict[str, obj
             if (unit := units.get(behaviour_id)) is not None
             and (slot := getattr(unit, "action_slot", None)) is not None
         )
-        for key, node in reach_properties(pack, acting).items():
+        for key, node in reach_properties(
+            pack, acting, name_of=slot_names(session, pack)
+        ).items():
             declared.setdefault(key, node)
     return {key: declared[key] for key in sorted(declared)}
 
@@ -435,6 +790,14 @@ def pack_option_keys(session: LiveSession, record: InstalledPack) -> tuple[str, 
     `options`, its units' own defaults, and the `reach.<slot>` checkboxes derived
     from the roles its behaviours act through; all three land in the form, so all
     three belong to the card.
+
+    A **slot rule** (`ha_adapter.slot_rules`) is deliberately *not* here, and it
+    is the one setting a module holds that is not: this is the list of keys a form
+    draws, and a rule is drawn by the slot row that owns it rather than as a field
+    of its own. Its keys are still settings, so a profile captures and restores
+    them with the rest of the room's (`_snapshot` reads `LiveSession.to_state`,
+    which carries the layers whole) -- which is the property that matters, and the
+    one a list of *form* keys was never what provided.
     """
     prefix = option_key(record.name, "")
     units = session.engine.behaviours
@@ -455,7 +818,63 @@ def pack_option_keys(session: LiveSession, record: InstalledPack) -> tuple[str, 
     return tuple(keys)
 
 
-def reach_properties(pack: str, slots: Iterable[str]) -> dict[str, dict[str, object]]:
+def slot_names(session: LiveSession, pack: str) -> Callable[[str], str | None]:
+    """A reader for the names a person has given one module's slots.
+
+    The label half of the per-module, per-slot override (`ha_adapter.live_modules
+    .set_slot`), which is why this returns a *reader* rather than a mapping: the
+    names live in the resolver's own namespace (`module.<pack>.slot.<slot>.label`)
+    and the caller has the slot names, so one callable answers for whichever slot
+    it is asked about.
+
+    Read from the session's recorded settings rather than from the live resolver,
+    because the question is "what did a person call this" and only the recorded
+    layer holds a decision -- the resolver would answer with the slot's derivation
+    for a slot nobody has named, which is the fallback and not a name. The scope
+    is where `set_slot` records it: the module's own placement, the house's for a
+    module put in the house.
+
+    A module with no recorded placement yet is searched at house scope and then
+    every room's, in room order, because a label is display-only: a name written
+    before the placement was stored still reads back, and the search is
+    deterministic, so a second answer would be a curiosity rather than a wrong
+    name on a checkbox.
+    """
+    placed = session.module_room(pack)
+
+    def name_of(slot: str) -> str | None:
+        key = option_key(pack, slot_label_key(slot))
+        if placed is not None:
+            scope: HouseScope | RoomScope = (
+                HouseScope() if placed == HOUSE else RoomScope(placed)
+            )
+            return _recorded_name(session, key, scope)
+        named = _recorded_name(session, key, HouseScope())
+        if named is not None:
+            return named
+        for room in session.rooms:
+            named = _recorded_name(session, key, RoomScope(room.id))
+            if named is not None:
+                return named
+        return None
+
+    return name_of
+
+
+def _recorded_name(
+    session: LiveSession, key: str, scope: HouseScope | RoomScope
+) -> str | None:
+    """The string recorded for `key` at `scope`, or nothing when none is."""
+    value = session.setting(key, scope)
+    return value if isinstance(value, str) and value else None
+
+
+def reach_properties(
+    pack: str,
+    slots: Iterable[str],
+    *,
+    name_of: Callable[[str], str | None] | None = None,
+) -> dict[str, dict[str, object]]:
     """One checkbox per role a pack's behaviours act through, keyed and typed.
 
     The control the phrase "the user could also set ... that he only want ... the
@@ -483,10 +902,20 @@ def reach_properties(pack: str, slots: Iterable[str]) -> dict[str, dict[str, obj
     `boolean` and defaulting true, which is what makes this additive: every pack
     installed before this existed reads every role as reached and behaves exactly
     as it did.
+
+    `name_of` is the per-module label override, when the caller has a session to
+    read one from (`slot_names`): a module whose person has renamed the role it
+    acts through shows that name -- "Act on Reading lamp" beside a checkbox that
+    would otherwise say "Act on light group" -- because the name a person gave is
+    the name the control about that role should carry. It is *not* lowercased the
+    way the derived label is: a name a person typed is written the way they wrote
+    it, and `humanize`'s lowering is a property of this fallback rather than of a
+    name.
     """
     properties: dict[str, dict[str, object]] = {}
     for slot in sorted(set(slots)):
-        label = humanize(slot).lower()
+        named = None if name_of is None else name_of(slot)
+        label = named if named is not None else humanize(slot).lower()
         properties[option_key(pack, reach_key(slot))] = {
             "type": "boolean",
             "title": f"Act on {label}",
@@ -707,6 +1136,31 @@ def _active(profile: Profile, selected: set[str], house_profile: str | None) -> 
     if profile.kind is ProfileKind.ROOM:
         return profile.name in selected
     return profile.name == house_profile
+
+
+def _mapping(value: object, name: str) -> Mapping[str, object]:
+    """One of a snapshot's own documents, or the empty mapping when it has none.
+
+    A part a house did not have is absent rather than empty, and absent reads as
+    empty here: a house that hosted no modules, had nothing installed or had set
+    nothing had exactly that, and restoring it is restoring nothing. A value that
+    is there and is not an object is a snapshot that was not written by this
+    build, and `LiveSessionError` is the type a websocket handler already turns
+    into an error code.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise LiveSessionError(f"a taken profile's {name!r} is not an object")
+    return cast("Mapping[str, object]", value)
+
+
+def _nested(value: object, name: str) -> Mapping[str, Mapping[str, object]]:
+    """`_mapping` one level deeper: room ids to that room's recorded values."""
+    return {
+        str(room): _mapping(values, name)
+        for room, values in _mapping(value, name).items()
+    }
 
 
 def humanize(name: str) -> str:

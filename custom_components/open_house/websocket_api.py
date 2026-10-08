@@ -38,19 +38,32 @@ error field would be one every screen would have to remember to check.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
+import yaml
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
+from homeassistant.util import dt as dt_util
 
-from ha_adapter import live_export, live_modules, live_profiles
+from engine.profiles import ProfileError
+from ha_adapter import (
+    live_export,
+    live_modules,
+    live_profiles,
+    module_definitions,
+    module_host,
+    module_records,
+    pack_authoring,
+)
 from ha_adapter.live import HOUSE, LiveSessionError
+from ha_adapter.module_definitions import ModuleDefinition
 
-from . import views
+from . import dev_authoring, modules, node_red, views
 from .const import DOMAIN, ENGINE_API_FALLBACK, VERSION
 from .host import OpenHouseHost, single_host
 
@@ -83,19 +96,49 @@ MODULE_UNINSTALL = "open_house/modules/uninstall"
 MODULE_SET_ENABLED = "open_house/modules/set_enabled"
 MODULE_SET_BEHAVIOUR_ENABLED = "open_house/modules/set_behaviour_enabled"
 MODULE_SET_BEHAVIOUR_SCOPE = "open_house/modules/set_behaviour_scope"
+MODULE_SET_BEHAVIOUR_PRIORITY = "open_house/modules/set_behaviour_priority"
+MODULE_SET_SLOT = "open_house/modules/set_slot"
+MODULE_SET_SLOT_RULE = "open_house/modules/set_slot_rule"
+SLOT_SET_PARTS = "open_house/slots/set_parts"
 MODULES_LIST = "open_house/modules/list"
 HOUSE_SCOPE = "open_house/house/scope"
 PROFILES_LIST = "open_house/profiles/list"
 PROFILE_ACTIVATE = "open_house/profiles/activate"
+PROFILE_ACTIVATE_HOUSE = "open_house/profiles/activate_house"
+PROFILE_CAPTURE = "open_house/profiles/capture"
+PROFILE_RENAME = "open_house/profiles/rename"
+PROFILE_REMOVE = "open_house/profiles/remove"
+PROFILE_DEACTIVATE_HOUSE = "open_house/profiles/deactivate_house"
+PROFILE_EXPORT = "open_house/profiles/export"
+PROFILE_IMPORT = "open_house/profiles/import"
 STORE_INDEX = "open_house/store/index"
 STORE_INSTALL = "open_house/store/install"
 ACTIVITY_LIST = "open_house/activity/list"
 ACTIVITY_SUBSCRIBE = "open_house/activity/subscribe"
 HEALTH_LIST = "open_house/health/list"
-EXPORT_DOCUMENT = "open_house/import_export/export"
-IMPORT_PREVIEW = "open_house/import_export/preview"
-IMPORT_APPLY = "open_house/import_export/apply"
 DASHBOARD_GENERATE = "open_house/dashboard/generate"
+DEV_SOURCES = "open_house/dev/sources"
+DEV_READ = "open_house/dev/read"
+DEV_SAVE = "open_house/dev/save"
+DEV_INSTALL = "open_house/dev/install"
+DEV_EXPORT = "open_house/dev/export"
+MODULES_HOSTED = "open_house/modules/hosted"
+MODULES_READ = "open_house/modules/read"
+MODULES_HOST = "open_house/modules/host"
+MODULES_SETTINGS = "open_house/modules/settings"
+MODULES_EDIT = "open_house/modules/edit"
+MODULES_STORE = "open_house/modules/store"
+MODULES_DEFINE = "open_house/modules/define"
+MODULES_DEPLOY = "open_house/modules/deploy"
+MODULES_REMOVE = "open_house/modules/remove"
+MODULES_DETACH = "open_house/modules/detach"
+MODULES_UNHOST = "open_house/modules/unhost"
+MODULES_EXPORT = "open_house/modules/export"
+MODULES_IMPORT = "open_house/modules/import"
+MODULES_CONFIG_SWITCH = "open_house/modules/configs/switch"
+MODULES_CONFIG_ADD = "open_house/modules/configs/add"
+MODULES_CONFIG_RENAME = "open_house/modules/configs/rename"
+MODULES_CONFIG_REMOVE = "open_house/modules/configs/remove"
 
 #: The error code a non-admin is refused with. Named here rather than inlined so
 #: the panel's own constant (`API_DOMAIN` plus `unauthorized`) has one spelling on
@@ -113,6 +156,11 @@ NOT_READY = "not_ready"
 NOT_FOUND = "not_found"
 #: A value the caller sent is wrong on its merits, or the request is malformed.
 INVALID_FORMAT = "invalid_format"
+#: The write was made from a page rendered before the house was moved onto
+#: another profile. Its own code because the panel does not treat it as a failed
+#: edit: nothing was written, nothing is worth retrying, and the page it came from
+#: is the thing that is out of date -- see `_stale`.
+STALE_PAGE = "stale_page"
 
 #: `hass.data` key holding whether the commands have been registered. They are
 #: registered once per process rather than per entry, because a websocket command
@@ -198,6 +246,39 @@ def _host_or_error(
     return host
 
 
+def _stale(
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+    host: OpenHouseHost,
+) -> bool:
+    """Whether a write came from a page the house has moved out from under.
+
+    A page renders the house from one revision and sends that number back with
+    everything it writes. A *profile* is what moves the revision (`engine/profiles.py`
+    counts the moves): switching a house profile puts a whole other house in place
+    -- other settings, other bindings, other module answers -- and a page that was
+    drawn before the switch is drawn from a house that no longer exists. Writing
+    what it holds would be the pre-switch answers landing over the profile
+    somebody just put on, which is the bug this exists to stop: the page has no
+    way to know, so it is told (`stale_page`) and reloads.
+
+    Absent is not stale. A write that carries no revision is a write from
+    something that is not a page -- the CLI, an automation, a test -- and it is
+    answered rather than refused, because the number is a claim about a *screen*
+    and a caller that never rendered one makes no claim to check.
+    """
+    sent = msg.get("revision")
+    if sent is None or int(sent) == host.session.revision:
+        return False
+    connection.send_error(
+        msg["id"],
+        STALE_PAGE,
+        "this page was written before the house was put on another profile; "
+        "reload it and make the change again",
+    )
+    return True
+
+
 def _error(
     connection: websocket_api.ActiveConnection, msg: dict[str, Any], refusal: Exception
 ) -> None:
@@ -258,6 +339,13 @@ async def ws_capabilities(
                 else host.session.vocabulary.engine_api_version
             ),
             needs_setup=not _house_exists(hass),
+            # **The address a browser opens, not the one Home Assistant pushes
+            # to.** They are two strings for one editor and only one of them
+            # resolves outside this stack, so a link built from the other is a
+            # link that goes nowhere -- `_node_red_url` is the one the rows use,
+            # and this is the same answer for everything on the screen that has
+            # no row yet.
+            node_red_url=_node_red_url(hass),
         ),
     )
 
@@ -426,6 +514,7 @@ async def ws_room_delete(
         vol.Required("room_id"): str,
         vol.Required("slot"): str,
         vol.Required("entity_id"): str,
+        vol.Optional("revision"): int,
     }
 )
 @websocket_api.async_response
@@ -440,7 +529,7 @@ async def ws_room_bind(
     room's, because that is the binding this command would displace.
     """
     host = _host_or_error(connection, msg)
-    if host is None:
+    if host is None or _stale(connection, msg, host):
         return
     house_scope = msg["room_id"] == HOUSE
     room = host.room(msg["room_id"])
@@ -473,6 +562,7 @@ async def ws_room_bind(
         vol.Required("room_id"): str,
         vol.Required("slot"): str,
         vol.Required("entity_id"): str,
+        vol.Optional("revision"): int,
     }
 )
 @websocket_api.async_response
@@ -488,7 +578,7 @@ async def ws_room_replace(
     field every screen has to know to ignore.
     """
     host = _host_or_error(connection, msg)
-    if host is None:
+    if host is None or _stale(connection, msg, host):
         return
     await _bind(
         connection, msg, hass, host, msg["room_id"], msg["slot"], msg["entity_id"]
@@ -500,6 +590,7 @@ async def ws_room_replace(
         vol.Required("type"): ROOM_UNBIND,
         vol.Required("room_id"): str,
         vol.Required("slot"): str,
+        vol.Optional("revision"): int,
     }
 )
 @websocket_api.async_response
@@ -509,7 +600,7 @@ async def ws_room_unbind(
 ) -> None:
     """Leave a slot with nothing in it."""
     host = _host_or_error(connection, msg)
-    if host is None:
+    if host is None or _stale(connection, msg, host):
         return
     try:
         await host.async_set_binding(msg["room_id"], msg["slot"], None)
@@ -538,9 +629,11 @@ async def ws_room_candidates(
 ) -> None:
     """The devices the server proposes for a slot, best first.
 
-    `room_id` may be `HOUSE`, for a global slot: there is no room to file the
-    candidates under, so the whole house is the candidate set
-    (`views.candidates`).
+    The list is every device the house holds, for a room's slot as much as for a
+    global one: a room's candidates lead with that room's own devices and carry
+    the rest of the house behind them, so a person can point a room's slot at
+    anything their house has. `room_id` may be `HOUSE`, for a global slot, which
+    belongs to no room and so leads with nothing (`views.candidates`).
     """
     host = _host_or_error(connection, msg)
     if host is None:
@@ -585,6 +678,7 @@ async def ws_room_options_get(
         vol.Required("type"): ROOM_OPTIONS_SET,
         vol.Required("room_id"): str,
         vol.Required("values"): dict,
+        vol.Optional("revision"): int,
     }
 )
 @websocket_api.async_response
@@ -600,7 +694,7 @@ async def ws_room_options_set(
     honest behaviour for a form: the person's next read shows what actually stuck.
     """
     host = _host_or_error(connection, msg)
-    if host is None:
+    if host is None or _stale(connection, msg, host):
         return
     schema: Mapping[str, object] | None = None
     values: Mapping[str, object] = {}
@@ -664,6 +758,11 @@ async def ws_module_install(
     instead of a room's, because the house is the target the person installed
     into and a room detail for a room they did not choose would be the wrong page
     to hand back.
+
+    Installing reads the manifest, the catalog's slot vocabulary and the house
+    schema, so it is an executor job -- the same work `ws_module_uninstall`
+    describes, and the same reason. `partial` carries the keywords, because
+    `async_add_executor_job` forwards positional arguments only.
     """
     host = _host_or_error(connection, msg)
     if host is None:
@@ -673,8 +772,14 @@ async def ws_module_install(
         connection.send_error(msg["id"], NOT_FOUND, f"no pack called {msg['pack']!r}")
         return
     try:
-        live_modules.install(
-            host.session, path, room_id=msg["room_id"], root=host.session.root
+        await hass.async_add_executor_job(
+            partial(
+                live_modules.install,
+                host.session,
+                path,
+                room_id=msg["room_id"],
+                root=host.session.root,
+            )
         )
     except LiveSessionError as refusal:
         _error(connection, msg, refusal)
@@ -715,12 +820,19 @@ async def ws_module_uninstall(
     `room_id` may be the house (`""`), which is where a module put in the whole
     house lives; the reply is then the house's page rather than a room detail,
     for the reason `ws_module_install` gives.
+
+    The removal runs in an executor because it is not a list operation: dropping
+    a pack makes the engine re-check every remaining pack's dependencies, and
+    that reads the catalog -- `catalog/slots.yaml` and the house schema -- which
+    is a file read on the event loop, and Home Assistant named it as one.
     """
     host = _host_or_error(connection, msg)
     if host is None:
         return
     try:
-        live_modules.uninstall(host.session, msg["pack"])
+        await hass.async_add_executor_job(
+            live_modules.uninstall, host.session, msg["pack"]
+        )
     except LiveSessionError as refusal:
         _error(connection, msg, refusal)
         return
@@ -866,6 +978,274 @@ async def ws_module_set_behaviour_scope(
     connection.send_result(msg["id"], installed)
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULE_SET_BEHAVIOUR_PRIORITY,
+        vol.Required("room_id"): str,
+        vol.Required("pack"): str,
+        vol.Required("behaviour"): str,
+        # `int` and not `vol.Coerce(int)`: coercing would accept `"7"` and `7.0`
+        # and refuse neither, and the file format this mirrors refuses both
+        # (`engine/behaviours/declared.py`'s `_priority` takes an `int`). A panel
+        # that posts a string is a panel sending the wrong thing.
+        vol.Required("priority"): int,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_module_set_behaviour_priority(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Rank one behaviour of a pack, so two modules can settle a disagreement.
+
+    The number beside each atom, which arbitration sorts by when two behaviours
+    propose for one device in one tick. It is a preference about *this* house --
+    the pack declares a rank, and its owner is the only one who knows which of
+    two rival modules should win here -- so it is stored with the house settings
+    and survives a restart (`ha_adapter.live_modules.set_behaviour_priority`).
+    Admin-only like the switch beside it: it changes what the house will do next.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        live_modules.set_behaviour_priority(
+            host.session,
+            room_id=msg["room_id"],
+            pack=msg["pack"],
+            behaviour=msg["behaviour"],
+            priority=msg["priority"],
+        )
+    except LiveSessionError as refusal:
+        _error(connection, msg, refusal)
+        return
+    await host.async_save()
+    installed = _installed(host, msg["pack"])
+    if installed is None:
+        connection.send_error(msg["id"], NOT_FOUND, f"no pack called {msg['pack']!r}")
+        return
+    connection.send_result(msg["id"], installed)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULE_SET_SLOT,
+        vol.Required("room_id"): str,
+        vol.Required("pack"): str,
+        vol.Required("slot"): str,
+        # The entity, or `None` to clear the override and fall back to the room's
+        # binding. `vol.Any(str, None)` rather than an optional key, so the two
+        # acts -- "point it here" and "put it back" -- are one command with one
+        # shape, exactly as `open_house/rooms/unbind` is `rooms/bind` with a
+        # nothing in it. The panel sends an explicit `null` for the reset.
+        vol.Required("entity_id"): vol.Any(str, None),
+        # The name this module calls the slot, or `None` to fall back to the
+        # slot's own. Display-only: nothing in the engine reads it.
+        vol.Required("label"): vol.Any(str, None),
+        # Which part of a split slot this module is on
+        # (`ha_adapter.slot_parts`), or `None` for **not touched**: the panel's
+        # reset clears the *device* override, and a person who has just put this
+        # module on part `a` has not asked for it to be taken off that part by
+        # resetting the device. An empty string is the slot itself, which is the
+        # answer the "which part" control's blank entry sends.
+        vol.Required("part"): vol.Any(str, None),
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_module_set_slot(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Point one of a module's slots at a device of its own, and name it.
+
+    The per-module override: a person may have one module act on a lamp of its
+    own while the room's binding stays what every other module acts on. All three
+    -- the device, the name, and which *part* of a split slot the module is on --
+    are settings, so all three survive a restart and take effect at once
+    (`ha_adapter.live_modules.set_slot`). Admin-only like the switches beside it:
+    it changes which device the house will write to.
+
+    **The modules reaching the slot are built again, and that is the half that
+    used to be missing.** The engine has always honoured the override when it
+    evaluates a pack, but a *hosted* module's own automation is built from the
+    room's bindings (`host.bound_slots_for`), so without this the row said one
+    device and the automation used another -- a control that lies. Any write that
+    moves a slot has to be followed by the same rebuild a rebinding does.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        live_modules.set_slot(
+            host.session,
+            room_id=msg["room_id"],
+            pack=msg["pack"],
+            slot=msg["slot"],
+            entity_id=msg["entity_id"],
+            label=msg["label"],
+            part=msg["part"],
+        )
+    except LiveSessionError as refusal:
+        _error(connection, msg, refusal)
+        return
+    await host.async_slot_changed(msg["room_id"], msg["slot"])
+    installed = _installed(host, msg["pack"])
+    if installed is None:
+        connection.send_error(msg["id"], NOT_FOUND, f"no pack called {msg['pack']!r}")
+        return
+    connection.send_result(msg["id"], installed)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULE_SET_SLOT_RULE,
+        vol.Required("room_id"): str,
+        vol.Required("pack"): str,
+        vol.Required("slot"): str,
+        # The kind, or `""` to take the rule back off the row. Empty rather than
+        # `null` for the same reason the switches use it: the *absence of a kind*
+        # is what "no rule" means (`ha_adapter.slot_rules`), so clearing is the
+        # same one write as setting, with nothing in it.
+        vol.Required("kind"): str,
+        # Whatever that kind needs, in the shape it stores: a template's text, a
+        # condition's builder config (a mapping or a list of them), a flow's own
+        # entity id, a script's id. One key rather than four, because only the
+        # kind's own entry is ever read and the four shapes are the four kinds'
+        # business -- `slot_rules.rule_from` is where they are told apart.
+        vol.Required("value"): vol.Any(str, dict, list, None),
+        # What should start a *script* rule: a script runs when something calls
+        # it, and nothing here can work out what that should be. Empty for the
+        # other three, which find their own events.
+        vol.Required("when"): [str],
+        # The device a *condition* rule gates. A condition answers yes or no and
+        # never an entity, so this is what it is a question *about*, and it is
+        # required for that kind alone.
+        vol.Required("device"): vol.Any(str, None),
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_module_set_slot_rule(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Put logic on one of a module's slots, instead of a device of its own.
+
+    The "Set it to" half of a slot row, and the sibling of `set_slot`: that one
+    says *which* device the module reaches through the slot, and this one says the
+    device is to be worked out -- by a template, a script, a flow, or a condition
+    that decides whether it is used at all (`ha_adapter.slot_rules`).
+
+    **The rule is written here and *decided* elsewhere.** This command records the
+    logic and rebuilds the modules reaching the slot; `custom_components
+    .open_house.slot_rules` is what listens for the world moving and writes the
+    device the logic worked out. The two are separate because a slot is a standing
+    fact rather than a run: nothing in this call can know when a template's
+    entities will next change, and the watcher is started before any of this can
+    be clicked.
+
+    Deliberately *not* carrying a revision, matching `MODULE_SET_SLOT` beside it
+    and for the same reason: a slot's device is a setting the running house applies
+    at once and the panel reads back, not a document whose staleness has to be
+    detected. `/stale-page-revision-guard` is about a page holding a *house* that
+    a profile switch replaced, and neither of these two commands can do that.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        live_modules.set_slot_rule(
+            host.session,
+            room_id=msg["room_id"],
+            pack=msg["pack"],
+            slot=msg["slot"],
+            kind=msg["kind"],
+            value=msg["value"],
+            when=msg["when"],
+            device=msg["device"],
+        )
+    except LiveSessionError as refusal:
+        _error(connection, msg, refusal)
+        return
+    # The save, the rebuild, and the *timing*: writing a rule takes the slot's
+    # device override away from the person (`set_slot_rule`), so the modules
+    # reaching this slot have to be built again now -- on the room's binding --
+    # rather than left acting on a device the rule has not decided about yet. The
+    # watcher's first evaluation then moves them, seconds later at the most.
+    await host.async_slot_changed(msg["room_id"], msg["slot"])
+    installed = _installed(host, msg["pack"])
+    if installed is None:
+        connection.send_error(msg["id"], NOT_FOUND, f"no pack called {msg['pack']!r}")
+        return
+    connection.send_result(msg["id"], installed)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): SLOT_SET_PARTS,
+        # The slot being split, by its binding key: `light_group`, or
+        # `fridge_guard__fridge_contact` for a pack's own device. A key and not a
+        # room-scoped name, because the record is the *house's* -- a part is a word
+        # the whole house carries, and the same split is what every room's page
+        # draws.
+        vol.Required("slot"): str,
+        # What to do to it. One command rather than three because the three are
+        # one control -- a row of parts with an add, a rename and a delete -- and
+        # the refusals below are about the part's *use*, which is one question.
+        vol.Required("action"): vol.In(["add", "rename", "remove"]),
+        # The part's name, which is what the row shows and what a module names.
+        vol.Required("name"): str,
+        # The new name, for `rename` alone. Empty for the other two, which do not
+        # have one.
+        vol.Optional("new_name", default=""): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_slot_set_parts(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Split a slot into parts, or rename or rejoin one.
+
+    The control a person uses to make two modules share a role *without* sharing
+    the device -- and the one place a part is made at all
+    (`ha_adapter.slot_parts` says why a part is a binding key rather than a
+    per-module device).
+
+    **A part's name is the key it binds under, so this edits the house's
+    vocabulary.** Adding one is a change to what the house can hold, which is why
+    it goes through the session (`host.async_set_slot_part` ->
+    `LiveSession.set_slot_parts`) and rebuilds; a setting layer alone could not do
+    it, because `engine/binding.py` refuses a binding for a name the vocabulary
+    does not carry.
+
+    Admin-only like the module commands beside it: a part moves which device
+    automations act on. Deliberately *not* carrying a revision, matching
+    `MODULE_SET_SLOT` and for the same reason (`ws_module_set_slot_rule` says
+    why): a part is a setting the running house applies at once, not a document
+    whose staleness has to be detected.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        parts = await host.async_set_slot_part(
+            parent=msg["slot"],
+            action=msg["action"],
+            name=msg["name"],
+            new_name=msg["new_name"],
+        )
+    except LiveSessionError as refusal:
+        _error(connection, msg, refusal)
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "slot": msg["slot"],
+            "parts": [{"name": name} for name in parts.get(msg["slot"], ())],
+        },
+    )
+
+
 @websocket_api.websocket_command({vol.Required("type"): MODULES_LIST})
 @websocket_api.async_response
 @_admin
@@ -912,12 +1292,22 @@ async def ws_house_scope(
 async def ws_profiles_list(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
-    """Every profile the house holds."""
+    """Every profile the house holds, and the revision they were read at.
+
+    The revision comes with the list because this is the screen that switches a
+    house profile: it is the one place that knows a switch has happened, and the
+    number is what any page it has open in another tab is checked against. See
+    `_stale`.
+    """
     host = _host_or_error(connection, msg)
     if host is None:
         return
     connection.send_result(
-        msg["id"], {"profiles": list(live_profiles.profiles(host.session))}
+        msg["id"],
+        {
+            "profiles": list(live_profiles.profiles(host.session)),
+            "revision": host.session.revision,
+        },
     )
 
 
@@ -950,6 +1340,273 @@ async def ws_profile_activate(
         return
     await host.async_save()
     _detail(connection, msg, hass, host, msg["room_id"])
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): PROFILE_ACTIVATE_HOUSE, vol.Required("profile"): str}
+)
+@websocket_api.async_response
+@_admin
+async def ws_profile_activate_house(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Put the house on a house profile. A settings change, not an actuation.
+
+    A door of its own rather than a room id the room path would have to invent:
+    a house profile is not selected *in* a room, it is the thing that selects a
+    profile for each room at once, and `ProfileSet.select` refuses it by design.
+
+    A profile that was *written* by hand is the whole of it: its deltas resolve
+    over the house and its selections are made, both inside
+    `live_profiles.activate_house`. One that was *taken* from a house carries
+    that house -- its rooms, its modules and its stores -- and putting it back is
+    the second call, which is the host's because three of the four places a house
+    is kept are Home Assistant's rather than the session's.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        live_profiles.activate_house(host.session, profile=msg["profile"])
+        held = host.session.profiles.profile(msg["profile"])
+        if held.snapshot:
+            await host.async_restore_setup(held)
+    except LiveSessionError as refusal:
+        _error(connection, msg, refusal)
+        return
+    await host.async_save()
+    connection.send_result(
+        msg["id"], {"profiles": list(live_profiles.profiles(host.session))}
+    )
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): PROFILE_CAPTURE, vol.Required("name"): str}
+)
+@websocket_api.async_response
+@_admin
+async def ws_profile_capture(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Take a profile from the house: the whole house, named.
+
+    The other way a profile comes to exist, and the half the panel never had: a
+    profile could be written as a pack's data or read back out of a file, and
+    neither is something a person with a house in front of them can do. This
+    makes one out of the house they have -- the packs installed, the rooms and
+    what each answers with, every module hosted with the configuration it is on,
+    and the settings of the house and of each room.
+
+    The hosted modules are read here and handed in, because they are a file
+    rather than anything the session holds: a module is the integration's, and
+    the session knows only where its pack was placed.
+
+    The house then goes on it, which for a profile taken from that very house is
+    no change at all -- and is the point: "this is what my house is" is a naming
+    act, and the name is what they switch away from and back to later.
+
+    Nothing here resolves a profile. What the house is travels to the document
+    the way the house keeps it, and it is `activate_house` that writes it back.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        name = _profile_name(msg["name"])
+        records = await modules.async_records(hass)
+        live_profiles.capture(
+            host.session,
+            name=name,
+            description=_taken_note(),
+            modules=[record.as_json() for record in records],
+        )
+        live_profiles.activate_house(host.session, profile=name)
+    except LiveSessionError as refusal:
+        _error(connection, msg, refusal)
+        return
+    await host.async_save()
+    connection.send_result(
+        msg["id"], {"profiles": list(live_profiles.profiles(host.session))}
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): PROFILE_RENAME,
+        vol.Required("profile"): str,
+        vol.Required("to"): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_profile_rename(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Rename a profile, keeping every room that is on it on it.
+
+    A rename and not a remove-and-add, which is the difference a person would
+    feel: a removal takes every selection that named the profile off with it, so
+    the house would come out of a rename with its rooms on nothing.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        host.session.profiles.rename(msg["profile"], _profile_name(msg["to"]))
+    except ProfileError as refusal:
+        _error(connection, msg, _as_session_error(refusal))
+        return
+    host.reload_session()
+    await host.async_save()
+    connection.send_result(
+        msg["id"], {"profiles": list(live_profiles.profiles(host.session))}
+    )
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): PROFILE_REMOVE, vol.Required("profile"): str}
+)
+@websocket_api.async_response
+@_admin
+async def ws_profile_remove(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Drop a profile, and take everything that named it off with it.
+
+    The rule is the engine's (`ProfileSet.remove`): a selection names a profile,
+    so removing the profile removes the selections rather than leaving a room
+    pointing at a name the set no longer holds. A house profile in force is
+    released, and the room selections it set stay -- the same "off is not put
+    everything back" the deactivate door spells.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        host.session.profiles.remove(msg["profile"])
+    except ProfileError as refusal:
+        _error(connection, msg, _as_session_error(refusal))
+        return
+    host.reload_session()
+    await host.async_save()
+    connection.send_result(
+        msg["id"], {"profiles": list(live_profiles.profiles(host.session))}
+    )
+
+
+def _as_session_error(refusal: ProfileError) -> LiveSessionError:
+    """A profile refusal as the session's one failure type. See `live_profiles`."""
+    return LiveSessionError(str(refusal))
+
+
+def _profile_name(raw: str) -> str:
+    """A profile name made out of the words a person typed.
+
+    Lossy on purpose and in the open, exactly as a module's name is: the name is
+    the identifier every selection is made by and the schema has its own pattern
+    for what an identifier may hold, so "Christmas Lights" is `christmas_lights`
+    and the label a person reads is that name humanised back.
+
+    The slug rule is `module_records.slug`'s and not a second copy of it -- a
+    name that is not a name is refused in the same place by the same rule -- and
+    only the refusal is reworded, because a person calling a profile "!!!" should
+    be told what is wrong with a *profile* name.
+    """
+    try:
+        return module_records.slug(raw)
+    except pack_authoring.AuthoringError as refusal:
+        raise LiveSessionError(
+            f"{raw!r} is not a name a profile can be called: a profile name is "
+            "lower case letters, digits and underscores, beginning with a letter"
+        ) from refusal
+
+
+def _taken_note() -> str:
+    """What a taken profile says it is, in the list of them.
+
+    A date and not just a sentence, because the one question a person asks of two
+    profiles taken a week apart is which is which.
+    """
+    return f"What this house was on and set to on {dt_util.now().date().isoformat()}."
+
+
+@websocket_api.websocket_command({vol.Required("type"): PROFILE_DEACTIVATE_HOUSE})
+@websocket_api.async_response
+@_admin
+async def ws_profile_deactivate_house(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Take the house off its house profile, leaving the room selections it set."""
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    live_profiles.deactivate_house(host.session)
+    await host.async_save()
+    connection.send_result(
+        msg["id"], {"profiles": list(live_profiles.profiles(host.session))}
+    )
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): PROFILE_EXPORT, vol.Optional("profile"): str}
+)
+@websocket_api.async_response
+@_admin
+async def ws_profile_export(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """One profile, or every profile, as a document a person can keep or share.
+
+    `profile` is absent for the whole set, which is the "export all profiles"
+    half of the feature; naming one is "export this profile". Both answer the
+    frozen `schemas/profile/` shape -- a set document is a list of them -- so the
+    importer has one form to read.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        document = live_profiles.export_document(
+            host.session, profile=msg.get("profile")
+        )
+    except LiveSessionError as refusal:
+        _error(connection, msg, refusal)
+        return
+    connection.send_result(msg["id"], {"document": document})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): PROFILE_IMPORT,
+        vol.Required("document"): dict,
+        vol.Optional("replace", default=False): bool,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_profile_import(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Add the profiles a document names, then write down what the session became.
+
+    The store is written *after* the import rather than as part of it, because
+    the import is the session's own act and this module's job is to make it
+    survive a restart. A refusal is reported before anything is written, and the
+    importer validates every profile before applying any of them, so a bad file
+    leaves no half-imported set on either side of that seam.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        result = live_profiles.import_document(
+            host.session, document=msg["document"], replace=msg["replace"]
+        )
+    except LiveSessionError as refusal:
+        _error(connection, msg, refusal)
+        return
+    await host.async_save()
+    connection.send_result(msg["id"], result)
 
 
 # -- Store ------------------------------------------------------------------
@@ -990,6 +1647,17 @@ async def ws_store_install(
     install writes the session's installed set and can therefore interleave with
     `automation._tick` if it is moved to a thread. A blocking read on a button
     press is a cost worth paying to keep the engine single-threaded.
+
+    **The other install buttons do move it, and this is the one that does not.**
+    `ws_module_install` and the Dev tab's save both install from an executor,
+    because the read they would otherwise do on the loop is one Home Assistant
+    reports by name, every time. The interleave they accept is a tick that sees
+    a pack before its placement -- a module skipped for one tick, not a wrong
+    decision -- and that was judged the smaller cost. This handler is left as it
+    is because it is the one whose refusals are about a *verified* file and whose
+    ordering a person watches, so the smaller cost was judged the other way
+    round; a reader is owed the fact that the two choices exist rather than the
+    pretence that a rule was never broken.
 
     A refusal from either step is sent as an error code the panel can name.
     `missing` -- no row by that name at that tier -- is `not_found`, because the
@@ -1100,73 +1768,6 @@ async def ws_health_list(
     connection.send_result(msg["id"], {"issues": list(views.health_issues(hass, host))})
 
 
-# -- Import and export ------------------------------------------------------
-
-
-@websocket_api.websocket_command({vol.Required("type"): EXPORT_DOCUMENT})
-@websocket_api.async_response
-@_admin
-async def ws_export_document(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
-    """The house as a frozen export document, carrying no Home Assistant ids."""
-    host = _host_or_error(connection, msg)
-    if host is None:
-        return
-    connection.send_result(
-        msg["id"],
-        live_export.export_document(host.session, registry_ids=_registry_ids(host)),
-    )
-
-
-@websocket_api.websocket_command(
-    {vol.Required("type"): IMPORT_PREVIEW, vol.Required("document"): dict}
-)
-@websocket_api.async_response
-@_admin
-async def ws_import_preview(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
-    """A dry run of an import. Changes nothing, which is what makes it a preview."""
-    host = _host_or_error(connection, msg)
-    if host is None:
-        return
-    connection.send_result(
-        msg["id"], live_export.preview(host.session, msg["document"])
-    )
-
-
-@websocket_api.websocket_command(
-    {
-        vol.Required("type"): IMPORT_APPLY,
-        vol.Required("document"): dict,
-        vol.Optional("snapshot", default=True): bool,
-    }
-)
-@websocket_api.async_response
-@_admin
-async def ws_import_apply(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
-    """Apply, then write down what the session became.
-
-    The store is written *after* the apply rather than as part of it, because the
-    apply is the session's own act and this module's job is to make it survive a
-    restart. A refusal from the import is reported before anything is written, so
-    a document that was rejected leaves no half-applied state on disk.
-    """
-    host = _host_or_error(connection, msg)
-    if host is None:
-        return
-    try:
-        result = live_export.apply(host.session, msg["document"])
-    except LiveSessionError as refusal:
-        _error(connection, msg, refusal)
-        return
-    await host.async_save()
-    connection.send_result(msg["id"], result)
-
-
 # -- Dashboard --------------------------------------------------------------
 
 
@@ -1196,6 +1797,2458 @@ async def ws_dashboard_generate(
     connection.send_result(
         msg["id"], {"created": False, "url_path": f"lovelace/{room.area_id}"}
     )
+
+
+# -- Dev: authoring and export ----------------------------------------------
+#
+# Five commands, and they are one journey rather than five features: `sources`
+# lists what a person may import, `read` says what the importer found in the one
+# they picked, `save` writes the module their decisions made -- and installs it
+# too when the panel asks, which is the difference between its two buttons --
+# `install` puts an already-written module in a room, and `export` goes the other
+# way: a module's behaviours as automations a person can take with them. The
+# split is by *screen*, not by resource: the panel calls `read` again after every
+# change to a decision, and `save` exactly once, at the end.
+
+
+@websocket_api.websocket_command({vol.Required("type"): DEV_SOURCES})
+@websocket_api.async_response
+@_admin
+async def ws_dev_sources(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """What may be imported, and what has already been authored.
+
+    Deliberately answerable with no house: a person who has automations but has
+    not finished the setup flow can still look at what their automations would
+    become, and the one screen that explains what is missing is the one this
+    command serves. Only `read` and the writes need a house, because only they
+    need the vocabulary.
+    """
+    connection.send_result(
+        msg["id"],
+        {
+            "automations": [dict(row) for row in dev_authoring.automations(hass)],
+            "blueprints": [dict(row) for row in await dev_authoring.blueprints(hass)],
+            "saved": await _saved_modules(hass),
+        },
+    )
+
+
+async def _saved_modules(hass: HomeAssistant) -> list[Mapping[str, object]]:
+    """The modules a person has authored, read straight off the directory.
+
+    Not through `_published`, which is cached on a stamp and is the *catalog's*
+    answer to what may be installed: this is the Dev tab's own list of its own
+    output, and a screen that showed a module it had just written only after a
+    cache expiry would look like a save that failed.
+
+    In an executor, because it globs and reads files and the caller is the event
+    loop -- Home Assistant said so in the log ("Detected blocking call to
+    scandir") the first time this screen was opened, and it was right.
+    """
+    root = dev_authoring.packs_root(hass)
+    return await hass.async_add_executor_job(dev_authoring.saved, root)
+
+
+def _nested(document: Mapping[str, Any], *keys: str) -> object:
+    """Walk a document by keys, answering `None` the moment one is missing."""
+    node: object = document
+    for key in keys:
+        if not isinstance(node, Mapping):
+            return None
+        node = node.get(key)
+    return node
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): DEV_READ,
+        vol.Required("kind"): vol.In(("automation", "blueprint", "text")),
+        vol.Optional("key"): str,
+        vol.Optional("text"): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_dev_read(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Read one source, and answer with every decision a person can make about it.
+
+    The reply is `pack_authoring.Analysis` plus the two vocabularies a decision
+    is made against -- the slots a person may bind to, and whether the engine can
+    perform each service the source calls. Sending the vocabularies *with* the
+    reading rather than making the panel ask for them separately is what lets a
+    screen render the whole table from one reply, and what keeps a suggestion and
+    the list it was drawn from from being two answers about one catalog.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        text = await _dev_text(hass, msg)
+    except pack_authoring.AuthoringError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    services, slots = await hass.async_add_executor_job(
+        dev_authoring.reference, host.session
+    )
+    try:
+        source = pack_authoring.read_source(text)
+        analysis = pack_authoring.analyse(source, known_services=services)
+    except pack_authoring.AuthoringError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "analysis": _as_json(analysis, slots),
+            "slots": [
+                {
+                    "name": name,
+                    "domains": list(domains),
+                    "suggested": name == pack_authoring.suggest_slot(domains[0])
+                    if domains
+                    else False,
+                }
+                for name, domains in sorted(slots.items())
+            ],
+            "services": list(services),
+        },
+    )
+
+
+async def _dev_text(hass: HomeAssistant, msg: Mapping[str, Any]) -> str:
+    """The document a `dev/read` or `dev/save` names, as text.
+
+    `text` is the panel's paste box and is taken as given; the other two kinds are
+    read from Home Assistant. Keeping all three behind one function is what makes
+    "a paste, a file and a picker are the same thing to the importer" true rather
+    than aspirational.
+    """
+    kind = str(msg.get("kind"))
+    if kind == "text":
+        text = msg.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise pack_authoring.AuthoringError("there is nothing pasted to read")
+        return text
+    key = msg.get("key")
+    if not isinstance(key, str) or not key:
+        raise pack_authoring.AuthoringError(f"no {kind} was named to read")
+    return await dev_authoring.source_text(hass, kind, key)
+
+
+# -- Hosting a source as a module -------------------------------------------
+#
+# Three commands, and they are the whole of "turn a blueprint into a module":
+# `hosted` lists what the house already runs, `read` answers what one source can
+# be made into, and `host` does it. They are separate from `dev/*` on purpose.
+# The Dev tab's reading is a reading *for a pack* -- it refuses a document with
+# no trigger, and it translates rather than hosts -- whereas these read every
+# source the same way: nothing that can be imported is refused, because nothing
+# is translated. Folding them together would make the pack rules the price of
+# hosting a blueprint.
+
+
+@websocket_api.websocket_command({vol.Required("type"): MODULES_HOSTED})
+@websocket_api.async_response
+@_admin
+async def ws_modules_hosted(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Every module this house hosts, what it publishes, and what it last read.
+
+    The last published value is included because it is the question a person
+    actually has about a module's outputs: "is it publishing anything, and
+    what". An output that has never been written is `null` rather than absent, so
+    the panel can show the output and say it is unknown instead of hiding the row
+    a person is looking for.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    connection.send_result(msg["id"], await _hosted(hass, host))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULES_READ,
+        vol.Required("kind"): vol.In(("automation", "blueprint", "text")),
+        vol.Optional("key"): str,
+        vol.Optional("text"): str,
+        # The person's current input choices, so the candidates offered are the
+        # ones this house could really fill: an entity input's reading is over
+        # the entity they bound, and an unbound one is not offered at all.
+        vol.Optional("bindings", default=dict): dict,
+        # The rows the screen has answered with *logic* -- a condition, a flow or
+        # a script -- for the same reason the bindings are sent: what a row can
+        # publish is asked of the answer it holds, and a cast-answered row is one
+        # more thing a person may publish. A **template** cast is not here,
+        # because it *is* a binding and arrives in `bindings` above.
+        #
+        # Sent for all three or for none. A screen that has read once sends its
+        # own lists -- which may be empty, because a person who has just switched
+        # their only cast row back to a value means exactly that -- and a screen
+        # that has not read yet sends nothing, so the module's own record stands
+        # (the same fallback `bindings` makes, and for the same reason).
+        vol.Optional("casts", default=None): vol.Any(None, [str]),
+        vol.Optional("flows", default=None): vol.Any(None, [str]),
+        vol.Optional("scripts", default=None): vol.Any(None, [str]),
+        # **Reading a module this house already runs, rather than a new source.**
+        # Naming one here is what opens the import screen *on* a module: the
+        # document is the module's own rather than anything sent, and the reply
+        # carries back everything that was decided about it, so the same menu a
+        # person sees importing a blueprint is drawn over a module that is already
+        # installed (`modules._module_to_edit`).
+        vol.Optional("module"): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_modules_read(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Read one source as something to host, and answer every decision it allows.
+
+    Three answers in one reply, because the import screen is one screen: what the
+    document asks for (`inputs`), what it could publish (`candidates`), and what
+    the house already has that could fill those inputs (`hosted`). Fetching the
+    last of those separately would make the binding list and the module list two
+    answers about one house, which is the drift the panel's protocol exists to
+    avoid.
+
+    Naming a `module` reads that module instead -- the same screen, opened on
+    what is already installed rather than on a blueprint nobody has answered --
+    and the reply then also carries the module's own document and every answer
+    that was given about it.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    editing: Mapping[str, Any] | None = None
+    if msg.get("module"):
+        try:
+            editing = await _module_to_edit(hass, host, str(msg["module"]))
+        except modules.ModuleHostError as refusal:
+            connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+            return
+    try:
+        # A module carries its own document, so the screen is handed *that*
+        # rather than anything the panel sent: a copy taken on the way out would
+        # be a second version of the module, and the one being edited would be
+        # whichever of the two the next read happened to reach.
+        text = (
+            str(editing["text"]) if editing is not None else await _dev_text(hass, msg)
+        )
+        source = module_host.read_module_source(text)
+    except pack_authoring.AuthoringError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    answers = _bindings(msg.get("bindings")) or (
+        _bindings(editing["bindings"]) if editing is not None else {}
+    )
+    if editing is not None:
+        # **A cast and a flow are answers too**, and they are the two that are
+        # not rows in `bindings`: a condition travels as the entity this
+        # integration makes for it and a flow as the entity Node-RED writes, and
+        # that is exactly what `_async_build` binds the input to. Bound here, so
+        # the row reads as answered -- which is what it is, and a screen that
+        # showed a module's own conditions as unfilled ones would be asking a
+        # person to answer what they already had.
+        for name in editing["casts"]:
+            answers[name] = module_host.InputBinding(
+                kind="entity",
+                value=module_host.derived_entity_id(str(editing["module"]), name),
+            )
+        for name in editing["flows"]:
+            answers[name] = module_host.InputBinding(
+                kind="entity",
+                value=module_host.flow_entity_id(str(editing["module"]), name),
+            )
+    # Slots are resolved to nothing here rather than to a device, because a
+    # reading happens before the module has been given a room: what the person
+    # has said is which *slot* an input wants, and what that slot answers is not
+    # known yet. So the reading is the source with those inputs left as the
+    # blueprint defaults them -- which is what the automation will be built with
+    # if the slot is never bound, and is therefore honest about the choices made
+    # so far. `modules/host` is where a slot becomes a device.
+    chosen = module_host.bind_inputs(source, module_host.resolve_slots(answers, {}))
+    # Which rows hold logic rather than a value, so each of them can be offered
+    # as something the module publishes -- "expose it, and any automation in the
+    # house can read it". Read here rather than in the candidate loop below so
+    # the two answers about one screen (what the row is, what it may publish)
+    # come off one reading of the same question.
+    casts = module_host.cast_answers(
+        answers,
+        conditions=_cast_rows(msg, editing, "casts"),
+        flows=_cast_rows(msg, editing, "flows"),
+        scripts=_cast_rows(msg, editing, "scripts"),
+    )
+    # The roles the house itself answers, which is the set an input may be
+    # answered with at *global* scope (`module_host.HOUSE_SCOPE`). Read from the
+    # engine rather than from the catalog's house menu: the document's
+    # `house_scope` clause is what the engine resolves a house scoped slot
+    # against, so it is the clause that decides whether answering globally means
+    # anything at all.
+    house_scope_slots = frozenset(host.session.engine.house.house_scope_slots)
+    connection.send_result(
+        msg["id"],
+        {
+            "source": {
+                "title": source.title,
+                "description": source.description,
+                "blueprint": str(msg.get("key") or "")
+                if msg.get("kind") == "blueprint"
+                else "",
+                "inputs": len(source.inputs),
+            },
+            # The document itself, and only when a module was named: it is what
+            # the screen will send back on save, and it can be a whole blueprint
+            # -- so it travels once, on the reading that is *about* a module,
+            # rather than riding along with every listing of the house.
+            **({"text": text, "editing": editing} if editing is not None else {}),
+            "inputs": [
+                {
+                    **_module_input(name, block, chosen, source),
+                    # What the module already answers this input with, when the
+                    # screen is open on one. Both are read off the seed rather
+                    # than the record so the row and the save agree about the
+                    # same input even where the definition is the newer half.
+                    **_cast_ids(editing, name),
+                }
+                for name, block in source.inputs.items()
+            ],
+            "candidates": [
+                {
+                    "name": candidate.name,
+                    "kind": candidate.kind,
+                    "value_kind": candidate.value_kind,
+                    "expression": candidate.expression,
+                    "branch_only": candidate.branch_only,
+                    "suggested_key": _suggested_key(candidate.name),
+                }
+                for candidate in module_host.output_candidates(
+                    source, chosen, answers, casts
+                )
+            ],
+            # Each role says whether it is one the *house* answers, because
+            # naming a slot in an import is naming where it is looked up and not
+            # only what it is called: a role the house document declares at house
+            # scope is the house's device in every room, so an input answered
+            # with it can be answered with *that* one rather than with whatever
+            # the module's room bound for the same name
+            # (`module_host.HOUSE_SCOPE`). The engine's own list is the authority
+            # -- any other role has no global binding it would ever resolve, so
+            # offering one here would be offering a promise the build cannot
+            # keep.
+            "slots": [
+                {
+                    "name": name,
+                    "label": _slot_label(name),
+                    "house_scope": name in house_scope_slots,
+                }
+                for name in host.known_slots()
+            ],
+            # The licences a module may carry, for the step that saves one: the
+            # screen offers them as a picker rather than restating them, for the
+            # reason it offers the slot names -- one vocabulary, one spelling.
+            "licences": list(module_definitions.LICENCES),
+            "rooms": [
+                {"id": room.id, "name": room.name} for room in host.session.rooms
+            ],
+            "hosted": (await _hosted(hass, host))["modules"],
+        },
+    )
+
+
+def _cast_ids(editing: Mapping[str, Any] | None, name: str) -> Mapping[str, str]:
+    """The flow and the script a row is answered by, for a screen open on a module.
+
+    Both, and not only the flow: the row opens whichever of the two editors the
+    answer belongs to, and which one that is is a fact about the answer rather
+    than about the input -- so a row answered by a script has no flow to open and
+    a row answered by a flow has no script. Empty for a fresh import, where there
+    is no module yet and nothing to have answered.
+    """
+    if editing is None:
+        return {}
+    return {
+        "flow_id": str((editing.get("flows") or {}).get(name, "")),
+        "script_id": str((editing.get("scripts") or {}).get(name, "")),
+    }
+
+
+def _cast_rows(
+    msg: Mapping[str, Any], editing: Mapping[str, Any] | None, field: str
+) -> tuple[str, ...]:
+    """Which inputs a screen has answered with one kind of cast, by kind.
+
+    **The screen where it has said anything, the module's record otherwise.** The
+    two are not merged, and that is the point: a person who switches their only
+    cast row back to a value means it, and a list unioned with the record would
+    keep offering that row's value as something to publish -- a tick that then
+    reached a build where the cast is gone, which is a refusal at the far end of
+    a screen that looked settled.
+
+    Saying nothing is not the same as saying "none", which is why the fields are
+    absent rather than empty on a screen that has not read yet: on the first
+    reading of an edit there are no rows to have an opinion about, and the
+    module's own answers are the whole truth about what it publishes.
+    """
+    sent = msg.get(field)
+    if sent is not None:
+        return tuple(str(name) for name in sent)
+    if editing is None:
+        return ()
+    return tuple(str(name) for name in (editing.get(field) or {}))
+
+
+def _slot_label(name: str) -> str:
+    """A slot name as a person reads it: `ambient_light_sensor` -> `Ambient light sensor`.
+
+    The house's slot names are written the way an engine reads them -- lower case
+    with underscores -- and a dropdown offering them that way makes a person
+    decode `ambient_light_sensor` to find the lux one. Capitalising the first
+    word and opening the underscores out is the whole of the difference, and it
+    is done here rather than in the panel so that one list has one spelling.
+    """
+    words = name.split("_")
+    return " ".join([words[0].capitalize(), *words[1:]]) if words else name
+
+
+async def _module_to_edit(
+    hass: HomeAssistant, host: OpenHouseHost, module: str
+) -> Mapping[str, Any]:
+    """One hosted module as the import screen's own starting point.
+
+    **The screen the card's Edit opens is the import screen**, and the whole of
+    what makes it an edit is where it starts from: the module's own document
+    rather than a blueprint nobody has answered, and the answers that were given
+    about it rather than nothing. Both come from the store row it was made from
+    where there is one -- a module *is* what the house offers, and a room's copy
+    of it is one installation of it -- and from the record itself for a document
+    hosted directly, which is a module with no row behind it.
+
+    `installs` is the half that has to be said out loud: pressing Save changes
+    the module, which is every room running it, and a person about to do that is
+    owed the count. Each row is a room a screen can name rather than an id,
+    because that is how the card that got them here names rooms too.
+    """
+    records = await modules.async_records(hass)
+    record = next((row for row in records if row.slug == module), None)
+    if record is None:
+        raise modules.ModuleHostError(
+            f"this house hosts no module called {module!r}, so there is nothing to edit"
+        )
+    reaches = (
+        [row for row in records if row.definition == record.definition]
+        if record.definition
+        else [record]
+    )
+    if record.definition:
+        definition = await modules.async_definition(hass, record.definition)
+        document: Mapping[str, Any] = {
+            "text": definition.source,
+            "title": definition.title,
+            "description": definition.description,
+            "author": definition.author,
+            "version": definition.version,
+            "licence": definition.licence,
+            "blueprint": definition.blueprint,
+            "bindings": {name: dict(row) for name, row in definition.bindings.items()},
+            "settings": list(definition.settings),
+            "casts": dict(definition.derived),
+            # *Names* off the definition, because which inputs this module answers
+            # by a flow is the module's -- and the *ids* from the installation in
+            # front of the person, because the id is the Node-RED that installed
+            # it. The screen shows a flow row per name and opens the flow the id
+            # names (`module_definitions.follow`).
+            "flows": {name: record.flows.get(name, "") for name in definition.flows},
+            # The same two halves for a script: the names are the module's, the
+            # id is the house's, and the row opens the person's own script.
+            "scripts": {
+                name: record.scripts.get(name, "") for name in definition.scripts
+            },
+            "picks": [{"name": name, "key": key} for name, key in definition.picks],
+        }
+    else:
+        document = {
+            "text": record.source,
+            "title": record.title,
+            "description": "",
+            "author": "",
+            "version": "1.0.0",
+            "licence": "no_licence",
+            "blueprint": record.blueprint,
+            "bindings": {name: dict(row) for name, row in record.bindings.items()},
+            "settings": list(record.settings),
+            "casts": dict(record.derived),
+            "flows": dict(record.flows),
+            "scripts": dict(record.scripts),
+            "picks": [{"name": name, "key": key} for name, key in record.picks],
+        }
+    return {
+        **document,
+        "module": record.slug,
+        "definition": record.definition,
+        "installs": [
+            {
+                "slug": row.slug,
+                "room_id": row.room_id,
+                "room_name": _room_name(host, row.room_id),
+            }
+            for row in reaches
+        ],
+    }
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULES_HOST,
+        vol.Required("kind"): vol.In(("automation", "blueprint", "text")),
+        vol.Required("title"): str,
+        vol.Optional("key"): str,
+        vol.Optional("text"): str,
+        # Where the module sits. Empty is the whole house, which is where a
+        # module with no room of its own resolves its slots.
+        vol.Optional("room_id", default=""): str,
+        vol.Optional("bindings", default=dict): dict,
+        # The candidates the person ticked, each with the key they called it.
+        vol.Optional("outputs", default=list): list,
+        # The inputs they ticked to keep settable on the module.
+        vol.Optional("settings", default=list): list,
+        # The inputs answered with a *condition* rather than with a value, each
+        # as Home Assistant's own condition config. Kept apart from `bindings`
+        # because it is a different kind of thing: a binding is a value, and a
+        # condition is logic that Open House has to make an entity out of before
+        # anything can be bound to it (`modules.async_host`).
+        vol.Optional("casts", default=dict): dict,
+        # The inputs answered by a *flow of nodes* in Node-RED, by name. The
+        # third kind of answer beside a binding and a condition: a flow is not a
+        # value and not logic Open House evaluates, it is logic another program
+        # runs, writing into an entity this integration makes for it
+        # (`modules._async_push_flows`).
+        vol.Optional("flows", default=list): list,
+        # The inputs answered by a *Home Assistant script*, by input name, each
+        # naming the script to call. The fourth kind of answer, and the only one
+        # that returns: the automation calls the script first and is built from
+        # what it hands back (`modules.async_host`). A mapping rather than a list,
+        # because the id is the person's own and has to travel.
+        vol.Optional("scripts", default=dict): dict,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_modules_host(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Host one source as a module, and answer with the house it landed in.
+
+    The whole reply rather than the one new module: hosting changes what a
+    consumer may bind to, so every screen that lists modules or offers a binding
+    is stale the moment this returns, and answering with the full list is what
+    lets the panel redraw from the answer it already has instead of asking again.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        text = await _dev_text(hass, msg)
+    except pack_authoring.AuthoringError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    room_id = str(msg.get("room_id") or "")
+    if room_id and host.session.room(room_id) is None:
+        connection.send_error(
+            msg["id"], INVALID_FORMAT, f"there is no room {room_id!r} in this house"
+        )
+        return
+    bindings = _bindings(msg.get("bindings"))
+    unknown = _unknown_slot(host, bindings)
+    if unknown is not None:
+        connection.send_error(msg["id"], INVALID_FORMAT, unknown)
+        return
+    try:
+        record = await modules.async_host(
+            hass,
+            host.entry.entry_id,
+            text=text,
+            title=str(msg["title"]),
+            blueprint=str(msg.get("key") or "")
+            if msg.get("kind") == "blueprint"
+            else "",
+            room_id=room_id,
+            bindings=bindings,
+            outputs=_picked(msg.get("outputs")),
+            settings=_names(msg.get("settings")),
+            bound=host.bound_slots(room_id),
+            casts=_casts(msg.get("casts")),
+            flows=_names(msg.get("flows")),
+            scripts=_scripts(msg.get("scripts")),
+        )
+    except modules.ModuleHostError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    await host.async_save()
+    listing = await _hosted(hass, host)
+    connection.send_result(
+        msg["id"], {"module": record.slug, "modules": listing["modules"]}
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULES_SETTINGS,
+        vol.Required("module"): str,
+        # Only the settings the person changed, or all of them: whatever is sent
+        # is merged over what the module already answers, so a form that shows a
+        # subset of the inputs cannot clear the rest.
+        vol.Optional("bindings", default=dict): dict,
+        # Which inputs stay settable, when that is what changed.
+        vol.Optional("settings"): list,
+        # The condition answers, when a cast is what changed -- including an
+        # empty one, which is how a cast comes back off (`modules.async_update`).
+        vol.Optional("casts"): dict,
+        # Which inputs are answered by a Node-RED flow, by name, when that is
+        # what changed. Sent as the whole set rather than as a change to it, for
+        # the reason the condition answers are: the screen is showing every row,
+        # so what it sends is every row's answer (`modules.async_update`).
+        vol.Optional("flows"): list,
+        # Which inputs are answered by a script, by name, when a cast is what
+        # changed -- including an empty id for a name, which is how a script cast
+        # comes back off (`modules.async_update`). Merged rather than replaced,
+        # because the settings form shows only the inputs a person kept settable.
+        vol.Optional("scripts"): dict,
+        # The revision the card was drawn from. The card saves itself on a timer
+        # (`panel/src/components/hosted-module.ts`), so without this a card drawn
+        # before a profile switch would write the answers of the house that was
+        # on then over the profile that is on now -- the bug this is here for.
+        vol.Optional("revision"): int,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_modules_settings(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Change a hosted module's settings, and answer with the house as it now is.
+
+    The same reply as hosting, for the same reason: the module's automation is
+    built again, so a consumer bound to one of its outputs is reading an entity
+    that was just re-published, and every screen holding the old module is stale.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None or _stale(connection, msg, host):
+        return
+    try:
+        record = await modules.async_update(
+            hass,
+            host.entry.entry_id,
+            module=str(msg["module"]),
+            bindings=_bindings(msg.get("bindings")),
+            settings=(
+                None if msg.get("settings") is None else _names(msg.get("settings"))
+            ),
+            bound=host.bound_slots(await _room_of(hass, str(msg["module"]))),
+            casts=(None if msg.get("casts") is None else _casts(msg.get("casts"))),
+            flows=None if msg.get("flows") is None else _names(msg.get("flows")),
+            scripts=(
+                None if msg.get("scripts") is None else _scripts(msg.get("scripts"))
+            ),
+        )
+    except modules.ModuleHostError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    await host.async_save()
+    listing = await _hosted(hass, host)
+    connection.send_result(
+        msg["id"], {"module": record.slug, "modules": listing["modules"]}
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULES_DETACH,
+        # The module whose row the cast is on, and the row itself. Both are
+        # needed and neither is enough: the *module* is where the logic is kept
+        # (the record, not the form), and the *input* is which of its rows the
+        # person pressed the button beside.
+        vol.Required("module"): str,
+        # Which row, and the two spellings are two different rows. An `input` is
+        # one of the module's inputs, whose cast lives on the record; a `slot` is
+        # one of the module's devices, whose rule lives in the session's settings
+        # (`ha_adapter.slot_rules`). Exactly one is named, and the command reads
+        # whichever it was given rather than a `where` that could disagree with
+        # the name beside it.
+        vol.Optional("input", default=""): str,
+        vol.Optional("slot", default=""): str,
+        # What the new module is called. Empty means the module it came from and
+        # the row, which is a name that says where the logic is from and is worth
+        # offering rather than requiring somebody to invent one.
+        vol.Optional("title", default=""): str,
+        # Where the new module sits -- the house, or a room. The person's choice,
+        # and the whole of what "a house level module or a module in the same
+        # room" means: it is the same placement every other way of adding a
+        # module asks for, so it is the same field.
+        vol.Optional("room_id", default=""): str,
+        # What should start the new module, where the cast cannot name it itself
+        # (`cast_document.detached_document`). A template and a script say nothing
+        # about when they should run, so for those two this is not a refinement --
+        # it is the difference between a module and a module that never runs. A
+        # condition and a flow bring their own, and anything named here is watched
+        # *beside* them rather than instead.
+        vol.Optional("trigger", default=list): list,
+        vol.Optional("revision"): int,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_modules_detach(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Make one row's cast a module of its own, and point the row at it.
+
+    The same reply as hosting and setting, because it is both at once: a module
+    appears and a module is built again, so every screen holding either is stale.
+
+    `key` is the output the new module publishes under, sent back beside the
+    module's name so the panel can point the row at the answer without working
+    out what the row's output key was -- the name comes from the input's name by
+    a rule (`cast_document.key_for`) that has no business being spelled twice.
+
+    **Two rows, two keepers.** An input's cast is kept on the module's record, so
+    `modules.async_detach` reads it, hosts the module *and* rewrites the record --
+    the row's answer becomes an `output` binding inside the same function. A
+    slot's rule is kept in the session's settings, which this function holds and
+    `modules` does not: the module is hosted there and the rule is cleared and the
+    slot pointed back here, in one step with no `await` in it. A slot left holding
+    its rule *and* a module publishing it would be the same thing worked out twice,
+    which is the half-change `async_detach` exists to make impossible.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None or _stale(connection, msg, host):
+        return
+    room_id = str(msg.get("room_id") or "")
+    if room_id and host.session.room(room_id) is None:
+        connection.send_error(
+            msg["id"], INVALID_FORMAT, f"there is no room {room_id!r} in this house"
+        )
+        return
+    module = str(msg["module"])
+    slot = str(msg.get("slot") or "")
+    input_name = str(msg.get("input") or "")
+    if bool(slot) == bool(input_name):
+        connection.send_error(
+            msg["id"],
+            INVALID_FORMAT,
+            "a detach names the row it is detaching from, and exactly one of them: "
+            "an input, or a slot",
+        )
+        return
+    try:
+        if slot:
+            answer = await _detach_slot(hass, host, module, slot, room_id, msg)
+        else:
+            record, source, watched = await modules.async_detach(
+                hass,
+                host.entry.entry_id,
+                module=module,
+                input_name=input_name,
+                title=str(msg.get("title") or ""),
+                room_id=room_id,
+                trigger=_names(msg.get("trigger")),
+                bound=host.bound_slots(room_id),
+                # The room of the module the row is on, read from the record
+                # rather than sent: the module left behind is built again where it
+                # *lives*, which is a fact about the house and not something this
+                # screen says.
+                source_bound=host.bound_slots(await _room_of(hass, module)),
+            )
+            answer = {
+                "module": record.slug,
+                "title": record.title,
+                "room_id": record.room_id,
+                # The output key, read off the record the detach just made rather
+                # than re-derived: the record is what the automation publishes
+                # under, so a key read from anywhere else could disagree with it.
+                "key": record.outputs[0].key if record.outputs else "",
+                "watched": list(watched),
+                "source": source.slug,
+            }
+    except modules.ModuleHostError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    await host.async_save()
+    listing = await _hosted(hass, host)
+    connection.send_result(msg["id"], {**answer, "modules": listing["modules"]})
+
+
+async def _detach_slot(
+    hass: HomeAssistant,
+    host: OpenHouseHost,
+    module: str,
+    slot: str,
+    room_id: str,
+    msg: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Detach a slot's rule, and leave the slot reading what the module publishes.
+
+    The rule is read from the **session**, not from the screen: the session is
+    where a slot rule is recorded (`live_modules.set_slot_rule`) and where the
+    device the slot acts on is, so a detach can only ever act on logic the house
+    actually holds. A rule typed into a row and not yet set is a rule the house
+    does not have, which is the same rule the input path follows ("a cast written
+    into a form and not yet saved is a cast the module does not hold").
+
+    The room the rule is recorded under is the **module's** room, not the room the
+    new module is being placed in: a slot rule is per module per room, and the one
+    being detached is on the row the person pressed the button beside. The two
+    differ whenever a detach moves the logic somewhere else, which is the whole
+    point of asking where it should sit.
+    """
+    source_room = await _room_of(hass, module)
+    rules = live_modules.slot_rules_of(host.session, pack=module, room_id=source_room)
+    rule = rules.get(slot)
+    if rule is None:
+        raise modules.ModuleHostError(
+            f"{slot!r} is a device on this module rather than a rule, so there is "
+            "nothing to detach: a condition, a template, a flow or a script on the "
+            "slot is what can become a module of its own"
+        )
+    record, watched = await modules.async_detach_slot(
+        hass,
+        host.entry.entry_id,
+        module=module,
+        slot=slot,
+        rule=rule,
+        title=str(msg.get("title") or ""),
+        room_id=room_id,
+        trigger=_names(msg.get("trigger")),
+        bound=host.bound_slots(room_id or source_room),
+    )
+    # The two session writes that finish it, and no `await` between them: the rule
+    # goes, and the slot reads the new module's output instead. Both are writes to
+    # the recorded layer, so both survive a rebuild and both take effect on the
+    # next one -- which `async_slot_changed` below is what asks for.
+    key = record.outputs[0].key if record.outputs else ""
+    live_modules.set_slot_rule(
+        host.session, room_id=source_room, pack=module, slot=slot
+    )
+    if key:
+        live_modules.set_slot(
+            host.session,
+            room_id=source_room,
+            pack=module,
+            slot=slot,
+            # The published entity, spelled by `module_host` so this and the
+            # consumer's template cannot disagree about where an output lives.
+            entity_id=module_host.output_entity_id(record.slug, key),
+            label=None,
+        )
+    await host.async_slot_changed(source_room, slot)
+    return {
+        "module": record.slug,
+        "title": record.title,
+        "room_id": record.room_id,
+        "key": key,
+        "watched": list(watched),
+        # The module the rule came from, and the slot it left: the same shape the
+        # input path answers with, so a screen holding either goes stale the same
+        # way.
+        "source": module,
+    }
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULES_EDIT,
+        # The module being edited, by the name the *house* hosts it under -- the
+        # one on the card the Edit was pressed on. Everything below is the
+        # module's own answers, and the server works out from this record which
+        # store row the module is and which other rooms are running it.
+        vol.Required("module"): str,
+        # The same three ways of naming a document the rest of the import path
+        # takes, because this is the same screen: a blueprint picked, an
+        # automation picked, or text pasted in.
+        vol.Required("kind"): vol.In(("automation", "blueprint", "text")),
+        vol.Required("title"): str,
+        vol.Optional("key"): str,
+        vol.Optional("text"): str,
+        vol.Optional("description", default=""): str,
+        vol.Optional("author", default=""): str,
+        vol.Optional("version", default=""): str,
+        vol.Optional("licence", default=""): str,
+        # **Required, unlike the rest of this schema.** The six below are the
+        # module's answers, and there is no reading of an absent one that is not
+        # a reading of an empty one -- so a caller who leaves one out would
+        # silently take every answer away from a module installed in five rooms,
+        # and the refusal it would get instead is the one worth having. The
+        # fields above are different: a title nobody sent is a title the module
+        # already has.
+        vol.Required("bindings"): dict,
+        vol.Required("outputs"): list,
+        vol.Required("settings"): list,
+        vol.Required("casts"): dict,
+        vol.Required("flows"): list,
+        vol.Required("scripts"): dict,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_modules_edit(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Edit a hosted module, and rebuild every room running it.
+
+    **The one module command whose subject is the module rather than one copy of
+    it.** Every other one -- settings, a configuration, unhosting -- names a
+    record, which is one installation in one room. This names a record too,
+    because that is what a card on a screen knows, and then follows it back to
+    the module behind it: the store row is rewritten, and every installation of
+    it is built again from the document and the answers that were just decided.
+
+    The answers are the interesting half and they are
+    `module_definitions.follow`'s question -- an answer a room never moved follows
+    the module, and one it moved is the room's. So this answers with the whole
+    house as it now is, like every other module command, because a consumer bound
+    to an output of any of those rooms is reading an entity that was just
+    re-published.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        text = await _dev_text(hass, msg)
+    except pack_authoring.AuthoringError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    bindings = _bindings(msg.get("bindings"))
+    unknown = _unknown_slot(host, bindings)
+    if unknown is not None:
+        connection.send_error(msg["id"], INVALID_FORMAT, unknown)
+        return
+    try:
+        await modules.async_edit(
+            hass,
+            host.entry.entry_id,
+            module=str(msg["module"]),
+            text=text,
+            title=str(msg["title"]),
+            blueprint=str(msg["key"] or "") if msg["kind"] == "blueprint" else "",
+            description=str(msg.get("description") or ""),
+            author=str(msg.get("author") or ""),
+            version=str(msg.get("version") or ""),
+            licence=str(msg.get("licence") or ""),
+            bindings=bindings,
+            outputs=_picked(msg.get("outputs")),
+            settings=_names(msg.get("settings")),
+            casts=_casts(msg.get("casts")),
+            flows=_names(msg.get("flows")),
+            scripts=_scripts(msg.get("scripts")),
+            # **Every room's answers, not the one room's.** An edit reaches the
+            # installations in all of them, and a module that reaches through a
+            # slot has to be built against the room it sits in -- so the map is
+            # built here, where the host that knows every room is.
+            bound={
+                room_id: host.bound_slots(room_id)
+                for room_id in ("", *sorted(host.rooms))
+            },
+        )
+    except modules.ModuleHostError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    await host.async_save()
+    listing = await _hosted(hass, host)
+    connection.send_result(
+        msg["id"],
+        {
+            "module": str(msg["module"]),
+            "modules": listing["modules"],
+            # The store too, because a definition was rewritten: a screen listing
+            # what the house offers is stale in a way a screen listing what it
+            # runs is not, and answering with both is what lets either redraw
+            # from the reply it already has.
+            "store": await _offered(hass, host),
+        },
+    )
+
+
+# --------------------------------------------------------------------------
+# Configurations: the several sets of answers one placed module can hold
+#
+# One placed module, set up several ways, switched between in place. All four
+# answer with the house as it now is, like every other module command, so the
+# panel's reload-on-reply needs to know nothing about them: three of the four
+# move the module's answers or its name, and the fourth -- adding one -- is a
+# copy of the active configuration, which is the module being built again from
+# answers it already had.
+# --------------------------------------------------------------------------
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULES_CONFIG_SWITCH,
+        vol.Required("module"): str,
+        vol.Required("config"): str,
+        vol.Optional("revision"): int,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_modules_config_switch(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Make one of a module's configurations the one it is running."""
+    host = _host_or_error(connection, msg)
+    if host is None or _stale(connection, msg, host):
+        return
+    module = str(msg["module"])
+    try:
+        record = await modules.async_switch_config(
+            hass,
+            host.entry.entry_id,
+            module=module,
+            config=str(msg["config"]),
+            bound=host.bound_slots(await _room_of(hass, module)),
+        )
+    except modules.ModuleHostError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    await host.async_save()
+    listing = await _hosted(hass, host)
+    connection.send_result(
+        msg["id"], {"module": record.slug, "modules": listing["modules"]}
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULES_CONFIG_ADD,
+        vol.Required("module"): str,
+        vol.Required("config"): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_modules_config_add(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Start a new configuration from the running one, and switch the module to it."""
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    module = str(msg["module"])
+    try:
+        record = await modules.async_add_config(
+            hass,
+            host.entry.entry_id,
+            module=module,
+            config=str(msg["config"]),
+            bound=host.bound_slots(await _room_of(hass, module)),
+        )
+    except modules.ModuleHostError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    await host.async_save()
+    listing = await _hosted(hass, host)
+    connection.send_result(
+        msg["id"], {"module": record.slug, "modules": listing["modules"]}
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULES_CONFIG_RENAME,
+        vol.Required("module"): str,
+        vol.Required("config"): str,
+        vol.Required("to"): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_modules_config_rename(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Give one of a module's configurations a different name."""
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        record = await modules.async_rename_config(
+            hass,
+            host.entry.entry_id,
+            module=str(msg["module"]),
+            config=str(msg["config"]),
+            to=str(msg["to"]),
+        )
+    except modules.ModuleHostError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    await host.async_save()
+    listing = await _hosted(hass, host)
+    connection.send_result(
+        msg["id"], {"module": record.slug, "modules": listing["modules"]}
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULES_CONFIG_REMOVE,
+        vol.Required("module"): str,
+        vol.Required("config"): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_modules_config_remove(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Drop one of a module's configurations, unless it is the last one."""
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    module = str(msg["module"])
+    try:
+        record = await modules.async_remove_config(
+            hass,
+            host.entry.entry_id,
+            module=module,
+            config=str(msg["config"]),
+            bound=host.bound_slots(await _room_of(hass, module)),
+        )
+    except modules.ModuleHostError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    await host.async_save()
+    listing = await _hosted(hass, host)
+    connection.send_result(
+        msg["id"], {"module": record.slug, "modules": listing["modules"]}
+    )
+
+
+# --------------------------------------------------------------------------
+# The store: the modules this house offers
+#
+# An imported blueprint used to be hosted straight into a room, which is one
+# import per room. It is *defined* instead -- the document, the answers it starts
+# from, what it publishes -- and then installed from the store into any room or
+# into the house. A definition is one file, so the last two commands here are what
+# let a person hand a module to somebody else and take one in.
+# --------------------------------------------------------------------------
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULES_STORE,
+        # Which placement each row's verdict is read against. The house by
+        # default, which is the empty room id -- the same spelling the rest of
+        # the module API uses for it. The Store tab asks about the house (it is
+        # the library, not a room); "Add module to room" asks about the room it
+        # is over, so its rows can say which devices that room is missing.
+        vol.Optional("room_id", default=HOUSE): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_modules_store(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """The modules this house offers, and where each of them is installed.
+
+    One answer rather than two, because they are one question on a store row:
+    "have I used this, and where". The installations are matched to the offer by
+    the name each record kept, which is why they are read from the records file
+    rather than counted anywhere -- a module installed from a definition and then
+    removed from the store is still a module this house runs.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        store = await _offered(hass, host, msg["room_id"])
+    except modules.ModuleHostError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "store": store,
+            "rooms": [
+                {"id": room.id, "name": room.name} for room in host.session.rooms
+            ],
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULES_DEFINE,
+        # The same three ways `modules/read` and `modules/host` name a document,
+        # because this is the step after those: whatever the person was reading,
+        # this is what they decided it is.
+        vol.Required("kind"): vol.In(("automation", "blueprint", "text")),
+        vol.Required("title"): str,
+        vol.Optional("key"): str,
+        vol.Optional("text"): str,
+        # The prose on the store's row. Empty means the blueprint's own
+        # description, which is the sentence the person who wrote it wrote.
+        vol.Optional("description", default=""): str,
+        vol.Optional("author", default=""): str,
+        vol.Optional("version", default="1.0.0"): str,
+        vol.Optional("licence", default="no_licence"): str,
+        vol.Optional("bindings", default=dict): dict,
+        vol.Optional("outputs", default=list): list,
+        vol.Optional("settings", default=list): list,
+        # Re-importing a blueprint a person has since edited is an update to the
+        # module, and overwriting one is a thing to ask for.
+        vol.Optional("replace", default=False): bool,
+        # The inputs answered with a condition rather than with a value. Travels
+        # with the module to every room it is installed in, and to every house
+        # the file is sent to, because the condition is what the input is.
+        vol.Optional("casts", default=dict): dict,
+        # The inputs answered by a flow of nodes, by name. Travels too, and
+        # travels as *names*: a flow id belongs to one Node-RED, and installing
+        # this file elsewhere pushes a flow for that input in whatever Node-RED
+        # is doing the installing (`modules.async_define`).
+        vol.Optional("flows", default=list): list,
+        # The inputs answered by a script, by name, each naming the script. The
+        # *names* are what travels in the file -- a `script.<id>` belongs to one
+        # Home Assistant -- so the id is read off the same mapping and kept only
+        # in the record of the house that picked it (`modules.async_define`).
+        vol.Optional("scripts", default=dict): dict,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_modules_define(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Save an imported source as a module this house offers, in no room.
+
+    This is where the import screen ends now, and it is deliberately not where an
+    automation is created: a definition is what the module *is*, and installing it
+    -- into one room, or into another house entirely -- is a separate act with the
+    same definition behind it.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        text = await _dev_text(hass, msg)
+    except pack_authoring.AuthoringError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    bindings = _bindings(msg.get("bindings"))
+    unknown = _unknown_slot(host, bindings)
+    if unknown is not None:
+        connection.send_error(msg["id"], INVALID_FORMAT, unknown)
+        return
+    try:
+        definition = await modules.async_define(
+            hass,
+            title=str(msg["title"]),
+            text=text,
+            blueprint=str(msg["key"] or "") if msg["kind"] == "blueprint" else "",
+            description=str(msg.get("description") or ""),
+            author=str(msg.get("author") or ""),
+            version=str(msg.get("version") or "1.0.0"),
+            licence=str(msg.get("licence") or "no_licence"),
+            bindings=bindings,
+            outputs=_picked(msg.get("outputs")),
+            settings=_names(msg.get("settings")),
+            replace=bool(msg.get("replace")),
+            casts=_casts(msg.get("casts")),
+            flows=_names(msg.get("flows")),
+            scripts=_scripts(msg.get("scripts")),
+        )
+    except modules.ModuleHostError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    connection.send_result(
+        msg["id"],
+        {"module": definition.slug, "store": await _offered(hass, host)},
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULES_DEPLOY,
+        vol.Required("module"): str,
+        # Where it goes. Empty is the whole house, which is where a module with no
+        # room of its own resolves its slots.
+        vol.Optional("room_id", default=""): str,
+        # Only the answers this room makes differently. Everything else comes from
+        # the definition, which is the point of defining it once.
+        vol.Optional("bindings", default=dict): dict,
+        vol.Optional("settings"): list,
+        # The room's own condition answers, when it makes one differently. Empty
+        # for a name is how the definition's own cast is taken back off here.
+        vol.Optional("casts"): dict,
+        # The inputs this room answers with a flow of nodes, by name, when the
+        # room differs from the definition about that.
+        vol.Optional("flows"): list,
+        # The inputs this room answers with a script, by name, each naming the
+        # script it picked. The definition carries the *names*; the id belongs to
+        # this house, so the room supplies it here (`modules.async_deploy`).
+        vol.Optional("scripts"): dict,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_modules_deploy(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Install a module this house offers into a room, or into the house.
+
+    The answers to `modules/host` and to `modules/settings`: the module list,
+    because what a consumer may bind to has changed, and the store, because the row
+    that was pressed now has somewhere to say it went.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    room_id = str(msg.get("room_id") or "")
+    room = host.session.room(room_id) if room_id else None
+    if room_id and room is None:
+        connection.send_error(
+            msg["id"], INVALID_FORMAT, f"there is no room {room_id!r} in this house"
+        )
+        return
+    try:
+        record = await modules.async_deploy(
+            hass,
+            host.entry.entry_id,
+            module=str(msg["module"]),
+            room_id=room_id,
+            # The room as a person reads it, so the installation's name in Home
+            # Assistant's own list says which room it is -- see `async_deploy`.
+            room_name=room.name if room is not None else "",
+            bindings=_bindings(msg.get("bindings")),
+            settings=(
+                None if msg.get("settings") is None else _names(msg.get("settings"))
+            ),
+            bound=host.bound_slots(room_id),
+            casts=(None if msg.get("casts") is None else _casts(msg.get("casts"))),
+            flows=None if msg.get("flows") is None else _names(msg.get("flows")),
+            scripts=(
+                None if msg.get("scripts") is None else _scripts(msg.get("scripts"))
+            ),
+        )
+    except modules.ModuleHostError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    await host.async_save()
+    listing = await _hosted(hass, host)
+    connection.send_result(
+        msg["id"],
+        {
+            "module": record.slug,
+            "modules": listing["modules"],
+            "store": await _offered(hass, host),
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULES_REMOVE,
+        vol.Required("module"): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_modules_remove(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Stop offering a module this house defined.
+
+    It is not uninstalled from anywhere: an installation keeps its own copy of the
+    document, so the rooms running it keep running it. `installed` is how many do,
+    so the screen can say so rather than letting a person discover it room by room.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        definition, still = await modules.async_remove_definition(
+            hass, str(msg["module"])
+        )
+    except modules.ModuleHostError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "removed": definition.slug,
+            "installed": len(still),
+            "store": await _offered(hass, host),
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULES_UNHOST,
+        vol.Required("module"): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_modules_unhost(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Take one installation out of a room, or out of the house.
+
+    The other half of `modules/deploy`, and a different act from `modules/remove`:
+    that one stops the house *offering* a module, which leaves every room running
+    the ones already made from it; this one stops one room running its copy, and
+    touches neither the offer nor any other room's copy. The panel keeps them
+    apart in the same way and for the same reason -- one is about the library and
+    one is about a room.
+
+    The whole hosted list comes back rather than the one record, because the
+    screen that pressed this is a room's page and the list is what it draws.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        await modules.async_unhost(hass, host.entry.entry_id, str(msg["module"]))
+    except modules.ModuleHostError as refusal:
+        connection.send_error(msg["id"], NOT_FOUND, str(refusal))
+        return
+    await host.async_save()
+    listing = await _hosted(hass, host)
+    connection.send_result(
+        msg["id"],
+        {"module": str(msg["module"]), "modules": listing["modules"]},
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULES_EXPORT,
+        vol.Required("module"): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_modules_export(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """One module as a file, with the blueprint inside it.
+
+    The same shape `profiles/export` answers with, so the panel has one way to
+    turn a document into a download -- and the file is self-contained, so the house
+    that receives it needs neither the blueprint nor anything else from here.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        document = await modules.async_export_definition(hass, str(msg["module"]))
+    except modules.ModuleHostError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    connection.send_result(msg["id"], {"document": document})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULES_IMPORT,
+        vol.Required("document"): dict,
+        vol.Optional("replace", default=False): bool,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_modules_import(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Take a module file from somebody else into this house's store.
+
+    Nothing is installed by this. What arrives is a module this house *offers* --
+    a file a person can read in the store, install into a room, and hand on again.
+    The file's own answers are read as they were written, which is why the store
+    says whether the module names devices of the house it came from: those are
+    answers that will have to be changed here, and a module answered with slots
+    needs nothing changed at all.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        definition, replaced = await modules.async_import_definition(
+            hass, msg["document"], replace=bool(msg.get("replace"))
+        )
+    except modules.ModuleHostError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "imported": definition.slug,
+            "replaced": replaced,
+            "store": await _offered(hass, host),
+        },
+    )
+
+
+async def _offered(
+    hass: HomeAssistant, host: OpenHouseHost, room_id: str = HOUSE
+) -> list[Mapping[str, object]]:
+    """The modules this house offers, as the store's rows.
+
+    The definitions and the records are read together and joined here rather than
+    by the panel, for the reason `rooms/available_modules` carries an offer's
+    satisfiability: whether a store row has been used is a fact about this house,
+    and a screen that worked it out would be a second implementation of it.
+    """
+    definitions = await modules.async_definitions(hass)
+    records = await modules.async_records(hass)
+    bound = live_modules.bound_slots(host.session, room_id)
+    return [
+        _definition_json(definition, records, host, bound=bound)
+        for definition in definitions
+    ]
+
+
+def _definition_json(
+    definition: ModuleDefinition,
+    records: tuple[module_records.ModuleRecord, ...],
+    host: OpenHouseHost,
+    *,
+    bound: frozenset[str],
+) -> Mapping[str, object]:
+    """One module this house offers, as the store's row.
+
+    The document itself is left out: it is the file, and it can be a whole
+    blueprint. What is here is what a row draws itself from and what a person
+    needs to decide whether to install it or to send it on -- including `pinned`,
+    which is the one thing the sender of a file needs to know and the receiver
+    cannot see: the module names devices from the house that defined it.
+
+    `missing_slots` is the placement's verdict, the same one a catalog pack's
+    offer carries: the slots this module reaches through that the room being
+    asked about has no device for. It is answered here rather than worked out by
+    the screen for the reason every other verdict is -- "can this room answer
+    this module" is a question about the house, and a second implementation of it
+    in the panel is one free to disagree with the engine's.
+    """
+    return {
+        "slug": definition.slug,
+        "title": definition.title,
+        "description": definition.description,
+        "author": definition.author,
+        "version": definition.version,
+        "licence": definition.licence,
+        "blueprint": definition.blueprint,
+        "pinned": definition.pinned,
+        # The inputs this module answers with a Node-RED flow, by name. Names and
+        # not ids, and it is the definition that carries them: a flow's id is
+        # assigned by the Node-RED of the house that installs the module, so it
+        # is minted there and recorded on that house's record rather than here.
+        "flows": list(definition.flows),
+        # The inputs it answers with a *script*, by name, for the same reason and
+        # by the same split: the name is the module's and travels in the file, and
+        # the `script.<id>` is the installing house's.
+        "scripts": list(definition.scripts),
+        "slots": list(definition.slots),
+        "missing_slots": [slot for slot in definition.slots if slot not in bound],
+        "deployed": [
+            {
+                "slug": record.slug,
+                "room_id": record.room_id,
+                "room_name": _room_name(host, record.room_id),
+                "running": bool(record.automation_id),
+            }
+            for record in records
+            if record.definition == definition.slug
+        ],
+    }
+
+
+async def _room_of(hass: HomeAssistant, module: str) -> str:
+    """The room a hosted module sits in, by the module's own name.
+
+    A settings change rebuilds the automation, and a rebuild has to be given the
+    same room the module was built for -- a module whose inputs reach through a
+    slot would otherwise be rebuilt against a different room's devices, or none.
+    The record is the only place that knows, so it is read here rather than sent
+    by the panel: the module's home is a fact about the house, not something a
+    settings form should be trusted to restate.
+
+    Empty when there is no such module, which `async_update` refuses in its own
+    words one step later.
+    """
+    for record in await modules.async_records(hass):
+        if record.slug == module:
+            return record.room_id
+    return ""
+
+
+def _bindings(sent: object) -> dict[str, module_host.InputBinding]:
+    """The panel's binding rows as `InputBinding`s, refusing a shape this cannot read.
+
+    A binding arrives as a plain mapping because that is what a websocket message
+    is; turning it into the type here, at the one door, is what keeps every
+    handler below from re-deciding what a binding is. An unknown `kind` is passed
+    through rather than refused here, and refused by `bind_inputs` naming the
+    value -- one definition of what a binding may be, in the module that owns it.
+    """
+    if not isinstance(sent, Mapping):
+        return {}
+    found: dict[str, module_host.InputBinding] = {}
+    for name, row in sent.items():
+        if not isinstance(row, Mapping):
+            continue
+        found[str(name)] = module_host.InputBinding(
+            kind=str(row.get("kind") or ""),
+            value=row.get("value"),
+            module=str(row.get("module") or ""),
+            key=str(row.get("key") or ""),
+            slot=str(row.get("slot") or ""),
+            # Where the slot is looked up, and the whole of what a **global
+            # slot** is: `house` means the house's own binding, answered the
+            # same in every room even where a room bound the role itself
+            # (`module_host.HOUSE_SCOPE`). Absent reads as the room's own, which
+            # is what every row written before this field existed meant.
+            scope=str(row.get("scope") or module_host.ROOM_SCOPE),
+        )
+    return found
+
+
+def _unknown_slot(
+    host: OpenHouseHost, bindings: Mapping[str, module_host.InputBinding]
+) -> str | None:
+    """The first slot a module is answered with that this house has no such role for.
+
+    A slot name typed at the import screen is a shortcut past scrolling the
+    dropdown, not a way to invent a word: the vocabulary is the catalog plus what
+    the installed packs declare (`OpenHouseHost.known_slots`), and `rooms/bind`
+    refuses a name outside it. A module built around a name nothing will ever bind
+    is therefore not a module that waits -- it is a module that waits *forever*,
+    with no act available that would ever start it. Refusing it here, naming the
+    words this house does have, is the difference between a dead end and a typo.
+
+    Only authoring is checked. A file from another house may legitimately name a
+    role this one has not installed the pack for yet, and there the waiting state
+    is exactly right.
+    """
+    known = set(host.known_slots())
+    for name in sorted(bindings):
+        binding = bindings[name]
+        if binding.kind == "slot" and binding.slot and binding.slot not in known:
+            return (
+                f"{binding.slot!r} is not a slot this house has, so {name} would "
+                "wait for a device nothing could ever give it. Its slots are: "
+                + ", ".join(sorted(known))
+            )
+    return None
+
+
+def _casts(sent: object) -> dict[str, Any]:
+    """The condition answers off a message, by input name.
+
+    Passed through rather than understood: a condition is Home Assistant's own
+    shape -- the one its condition editor builds and its automation schema reads
+    -- and this layer has no business holding a second opinion about what one may
+    contain. An *empty* answer is passed through too, because it is not missing
+    data: it is how a cast comes back off, and dropping it here would make the
+    cast box a one-way door.
+    """
+    if not isinstance(sent, Mapping):
+        return {}
+    return {
+        str(name): value
+        for name, value in sent.items()
+        if isinstance(name, str) and name
+    }
+
+
+def _scripts(sent: object) -> dict[str, str]:
+    """The script answers off a message, by input name: the script each names.
+
+    A mapping rather than a list, and that is the difference between this and the
+    flows: a flow is *made* here, so a name is enough and the id is this house's to
+    fill in (`modules._async_push_flows`). A script is the person's own and Open
+    House only ever names it, so the id has to travel. An *empty* one is passed
+    through rather than dropped, because it is how a script cast comes back off
+    (`modules.async_update`), and a row that is not a string is dropped because an
+    input name is what this is read by and an id under no name names nothing.
+    """
+    if not isinstance(sent, Mapping):
+        return {}
+    return {
+        str(name): str(script or "")
+        for name, script in sent.items()
+        if isinstance(name, str) and name
+    }
+
+
+def _names(sent: object) -> tuple[str, ...]:
+    """A list of input names off a message, dropping anything that is not one."""
+    if not isinstance(sent, list):
+        return ()
+    return tuple(str(name) for name in sent if isinstance(name, str) and name)
+
+
+def _picked(sent: object) -> tuple[tuple[str, str], ...]:
+    """The ticked candidates as `(candidate name, output key)` pairs."""
+    if not isinstance(sent, list):
+        return ()
+    found: list[tuple[str, str]] = []
+    for row in sent:
+        if not isinstance(row, Mapping):
+            continue
+        name = row.get("name")
+        key = row.get("key")
+        if isinstance(name, str) and isinstance(key, str):
+            found.append((name, key))
+    return tuple(found)
+
+
+def _module_input(
+    name: str,
+    block: object,
+    chosen: Mapping[str, Any],
+    source: module_host.HostedSource | None = None,
+) -> Mapping[str, object]:
+    """One blueprint input as the import screen's row.
+
+    `satisfied` is the answer the screen needs and the one a person cannot work
+    out from the document: an input with no binding and no default is one this
+    module cannot be built without, and the button that builds it has to say so
+    before it is pressed rather than after it fails.
+
+    *Which* inputs have a default is not `"default" in block`: an input that
+    takes a device has none whatever the author wrote, because the name in it
+    belongs to the author's own installation and filling a module with it would
+    point the automation at a device nobody here chose. `declares_default` owns
+    that rule and the screen reads its answer -- an entity row with a `default:`
+    in the document is reported with `has_default` false and no `default` value,
+    so its picker starts empty and its row says it still needs an answer.
+    """
+    declared = block if isinstance(block, Mapping) else {}
+    has_default = module_host.declares_default(declared)
+    return {
+        "name": name,
+        "title": str(declared.get("name") or name),
+        "description": _one_line(declared.get("description")),
+        "default": declared.get("default") if has_default else None,
+        "has_default": has_default,
+        "multiple": _multiple(declared),
+        "bound": name in chosen,
+        "value": chosen.get(name),
+        # Whether the *trigger* names this input, which is the one place a cast
+        # cannot go: a trigger's `entity_id` is matched against the real entities
+        # a house has rather than rendered, so text a person wrote there names
+        # the entity it compares as text and never matches it -- and the
+        # automation installs and simply never fires. The screen offers the cast
+        # everywhere else, and says why not here
+        # (`module_host.input_in_trigger`).
+        "in_trigger": source is not None and module_host.input_in_trigger(source, name),
+        "satisfied": name in chosen or has_default,
+        "selector": _selector_kind(declared),
+        "options": _selector_options(declared),
+    }
+
+
+def _selector_kind(declared: Mapping[str, Any]) -> str:
+    """Which selector an input offers, named the way the screen shows it.
+
+    A `target` is reported as an entity, which is what it takes: a person binding
+    one picks a device, and the difference between the two is a difference in how
+    the value is *wrapped*, which `bind_inputs` already knows.
+
+    The kinds the automation editor has a control for are named here, and
+    anything else is `text`. That is a real beginning-of-the-list and not a
+    claim: a `select` a person fills from a list, a `boolean` a toggle, an
+    `action` an action editor -- and an input whose selector this does not know
+    is a text box, which is wrong for some of them and is at least visible, where
+    hiding the input would not be.
+    """
+    selector = declared.get("selector")
+    if not isinstance(selector, Mapping):
+        return "text"
+    if "target" in selector:
+        return "target"
+    for kind in (
+        "entity",
+        "number",
+        "boolean",
+        "select",
+        "action",
+        "text",
+        "time",
+        "date",
+    ):
+        if kind in selector:
+            return kind
+    return "text"
+
+
+def _selector_options(declared: Mapping[str, Any]) -> list[str]:
+    """A `select` input's menu, so an unknown token cannot be typed into it.
+
+    The options are the input's own, including when they are given one per line
+    as a block scalar -- which is how most of the corpus writes them -- because a
+    menu that dropped half of its entries would be worse than no menu: the
+    blueprint's comparisons would silently never match what the person chose.
+    """
+    selector = declared.get("selector")
+    block = selector.get("select") if isinstance(selector, Mapping) else None
+    if not isinstance(block, Mapping):
+        return []
+    options = block.get("options")
+    if isinstance(options, str):
+        return [line.strip() for line in options.splitlines() if line.strip()]
+    if isinstance(options, list):
+        return [str(option) for option in options]
+    return []
+
+
+def _multiple(declared: Mapping[str, Any]) -> bool:
+    """Whether an input's selector takes more than one value."""
+    selector = declared.get("selector")
+    if not isinstance(selector, Mapping):
+        return False
+    for value in selector.values():
+        if isinstance(value, Mapping) and value.get("multiple") is True:
+            return True
+    return False
+
+
+def _suggested_key(name: str) -> str:
+    """A name a person could call this output, from the candidate's own name.
+
+    Best-effort: `input:lux_sensor` loses its marker and `min_lux` keeps its
+    name, and anything that does not land on a key at all is answered with an
+    empty string rather than a guess -- the screen needs *a* starting value, and
+    an invented one it cannot validate would be worse than a blank the person
+    fills in.
+    """
+    stripped = name.split(":", 1)[-1]
+    try:
+        return module_records.slug(stripped)
+    except pack_authoring.AuthoringError:
+        return ""
+
+
+def _one_line(value: object) -> str:
+    """A description as one line, the way `pack_authoring` reads one."""
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split())
+
+
+def _node_red_url(hass: HomeAssistant) -> str:
+    """Where this house's Node-RED *editor* is, or empty when none is set.
+
+    **The editor's address and not the push address**, which is a distinction
+    that only shows up when they differ: Home Assistant reaches Node-RED over the
+    docker network by a name that means nothing to a browser, so a link built
+    from the address the house itself pushes to is a link that resolves for
+    nobody who clicks it. `node_red.editor_url` prefers the address given for the
+    browser and falls back to the push one.
+
+    Empty is the ordinary state and the panel is built for it: the cast is still
+    offered, and the row says where to set the address rather than showing a link
+    to a program this house does not have.
+    """
+    return node_red.editor_url(node_red.entry_options(hass))
+
+
+def _flow_href(base: str, flow_id: str) -> str:
+    """The Node-RED editor, opened on one flow.
+
+    `#flow/<id>` is Node-RED's own route for a tab -- the editor is a single page
+    and the tab is a fragment -- so this is a link to the *flow*, in the program
+    that owns it, rather than to a copy Open House would have to keep in step.
+    """
+    if not base or not flow_id:
+        return ""
+    return f"{base.rstrip('/')}/#flow/{flow_id}"
+
+
+def _script_href(script_id: str) -> str:
+    """Home Assistant's own script editor, opened on one script.
+
+    A *relative* address, unlike the flows': Node-RED is another program on
+    another port, so its address has to be configured, but the script editor is
+    Home Assistant's own page and the browser reading this is already in Home
+    Assistant. `/config/script/edit/<id>` is that page's route, and building it
+    here rather than in the panel keeps the panel from having to know which of the
+    two editors is which.
+    """
+    if not script_id:
+        return ""
+    return f"/config/script/edit/{script_id}"
+
+
+async def _hosted(hass: HomeAssistant, host: OpenHouseHost) -> Mapping[str, object]:
+    """The house's hosted modules, as the protocol's reply.
+
+    The records are re-read from disk rather than taken from the runtime, because
+    the file is the truth about what the house hosts: a record a person removed
+    by hand is a module this must stop claiming, and the runtime is only a copy
+    of the file taken at setup.
+    """
+    runtime = hass.data.get(DOMAIN, {}).get(host.entry.entry_id)
+    values = {
+        slug: dict(module.values)
+        for slug, module in (getattr(runtime, "modules", None) or {}).items()
+    }
+    records = await modules.async_records(hass)
+    editor = _node_red_url(hass)
+    return {
+        "modules": [
+            {
+                "slug": record.slug,
+                "title": record.title,
+                "blueprint": record.blueprint,
+                # Which store module this was installed from, empty for a document
+                # hosted directly. The store matches its installations by this, so
+                # the two screens agree about where a module came from.
+                "definition": record.definition,
+                "room_id": record.room_id,
+                "room_name": _room_name(host, record.room_id),
+                # Which slots this module reaches through, and what each one
+                # currently answers. A module with an unbound slot is one that is
+                # imported but not running (`automation_id` is empty) and whose
+                # screen has to say which device it is still waiting for --
+                # otherwise it reads as a module that silently did nothing.
+                "slots": [
+                    {
+                        "name": name,
+                        "bound": host.bound_slots(record.room_id).get(name, ""),
+                    }
+                    for name in module_host.slots_reached(
+                        {
+                            name: module_host.InputBinding(**row)
+                            for name, row in record.bindings.items()
+                        }
+                    )
+                ],
+                "automation_id": record.automation_id,
+                # The configurations this module holds, and which of them it is
+                # running. Everything else on this record is one set of answers,
+                # so the card cannot show a switcher without both -- and the
+                # order is the record's own, which is the order they were made
+                # in, so a list that is re-read does not shuffle under the hand.
+                "config": record.variant,
+                "configs": list(record.configurations),
+                # The inputs this module answers with a *condition*, each as the
+                # person built it, so the card can show the logic a module runs
+                # on rather than only the value it ended up bound to.
+                "derived": dict(record.derived),
+                # The inputs this module answers with a *flow of nodes*, each
+                # with the entity the flow writes and the id of the flow itself
+                # -- the id so the row can open Node-RED on that flow, and the
+                # entity so it can say what the input is actually reading.
+                "flows": {
+                    name: {
+                        "flow_id": flow_id,
+                        "entity_id": module_host.flow_entity_id(record.slug, name),
+                        # Where the flow is *edited*, so the row can open Node-RED
+                        # on this tab. Built here and not in the panel because
+                        # only the server knows both halves of it -- the address
+                        # the person configured, and the id Node-RED assigned.
+                        "url": _flow_href(editor, flow_id),
+                    }
+                    for name, flow_id in record.flows.items()
+                },
+                # The inputs this module answers with a *script*, each with the
+                # script's own id and where it is edited. There is no entity here
+                # and that is the point of this cast: what the input reads is what
+                # the script hands back when the automation runs, so the only
+                # thing kept anywhere is the name of the script to call.
+                "scripts": {
+                    name: {
+                        "script_id": script_id,
+                        "url": _script_href(script_id),
+                    }
+                    for name, script_id in record.scripts.items()
+                },
+                "inputs": [
+                    {"name": name, "value": _jsonable(value)}
+                    for name, value in record.inputs.items()
+                ],
+                "settings": _module_settings(record, editor),
+                "outputs": [
+                    {
+                        "key": output.key,
+                        "kind": output.kind,
+                        "expression": output.expression,
+                        "entity_id": module_host.output_entity_id(
+                            record.slug, output.key
+                        ),
+                        "value": _jsonable(values.get(record.slug, {}).get(output.key)),
+                    }
+                    for output in record.outputs
+                ],
+            }
+            for record in records
+        ]
+    }
+
+
+def _room_name(host: OpenHouseHost, room_id: str) -> str:
+    """The room a module sits in, as a person reads it. Empty id is the house."""
+    if not room_id:
+        return "the whole house"
+    room = host.session.room(room_id)
+    return room.name if room is not None else room_id
+
+
+def _module_settings(
+    record: module_records.ModuleRecord, editor: str = ""
+) -> list[Mapping[str, object]]:
+    """The inputs a module kept settable, as the rows the settings form renders.
+
+    Read out of the module's own stored document rather than kept a second time
+    on the record: the declaration is the document's to make, and a copy taken at
+    import would be one more thing that could disagree with what the automation
+    was actually built from. The rows are `_module_input`'s, the same shape the
+    import screen renders, because a setting is one of the import screen's rows
+    that the person ticked to keep.
+    """
+    if not record.settings or not record.source:
+        return []
+    try:
+        source = module_host.read_module_source(record.source)
+    except pack_authoring.AuthoringError:
+        # A record whose document will not read is still a module the house
+        # hosts, with a working automation and outputs to read. Losing its
+        # settings rows is an answer the panel can show; refusing to list the
+        # module at all would hide the thing that is fine behind the thing that
+        # is not.
+        return []
+    rows: list[Mapping[str, object]] = []
+    for name in record.settings:
+        if name not in source.inputs:
+            continue
+        row = dict(_module_input(name, source.inputs[name], record.inputs, source))
+        binding = record.bindings.get(name) or {}
+        kind = str(binding.get("kind") or "")
+        # What the setting is *filled by*, which the panel needs to tell a value
+        # it may edit from one another module is publishing. A setting bound to
+        # an output is not a number a person owns -- it is a live reading, and a
+        # box holding a copy of it would be overwritten by the next publish.
+        row["bound_kind"] = kind
+        # A setting answered with a condition is bound to the entity Open House
+        # made for it, which is not the person's to edit here -- what *is* theirs
+        # is the condition, and it is handed back so the card opens on the logic
+        # they wrote rather than on an entity id they never chose.
+        row["cast"] = record.derived.get(name)
+        # A setting answered with a flow is bound to the entity that flow writes,
+        # which is not a value the person edits here either -- what is theirs is
+        # the flow, and the card opens Node-RED on it.
+        row["flow_id"] = record.flows.get(name, "")
+        row["flow_url"] = _flow_href(editor, row["flow_id"])
+        # A setting answered with a script is the same shape again: what fills it
+        # is not a value the person edits here, it is what their own script hands
+        # back, so the row carries the script and where to open it.
+        row["script_id"] = record.scripts.get(name, "")
+        row["script_url"] = _script_href(row["script_id"])
+        if name in record.flows:
+            row["bound_kind"] = "flow"
+            row["bound_to"] = module_host.flow_entity_id(record.slug, name)
+        elif name in record.scripts:
+            row["bound_kind"] = "script"
+            row["bound_to"] = f"script.{record.scripts[name]}"
+        elif name in record.derived:
+            row["bound_kind"] = "condition"
+            row["bound_to"] = module_host.derived_entity_id(record.slug, name)
+        elif kind == "output":
+            row["bound_to"] = f"{binding.get('module')}/{binding.get('key')}"
+        elif kind == "slot":
+            # What fills a setting answered with a slot is the device the
+            # module's room binds for it, which is the room's to change and not
+            # this screen's -- so the row names the slot rather than a value.
+            row["bound_to"] = str(binding.get("slot") or "")
+        else:
+            row["bound_to"] = ""
+        rows.append(row)
+    return rows
+
+
+def _jsonable(value: object) -> object:
+    """A published value as something the JSON reply can carry.
+
+    A value that arrives from an automation is whatever its template produced --
+    a string, a number, a list, a mapping, or a date. Anything the encoder can
+    carry is passed through untouched, and anything it cannot is reported as its
+    type name rather than dropped: "there is a value here and it is a datetime"
+    is a better answer to a person than a blank row.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, list):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    return str(value)
+
+
+def _as_json(
+    analysis: pack_authoring.Analysis,
+    slots: Mapping[str, Sequence[str]] | None = None,
+) -> Mapping[str, object]:
+    """An `Analysis` as the protocol's reply.
+
+    Written out field by field rather than through `dataclasses.asdict`, because
+    the panel's `DevAnalysis` interface is what this has to match and an
+    `asdict` would silently follow any field added to the dataclass -- which is
+    the drift the protocol exists to prevent. A field added here is a field added
+    to the panel's interface in the same commit, or the panel renders `undefined`.
+    """
+    return {
+        "title": analysis.title,
+        "description": analysis.description,
+        "blueprint": analysis.blueprint,
+        "entities": [
+            {
+                "key": row.key,
+                "label": row.label,
+                "entity_id": row.entity_id,
+                "domain": row.domain,
+                "count": row.count,
+                "optional": row.optional,
+                "places": list(row.places),
+                "suggested_slot": pack_authoring.suggest_slot(
+                    row.domain, label=row.label, slots=slots
+                ),
+            }
+            for row in analysis.entities
+        ],
+        "values": [
+            {
+                "key": row.key,
+                "label": row.label,
+                "kind": row.kind,
+                "default": row.default,
+                "description": row.description,
+                "minimum": row.minimum,
+                "maximum": row.maximum,
+                "unit": row.unit,
+                "choices": list(row.choices),
+                "places": list(row.places),
+            }
+            for row in analysis.values
+        ],
+        "services": [
+            {
+                "key": row.key,
+                "service": row.service,
+                "supported": row.supported,
+                "acts_on": list(row.acts_on),
+                "data_keys": list(row.data_keys),
+                "where": row.where,
+                "depth": row.depth,
+            }
+            for row in analysis.services
+        ],
+        "triggers": list(analysis.triggers),
+        "conditions": list(analysis.conditions),
+        "dropped": list(analysis.dropped),
+    }
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): DEV_SAVE,
+        vol.Required("kind"): vol.In(("automation", "blueprint", "text")),
+        vol.Required("plan"): dict,
+        vol.Optional("key"): str,
+        vol.Optional("text"): str,
+        vol.Optional("install", default=False): bool,
+        vol.Optional("room_id"): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_dev_save(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Draft, validate, write and optionally install, answering with what it wrote.
+
+    **The file is written before either verdict, and the verdict is about the
+    file.** A module that fails the schema, the slot rules or the sandbox is a
+    module a person keeps -- they are told why it will not install and can fix
+    the plan without losing the name they chose -- and it is never reported as
+    saved-and-good.
+
+    **`install` is the difference between the panel's two buttons, and it is
+    honoured.** False writes the module and asks whether the house would take it
+    (`live_modules.validate`); true writes it and puts it in the room named, or
+    by the entity join when none is. The panel's "Save module" is the false one
+    and "Save and install there" is the true one, so the server does what the
+    notice the person reads says it did rather than installing behind a word
+    that promised a file.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        text = await _dev_text(hass, msg)
+    except pack_authoring.AuthoringError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    services, slots = await hass.async_add_executor_job(
+        dev_authoring.reference, host.session
+    )
+    try:
+        source = pack_authoring.read_source(text)
+        analysis = pack_authoring.analyse(source, known_services=services)
+        draft = pack_authoring.draft_module(analysis, msg["plan"], slots=slots)
+    except pack_authoring.AuthoringError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+
+    root = dev_authoring.packs_root(hass)
+    saved = await hass.async_add_executor_job(dev_authoring.save, root, draft)
+    # The write moved the authored catalog's directory stamp, so the next reader
+    # would rescan and reread the file -- and the next reader is the panel's own
+    # listing, on the event loop, which is the blocking call `preload` exists to
+    # remove. Warmed here, in an executor, so a save cannot make the tab it just
+    # answered slower to open.
+    await hass.async_add_executor_job(
+        live_modules.preload, host.session.root, host.session.user_root
+    )
+    # Validated from the file just written, so the verdict is about the artifact
+    # rather than about the document it was built from -- and by the installer's
+    # own checks either way, so "saved" never means "saved and uninstallable".
+    #
+    # `partial` for the install, because `async_add_executor_job` forwards
+    # positional arguments only: passing `room_id=` to it is a `TypeError` raised
+    # before the install is ever reached, which is what this save used to answer
+    # with.
+    #
+    # The two branches are the panel's two buttons. "Save module" writes the
+    # module and asks whether the house would take it; "Save and install there"
+    # writes it and puts it in a room. Installed on the second and merely
+    # validated on the first, because a person who asked for a file and got a
+    # module in their house has been given something they did not ask for, and
+    # the panel says which of the two it did.
+    try:
+        if msg["install"]:
+            await hass.async_add_executor_job(
+                partial(
+                    live_modules.install,
+                    host.session,
+                    saved.manifest,
+                    room_id=msg.get("room_id"),
+                    pack_base=root,
+                )
+            )
+        else:
+            await hass.async_add_executor_job(
+                partial(
+                    live_modules.validate,
+                    host.session,
+                    saved.manifest,
+                    pack_base=root,
+                )
+            )
+    except LiveSessionError as refusal:
+        # The file stays: a person who asked for a module to be written has one,
+        # and the refusal is about installing it. Reporting the failure and
+        # leaving the artifact is what lets them fix the plan and try again
+        # without losing the name they chose.
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+
+    result: dict[str, Any] = {
+        "saved": {
+            "name": str(draft.document["name"]),
+            "file": saved.manifest.name,
+            "yaml": saved.text,
+        },
+        "modules": [
+            dict(module) for module in live_modules.installed_modules(host.session)
+        ],
+    }
+    await host.async_save()
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): DEV_INSTALL,
+        vol.Required("name"): str,
+        vol.Optional("room_id"): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_dev_install(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Install a module a person authored, from the file they authored it to.
+
+    The file is named by pack name rather than sent by the panel, so what installs
+    is what is on disk -- a panel could otherwise put a document into a house that
+    nobody could reproduce from the config directory afterwards, which is the one
+    property authoring has to keep.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    root = dev_authoring.packs_root(hass)
+    manifest = root / f"{msg['name']}.yaml"
+    if not manifest.is_file():
+        connection.send_error(
+            msg["id"], NOT_FOUND, f"no authored module is called {msg['name']!r}"
+        )
+        return
+    try:
+        await hass.async_add_executor_job(
+            partial(
+                live_modules.install,
+                host.session,
+                manifest,
+                room_id=msg.get("room_id"),
+                pack_base=root,
+            )
+        )
+    except LiveSessionError as refusal:
+        _error(connection, msg, refusal)
+        return
+    result = {
+        "modules": [
+            dict(module) for module in live_modules.installed_modules(host.session)
+        ]
+    }
+    await host.async_save()
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): DEV_EXPORT,
+        vol.Required("pack"): str,
+        vol.Optional("room_id"): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_dev_export(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """One installed module's behaviours as the automations that would do the same.
+
+    The slots are resolved in the room the caller names -- or at house scope for a
+    behaviour declared there -- so the automations name the entities the module
+    actually acts on in *this* house rather than the roles it was written
+    against. That is the whole difference between an export and a copy of the
+    manifest, and it is why the room is worth asking for.
+
+    The manifest is read in an executor. A module a person authored lives under
+    `/config` and this reads it from disk, which is the blocking call Home
+    Assistant reports by name -- once per export, on the export button.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    record = host.session.installed.get(msg["pack"])
+    if record is None:
+        connection.send_error(
+            msg["id"], NOT_FOUND, f"no module called {msg['pack']!r} is installed"
+        )
+        return
+    document = await hass.async_add_executor_job(_installed_document, host, msg["pack"])
+    behaviours = [
+        behaviour
+        for behaviour in document.get("behaviours", [])
+        if isinstance(behaviour, Mapping)
+    ]
+    room_id = msg.get("room_id")
+    bindings = {
+        slot: entities
+        for behaviour in behaviours
+        for slot, entities in dev_authoring.bound_slots(
+            host.session, behaviour, room_id
+        ).items()
+    }
+    documents = pack_authoring.automation_documents(
+        behaviours,
+        bindings=bindings,
+        options={},
+        title=str(
+            _nested(document, "i18n", "default", "pack")
+            or document.get("name")
+            or msg["pack"]
+        ),
+    )
+    # The roles this room fills nothing for, named so the screen can say so.
+    #
+    # A behaviour's acted slot is the last one it writes (`engine/behaviours/
+    # declared.py`), and a slot that resolved to nothing is written as a target
+    # naming nothing -- deliberately, because an absent target is Home
+    # Assistant's "every entity of that domain" (`automation_documents`). That
+    # makes the export honest and silent at once: the automations are correct
+    # and they would do nothing, and nothing in the YAML says why. This is the
+    # why, and it is the room the caller asked about that decides it -- export a
+    # module placed in the kitchen at house scope and every role is here.
+    unresolved = sorted(
+        {
+            slots[-1]
+            for behaviour in behaviours
+            if (slots := [str(slot) for slot in behaviour.get("slots", [])])
+            and not bindings.get(slots[-1])
+        }
+    )
+    connection.send_result(
+        msg["id"],
+        {
+            "pack": msg["pack"],
+            "automations": [dict(dict(document)) for document in documents],
+            "yaml": pack_authoring.automation_text(documents),
+            "unresolved": unresolved,
+        },
+    )
+
+
+def _installed_document(host: OpenHouseHost, pack: str) -> Mapping[str, Any]:
+    """The manifest document of an installed pack, read from the file it came from.
+
+    Read rather than remembered because the installed record holds what the engine
+    needs and not what a person wrote: the behaviours' slots, their services and
+    their names are in the manifest, and an export that reconstructed them from
+    the record would be an export of the engine's reading rather than of the
+    person's module.
+    """
+    for candidate in _manifest_candidates(host, pack):
+        if candidate.is_file():
+            try:
+                document = yaml.safe_load(candidate.read_text(encoding="utf-8"))
+            except (OSError, yaml.YAMLError):
+                continue
+            if isinstance(document, Mapping):
+                return document
+    return {}
+
+
+def _manifest_candidates(host: OpenHouseHost, pack: str) -> tuple[Path, ...]:
+    """Where a pack's manifest might be, in the order it is worth trying.
+
+    The authored directory first, then the catalog's own answer, then the shape a
+    pack in the checkout takes. A name published in both catalogs resolves to the
+    authored one here and to the checkout's in `_published`, which is not a
+    contradiction: `_published` is the *offer* and this is the *module a person is
+    looking at*, and a person looking at a module they wrote gets theirs.
+    """
+    paths = [
+        None
+        if host.session.user_root is None
+        else host.session.user_root / f"{pack}.yaml",
+        host.catalog.paths.get(pack),
+        host.session.root / "packs" / "official" / pack / f"{pack}.yaml",
+        host.session.root / "packs" / "derived" / pack / f"{pack}.yaml",
+    ]
+    return tuple(path for path in paths if path is not None)
 
 
 # -- Shared plumbing --------------------------------------------------------
@@ -1275,27 +4328,6 @@ def _pack_path(
     return views.pack_path(host, pack, tier=tier)
 
 
-def _registry_ids(host: OpenHouseHost) -> Mapping[str, str]:
-    """Every bound entity's registry id, keyed by entity id.
-
-    The export document is written to be portable, so it names entities by
-    registry id where it can: an entity id is a name a person may change, and a
-    document that carried one would restore a house whose bindings pointed at
-    nothing after a rename. The engine's own export takes this mapping for exactly
-    that reason and this is where a live house gets one.
-    """
-    from homeassistant.helpers import entity_registry as er
-
-    entries = er.async_get(host.hass)
-    found: dict[str, str] = {}
-    for room in host.rooms.values():
-        for entity_id in room.bindings.values():
-            entry = entries.async_get(entity_id)
-            if entry is not None:
-                found[entity_id] = entry.id
-    return found
-
-
 #: Every handler, in the order `protocol.ts` lists them. A tuple rather than a
 #: call to `async_register_command` at each definition, so "is every command
 #: registered" is a question about one list a test can read.
@@ -1319,17 +4351,47 @@ _HANDLERS: tuple[Any, ...] = (
     ws_module_set_enabled,
     ws_module_set_behaviour_enabled,
     ws_module_set_behaviour_scope,
+    ws_module_set_behaviour_priority,
+    ws_module_set_slot,
+    ws_module_set_slot_rule,
+    ws_slot_set_parts,
     ws_house_scope,
     ws_modules_list,
     ws_profiles_list,
     ws_profile_activate,
+    ws_profile_activate_house,
+    ws_profile_capture,
+    ws_profile_deactivate_house,
+    ws_profile_rename,
+    ws_profile_remove,
+    ws_profile_export,
+    ws_profile_import,
     ws_store_index,
     ws_store_install,
     ws_activity_list,
     ws_activity_subscribe,
     ws_health_list,
-    ws_export_document,
-    ws_import_preview,
-    ws_import_apply,
     ws_dashboard_generate,
+    ws_dev_sources,
+    ws_dev_read,
+    ws_dev_save,
+    ws_dev_install,
+    ws_dev_export,
+    ws_modules_hosted,
+    ws_modules_read,
+    ws_modules_host,
+    ws_modules_settings,
+    ws_modules_edit,
+    ws_modules_config_switch,
+    ws_modules_config_add,
+    ws_modules_config_rename,
+    ws_modules_config_remove,
+    ws_modules_store,
+    ws_modules_define,
+    ws_modules_deploy,
+    ws_modules_remove,
+    ws_modules_detach,
+    ws_modules_unhost,
+    ws_modules_export,
+    ws_modules_import,
 )

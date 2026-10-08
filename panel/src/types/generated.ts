@@ -35,8 +35,8 @@ export const SCHEMA_VERSIONS = {
   "export-document": "1.1.0",
   "house": "1.0.0",
   "mode": "1.0.0",
-  "pack-manifest": "1.3.0",
-  "profile": "1.1.0",
+  "pack-manifest": "1.4.0",
+  "profile": "1.2.0",
   "room-type": "1.0.0",
   "scenario": "1.0.0",
   "slot": "1.0.0",
@@ -985,7 +985,7 @@ export interface Mode {
 }
 
 // ----------------------------------------------------------------------
-// pack-manifest @ 1.3.0
+// pack-manifest @ 1.4.0
 // ----------------------------------------------------------------------
 export interface PackManifest {
   /**
@@ -1190,6 +1190,27 @@ export interface PackManifestBehaviour {
    * whichever slot the engine happened to visit.
    */
   slots?: string[];
+  /**
+   * The packs this behaviour holds off while it is on: the module-level override one pack is
+   * allowed to place over another, and nothing more. This is the first clause in the manifest
+   * that reaches outside the declaring pack -- every other one configures the pack itself --
+   * and what it reaches is the whole of the target's module switch. Deliberately packs and not
+   * behaviours, settings or slots: what a suppression does is switch a module off, the one act
+   * that changes nothing about the target and is therefore the one act installation can always
+   * undo, and a clause that reached further would be a pack editing another pack's
+   * configuration -- a state no uninstall can restore and no person can see. Deliberately a
+   * declaration and not a log: the manifest says which packs *this* behaviour would hold off,
+   * and which of those it is actually holding off right now is derived from which modules are
+   * on, which is why suppression is temporary by construction and cannot outlive the switch
+   * that caused it. The target need not exist in any particular house -- a manifest does not
+   * know which house it will land in -- so a pack may name one it expects beside it, and a
+   * house without it simply has nothing held off. A pack naming itself is refused when the
+   * manifest is validated: the suppression is derived from what is on, so a pack holding itself
+   * off would go off the instant it was on and come back the instant it was off, a module that
+   * can never run with no switch anywhere that explains what a person is seeing. Omitted means
+   * the behaviour suppresses nothing, which is every 1.3.0 pack and most of 1.4.0.
+   */
+  suppresses?: string[];
   /** A trigger block kind, resolved against the published vocabulary rather than restated here. */
   trigger?: BehaviourVocabularyTrigger;
 }
@@ -1331,7 +1352,7 @@ export interface PackManifestReference {
 }
 
 // ----------------------------------------------------------------------
-// profile @ 1.1.0
+// profile @ 1.2.0
 // ----------------------------------------------------------------------
 export interface Profile {
   /**
@@ -1343,7 +1364,10 @@ export interface Profile {
   /**
    * The settings this profile changes, as config keys to values. A room profile's deltas apply
    * in the room it is selected in; a house profile's apply at house scope. A delta is over the
-   * room's (or house's) base, so a key absent here takes the base's value.
+   * room's (or house's) base, so a key absent here takes the base's value. Applying a profile's
+   * deltas leaves it in force: the key it names reads as the profile says until the profile is
+   * taken off, which is what a *hand-written* profile is for. A profile taken from a house
+   * carries `setup` instead.
    */
   deltas?: { [key: string]: unknown; };
   description: string;
@@ -1354,7 +1378,8 @@ export interface Profile {
   enabled_behaviours?: string[];
   /**
    * A `room` profile is selected in a room and applies its deltas there; a `house` profile
-   * bundles the room selections the whole house takes at once.
+   * bundles the room selections the whole house takes at once, and is the only kind that can be
+   * taken from a house.
    */
   kind: "room" | "house";
   /** Mode names this profile activates. */
@@ -1362,9 +1387,24 @@ export interface Profile {
   name: string;
   /**
    * A house profile's room selections: room id to axis to the room profile selected on that
-   * axis. Selecting a house profile sets exactly these.
+   * axis. Selecting a house profile sets exactly these. A taken profile carries the selections
+   * the house was on, and they apply the way a written profile's do -- a selection is a fact
+   * about which profile a room is on, not a setting, and the layer it resolves at is the same
+   * either way.
    */
   selections?: { [key: string]: { [key: string]: string; }; };
+  /**
+   * A *taken* house profile's house: everything the house was configured to be at the moment
+   * the profile was taken. Its presence is what makes a house profile a snapshot, and applying
+   * it writes each part back where a person's own edit of that part would have been written.
+   * Absent parts are not an omission to be filled in from the current house -- a house that had
+   * no modules hosted had none, and restoring is putting the house back rather than merging
+   * into it. `additionalProperties` is true because these are the house's own documents, whose
+   * shapes the things that own them define (`LiveSession.to_state`,
+   * `ha_adapter/module_records.py`) and this schema does not restate: a copy restated here
+   * would be a second definition of a house, drifting from the first the moment either changed.
+   */
+  setup?: { [key: string]: unknown; };
 }
 
 export type ProfileEnabledBehaviour = string;

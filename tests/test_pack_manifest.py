@@ -667,7 +667,7 @@ def test_the_two_range_clauses_take_the_same_grammar() -> None:
 
 def test_the_reasons_are_closed_and_distinct() -> None:
     assert len(set(manifest.REASONS)) == len(manifest.REASONS)
-    assert len(manifest.REASONS) == 14
+    assert len(manifest.REASONS) == 15
 
 
 def test_a_failure_carries_three_facts_and_no_class_of_its_own() -> None:
@@ -768,6 +768,14 @@ def test_every_reason_is_reachable(inspected: tuple, tmp_path: Path) -> None:
     unwaited = _example()
     unwaited["behaviours"] = [{**_example()["behaviours"][0], "for": "nosuchgrace"}]
 
+    # A behaviour naming its own pack in `suppresses`: a module that could never
+    # run, refused at validation because by evaluation time the only symptom
+    # would be a module that is on and never acts.
+    selfsuppressed = _example()
+    selfsuppressed["behaviours"] = [
+        {**_example()["behaviours"][0], "suppresses": ["example_pack"]}
+    ]
+
     found: set[str] = set()
     found.update(reasons(retired, "r1.yaml"))
     found.update(reasons(broken, "r2.yaml"))
@@ -782,6 +790,7 @@ def test_every_reason_is_reachable(inspected: tuple, tmp_path: Path) -> None:
     found.update(reasons(defaultless, "r12.yaml"))
     found.update(reasons(misdefaulted, "r13.yaml"))
     found.update(reasons(unwaited, "r14.yaml"))
+    found.update(reasons(selfsuppressed, "r15.yaml"))
     found.update(
         _reasons(
             manifest.validate_manifest(

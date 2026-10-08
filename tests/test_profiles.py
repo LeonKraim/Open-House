@@ -20,7 +20,9 @@ from engine.profiles import (
     ActivationRule,
     BlockedReason,
     InvalidProfileError,
+    Profile,
     ProfileActivator,
+    ProfileKind,
     ProfileSet,
     RuleKind,
     UnknownProfileError,
@@ -252,6 +254,125 @@ def test_the_set_round_trips_through_its_document(schema: Mapping[str, object]) 
     profiles.activate_house_profile("vacation")
     rebuilt = ProfileSet.from_document(profiles.to_document(), schema=schema)
     assert rebuilt.to_document() == profiles.to_document()
+
+
+# --------------------------------------------------------------------------
+# Removing a profile, and the two shapes an export takes
+# --------------------------------------------------------------------------
+
+
+def test_removing_a_profile_takes_every_selection_that_named_it(
+    schema: Mapping[str, object],
+) -> None:
+    """A selection names a profile, so the name leaving takes the selection.
+
+    Left behind, the selection would be a room pointing at a name the set no
+    longer holds -- which is a `KeyError` waiting in `effective_rooms` rather than
+    an answer, so the removal goes through `clear` and the maps stay consistent.
+    """
+    profiles = _set(
+        schema,
+        _room("bright", "lighting", **{KEY: 120.0}),
+        _room("warm", "climate", **{"engine.rate_limit.bound": 5}),
+    )
+    profiles.select("foyer", "lighting", "bright")
+    profiles.select("foyer", "climate", "warm")
+
+    profiles.remove("bright")
+
+    assert "bright" not in profiles.profiles
+    assert profiles.selection("foyer") == {"climate": "warm"}
+    assert profiles.effective_rooms()["foyer"] == {"engine.rate_limit.bound": 5}
+
+
+def test_removing_the_house_profile_in_force_releases_the_house(
+    schema: Mapping[str, object],
+) -> None:
+    """The house profile and the room selections are two facts, not one.
+
+    The bundle it applied stays -- `deactivate_house_profile`'s rule, met from the
+    other door -- but the house can no longer be *on* a profile the set does not
+    hold, because that is what `house_profile` is read as elsewhere.
+    """
+    profiles = _set(
+        schema,
+        _room("bright", "lighting", **{KEY: 120.0}),
+        _house("vacation", {"foyer": {"lighting": "bright"}}),
+    )
+    profiles.activate_house_profile("vacation")
+
+    profiles.remove("vacation")
+
+    assert profiles.house_profile is None
+    assert profiles.selection("foyer") == {"lighting": "bright"}
+    assert profiles.effective_rooms()["foyer"] == {KEY: 120.0}
+
+
+def test_removing_a_profile_the_set_does_not_hold_is_refused(
+    schema: Mapping[str, object],
+) -> None:
+    profiles = _set(schema, _room("bright", "lighting"))
+    with pytest.raises(UnknownProfileError, match="'night' is not held by this set"):
+        profiles.remove("night")
+
+
+def test_exporting_one_profile_writes_that_profile_document(
+    schema: Mapping[str, object],
+) -> None:
+    profiles = _set(
+        schema,
+        _room("bright", "lighting", **{KEY: 120.0}),
+        _house("vacation", {"foyer": {"lighting": "bright"}}),
+    )
+    assert (
+        profiles.export_document("bright") == profiles.profile("bright").to_document()
+    )
+    assert profiles.export_document("vacation") == _house(
+        "vacation", {"foyer": {"lighting": "bright"}}
+    )
+
+
+def test_exporting_the_set_writes_the_profiles_and_not_the_selections(
+    schema: Mapping[str, object],
+) -> None:
+    """The one place the two export shapes differ, and the reason for it.
+
+    A profile is portable and a selection is a fact about this house's rooms, so
+    the set form carries the profiles only. `to_document` is the *state* document
+    and does carry them; the two are different documents for different jobs, and
+    a set form that quietly included the state would be a file that half-applies
+    in a house whose rooms are named differently.
+    """
+    profiles = _set(
+        schema,
+        _room("bright", "lighting", **{KEY: 120.0}),
+        _house("vacation", {"foyer": {"lighting": "bright"}}),
+    )
+    profiles.activate_house_profile("vacation")
+
+    document = profiles.export_document()
+
+    assert set(document) == {"profiles"}
+    assert [row["name"] for row in document["profiles"]] == ["bright", "vacation"]
+    assert set(profiles.to_document()) == {"profiles", "selections", "house_profile"}
+
+
+def test_an_exported_set_rebuilds_into_a_set_that_holds_the_same_profiles(
+    schema: Mapping[str, object],
+) -> None:
+    """The imported half of the round trip: a document in, the same set out.
+
+    `selections` is the field the export deliberately drops and the rebuild
+    deliberately defaults, so the whole starting set has to be rebuilt from that
+    same empty starting point for the two documents to be comparable at all.
+    """
+    source = _set(
+        schema,
+        _room("bright", "lighting", **{KEY: 120.0}),
+        _house("vacation", {"foyer": {"lighting": "bright"}}),
+    )
+    rebuilt = ProfileSet(list(source.export_document()["profiles"]), schema=schema)
+    assert rebuilt.export_document() == source.export_document()
 
 
 # --------------------------------------------------------------------------
@@ -501,3 +622,230 @@ def test_the_activator_steps_through_the_facade(vocabulary: Vocabulary) -> None:
     result = session.run_profile_rules()
     assert [a.after for a in result.activations] == ["bright"]
     assert session.engine.resolve(KEY, RoomScope("foyer")).layer is Layer.PROFILE
+
+
+# --------------------------------------------------------------------------
+# Taking a profile from a house rather than writing one for it
+# --------------------------------------------------------------------------
+
+
+def test_capturing_builds_a_house_profile_the_schema_accepts(
+    schema: Mapping[str, object],
+) -> None:
+    """`capture` is the second way a profile comes to exist, and `add` is the door.
+
+    What it produces is held by the set that made it, which is only possible if
+    the document it built validated: `ProfileSet.capture` writes the same
+    document `add` would have been handed, so a capture that produced something
+    the schema refused would fail here rather than at the next load.
+    """
+    profiles = _set(schema, _room("bright", "lighting", **{KEY: 120.0}))
+    profiles.select("foyer", "lighting", "bright")
+    taken = profiles.capture(
+        name="last_tuesday",
+        description="What this house was on and set to.",
+        selections=profiles.selections(),
+        setup={
+            "installed": {"packs": [{"name": "motion_pack"}]},
+            "rooms": [{"id": "foyer", "name": "Foyer", "bindings": {}}],
+            "house_settings": {"engine.solar.sun_elevation_threshold": 3.0},
+            "room_settings": {"foyer": {KEY: 45.0}},
+            "house_bindings": {"lock": "lock.front_door"},
+            "module_rooms": {"motion_pack": "foyer"},
+            "modules": [{"slug": "foyer_motion", "settings": {"max": 60}}],
+        },
+    )
+    assert taken.kind is ProfileKind.HOUSE
+    assert taken.snapshot is True
+    assert taken.selections == {"foyer": {"lighting": "bright"}}
+    assert taken.setup["house_settings"] == {
+        "engine.solar.sun_elevation_threshold": 3.0
+    }
+    assert taken.setup["room_settings"] == {"foyer": {KEY: 45.0}}
+    assert taken.setup["modules"] == [{"slug": "foyer_motion", "settings": {"max": 60}}]
+    assert profiles.profile("last_tuesday") is taken
+
+
+def test_a_snapshot_is_read_from_the_field_being_there_and_not_from_it_being_full(
+    schema: Mapping[str, object],
+) -> None:
+    """A profile taken from a house that had set nothing is a snapshot of nothing.
+
+    The one capture that matters most is the house before anybody touched it, and
+    that document carries an empty `setup`. Read by truthiness it would load back
+    as a hand-written profile -- one whose (empty) deltas resolve above the house
+    for as long as it is in force -- so the presence of the field is what says
+    which of the two a profile is.
+    """
+    empty = Profile.from_document(
+        {
+            "name": "fresh",
+            "kind": "house",
+            "description": "Nothing set.",
+            "selections": {},
+            "setup": {},
+        },
+        schema=schema,
+        index=0,
+    )
+    assert empty.snapshot is True
+
+
+def test_a_taken_profile_round_trips_through_its_document(
+    schema: Mapping[str, object],
+) -> None:
+    profiles = _set(schema, _room("bright", "lighting", **{KEY: 120.0}))
+    profiles.select("foyer", "lighting", "bright")
+    profiles.capture(
+        name="evening",
+        description="What this house was on and set to.",
+        selections=profiles.selections(),
+        setup={"room_settings": {"foyer": {KEY: 30.0}}, "modules": []},
+    )
+    rebuilt = ProfileSet.from_document(profiles.to_document(), schema=schema)
+    assert rebuilt.to_document() == profiles.to_document()
+    assert rebuilt.profile("evening").snapshot is True
+    assert rebuilt.profile("evening").setup == {
+        "room_settings": {"foyer": {KEY: 30.0}},
+        "modules": [],
+    }
+
+
+def test_renaming_a_profile_takes_everything_that_named_it_with_it(
+    schema: Mapping[str, object],
+) -> None:
+    """A rename is the profile moving, not a second profile beside it.
+
+    The three things that name a profile are the key it is held under, the room
+    selections that point at it and the house profile in force; a rename that
+    moved only the first would leave two of them naming a profile the set no
+    longer holds -- which is the `KeyError` `remove`'s docstring describes
+    arriving by another road.
+    """
+    profiles = _set(
+        schema,
+        _room("bright", "lighting", **{KEY: 120.0}),
+        _house("vacation", {"foyer": {"lighting": "bright"}}),
+    )
+    profiles.activate_house_profile("vacation")
+
+    profiles.rename("bright", "sunny")
+    profiles.rename("vacation", "holiday")
+
+    assert sorted(profiles.profiles) == ["holiday", "sunny"]
+    assert profiles.selections() == {"foyer": {"lighting": "sunny"}}
+    assert profiles.house_profile == "holiday"
+
+
+def test_a_rename_onto_a_name_already_held_is_refused(
+    schema: Mapping[str, object],
+) -> None:
+    """Two profiles under one name is the state `add` refuses, by either door."""
+    profiles = _set(schema, _room("bright", "lighting"), _room("dim", "lighting"))
+    with pytest.raises(UnknownProfileError, match="declared twice"):
+        profiles.rename("dim", "bright")
+
+
+def test_a_rename_may_not_take_a_name_the_schema_will_not_have(
+    schema: Mapping[str, object],
+) -> None:
+    """The schema decides what a name may be, here as at every other door."""
+    profiles = _set(schema, _room("bright", "lighting"))
+    with pytest.raises(InvalidProfileError):
+        profiles.rename("bright", "Not A Name")
+
+
+def test_a_room_profile_may_not_carry_a_snapshot(schema: Mapping[str, object]) -> None:
+    """A house is the house kind's, and the schema says so.
+
+    A room profile is a delta on one axis; a room that could carry a whole
+    house's `setup` would be a second, contradictory way of saying what a house
+    is, applied by a door that reads the house profile and nothing else.
+    """
+    with pytest.raises(InvalidProfileError):
+        _set(
+            schema,
+            {
+                "name": "bright",
+                "kind": "room",
+                "axis": "lighting",
+                "description": "bright",
+                "deltas": {},
+                "setup": {},
+            },
+        )
+
+
+def test_taking_a_name_the_set_already_holds_is_refused(
+    schema: Mapping[str, object],
+) -> None:
+    """One rule for two doors: `capture` adds through `add`, so a clash is `add`'s."""
+    profiles = _set(schema, _room("bright", "lighting"))
+    with pytest.raises(UnknownProfileError, match="declared twice"):
+        profiles.capture(
+            name="bright",
+            description="What this house was on and set to.",
+            selections={},
+            setup={},
+        )
+
+
+def test_taking_a_profile_again_moves_only_the_house_it_holds(
+    schema: Mapping[str, object],
+) -> None:
+    """The third door, and the two things `remove`-and-`capture` would get wrong.
+
+    A profile that is taken *again* is the same profile holding a house that has
+    moved on -- so the selections that named it stay, and so does the house being
+    on it. `remove` followed by `capture` would leave the house with its rooms on
+    nothing and its house profile released, which is a house changed by the act
+    of learning what it looks like.
+    """
+    profiles = _set(
+        schema,
+        _room("bright", "lighting", **{KEY: 120.0}),
+        _house("vacation", {"foyer": {"lighting": "bright"}}),
+    )
+    profiles.activate_house_profile("vacation")
+    taken = profiles.capture(
+        name="tuesday",
+        description="What this house was on and set to.",
+        selections=profiles.selections(),
+        setup={"room_settings": {"foyer": {KEY: 30.0}}},
+    )
+    profiles.activate_house_profile("tuesday")
+
+    again = profiles.retake(
+        "tuesday",
+        selections=profiles.selections(),
+        setup={"room_settings": {"foyer": {KEY: 45.0}}},
+    )
+
+    assert again.setup == {"room_settings": {"foyer": {KEY: 45.0}}}
+    assert again.snapshot is True
+    # The name, the kind and the words it was taken with are the profile's own
+    # and not the caller's to restate: what a re-take moves is the house.
+    assert again.name == "tuesday"
+    assert again.kind is ProfileKind.HOUSE
+    assert again.description == taken.description
+    assert profiles.profile("tuesday") is again
+    assert profiles.house_profile == "tuesday"
+    assert profiles.selections() == {"foyer": {"lighting": "bright"}}
+
+
+def test_a_re_take_goes_through_the_schema_like_every_other_door(
+    schema: Mapping[str, object],
+) -> None:
+    """What the house now is has to be a profile document, or it is refused.
+
+    A re-take is the one door where the document is not the caller's to write --
+    most of it is the profile already held -- so it is also the door where the
+    schema could most easily be skipped and the caller's half believed.
+    """
+    profiles = _set(schema, _house("vacation", {}))
+    with pytest.raises(InvalidProfileError):
+        profiles.retake(
+            "vacation",
+            selections={"foyer": {"lighting": "Not A Name"}},
+            setup={},
+        )

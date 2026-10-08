@@ -26,20 +26,28 @@ import type {
   BindingSuggestion,
   Capabilities,
   DecisionLogEntry,
+  DevExportReply,
+  DevPlan,
+  DevReadReply,
+  DevSaved,
+  DevSource,
   HealthIssue,
+  HostedModule,
   HouseOverview,
   HouseScope,
-  ImportPreview,
   InstalledModule,
+  ModuleBinding,
   ModuleInstallReply,
   ModuleOffer,
+  ModuleOfferRow,
+  ModuleReadReply,
+  ModuleSlotRuleKind,
   ModuleUninstallReply,
   ProfileRef,
   RoomDetail,
   RoomSummary,
   StoreEntry,
 } from "./models.ts";
-import type { ExportDocument } from "../types/generated.ts";
 
 /** The response envelope Home Assistant's websocket commands answer with. */
 interface ListResponse<T> {
@@ -53,6 +61,20 @@ interface ListResponse<T> {
  * under three seconds, which is inside the time a person reads a screen.
  */
 const RETRY_DELAYS_MS = [250, 700, 1800];
+
+/**
+ * `revision`, when the caller has one, as a payload key to spread.
+ *
+ * Absent is not zero, and the server reads the two differently: a write with no
+ * `revision` is a write from a caller that is not rendering a page (a script, or
+ * a command issued before the read that would have carried one), and it is let
+ * through. A write *with* one is a page saying which house it was looking at,
+ * and is refused when that house has moved. So the key is omitted rather than
+ * defaulted, and this is the one place that decides which.
+ */
+function withRevision(revision: number | undefined): { revision?: number } {
+  return revision === undefined ? {} : { revision };
+}
 
 export class OpenHouseClient {
   private readonly hass: HassLike;
@@ -145,26 +167,39 @@ export class OpenHouseClient {
     });
   }
 
-  bind(roomId: string, slot: string, entityId: string): Promise<RoomDetail> {
+  bind(
+    roomId: string,
+    slot: string,
+    entityId: string,
+    revision?: number,
+  ): Promise<RoomDetail> {
     return this.call<RoomDetail>(COMMANDS.roomBind, {
       room_id: roomId,
       slot,
       entity_id: entityId,
+      ...withRevision(revision),
     });
   }
 
-  replace(roomId: string, slot: string, entityId: string): Promise<RoomDetail> {
+  replace(
+    roomId: string,
+    slot: string,
+    entityId: string,
+    revision?: number,
+  ): Promise<RoomDetail> {
     return this.call<RoomDetail>(COMMANDS.roomReplace, {
       room_id: roomId,
       slot,
       entity_id: entityId,
+      ...withRevision(revision),
     });
   }
 
-  unbind(roomId: string, slot: string): Promise<RoomDetail> {
+  unbind(roomId: string, slot: string, revision?: number): Promise<RoomDetail> {
     return this.call<RoomDetail>(COMMANDS.roomUnbind, {
       room_id: roomId,
       slot,
+      ...withRevision(revision),
     });
   }
 
@@ -191,8 +226,13 @@ export class OpenHouseClient {
   setRoomOptions(
     roomId: string,
     values: Record<string, unknown>,
+    revision?: number,
   ): Promise<{ schema: unknown; values: Record<string, unknown> }> {
-    return this.call(COMMANDS.roomOptionsSet, { room_id: roomId, values });
+    return this.call(COMMANDS.roomOptionsSet, {
+      room_id: roomId,
+      values,
+      ...withRevision(revision),
+    });
   }
 
   async availableModules(roomId: string): Promise<ModuleOffer[]> {
@@ -285,6 +325,125 @@ export class OpenHouseClient {
   }
 
   /**
+   * Rank one behaviour of a pack, so two rival modules can be settled.
+   *
+   * The number arbitration sorts by when two behaviours propose for one device
+   * in one tick. `priority` is a whole number; the atom row carries
+   * `default_priority`, and sending that back removes the setting rather than
+   * recording the declared rank. The answer is the whole module, for the reason
+   * `setModuleBehaviourEnabled` gives.
+   */
+  setModuleBehaviourPriority(
+    roomId: string,
+    pack: string,
+    behaviour: string,
+    priority: number,
+  ): Promise<InstalledModule> {
+    return this.call<InstalledModule>(COMMANDS.moduleSetBehaviourPriority, {
+      room_id: roomId,
+      pack,
+      behaviour,
+      priority,
+    });
+  }
+
+  /**
+   * Point one of a module's slots at a device of its own, and name it.
+   *
+   * The per-module override: the room's binding is untouched, so every other
+   * module keeps acting on the device the room bound and only this one moves.
+   * `entityId` must name an entity the house holds; `null` clears the override
+   * back to the room's binding. `label` is display-only and `null` (or a blank)
+   * clears it back to the slot's own name. `part` is which part of a split slot
+   * this module is on -- `""` for the slot itself, and `null` for **not touched**,
+   * so a reset of the device does not also take the module off its part. The
+   * answer is the whole module, so the card redraws from what the server
+   * recorded.
+   */
+  setModuleSlot(
+    roomId: string,
+    pack: string,
+    slot: string,
+    entityId: string | null,
+    label: string | null,
+    part: string | null = null,
+  ): Promise<InstalledModule> {
+    return this.call<InstalledModule>(COMMANDS.moduleSetSlot, {
+      room_id: roomId,
+      pack,
+      slot,
+      entity_id: entityId,
+      label,
+      part,
+    });
+  }
+
+  /**
+   * Split a slot into parts, rename one, or take one away.
+   *
+   * A part is a role's half -- `light_group` split into `a` and `b` -- and it is
+   * *still the same slot*: two modules naming one part act on the one device the
+   * room (or the house) bound for it. `action` is `add`, `rename` or `remove`;
+   * `name` is the part, and `new_name` the new one for a rename.
+   *
+   * Renaming moves every module that was on the part onto the new name, because
+   * a part's name *is* the key it binds under and a module names that key.
+   * Removing is refused while a module still names the part, and the refusal
+   * names the modules -- they all act on the one device the part is, so taking it
+   * away would move them without saying so.
+   */
+  setSlotParts(
+    slot: string,
+    action: "add" | "rename" | "remove",
+    name: string,
+    newName = "",
+  ): Promise<{ slot: string; parts: { name: string }[] }> {
+    return this.call(COMMANDS.slotSetParts, {
+      slot,
+      action,
+      name,
+      new_name: newName,
+    });
+  }
+
+  /**
+   * Set one of a module's slots to logic instead of a device ("Set it to").
+   *
+   * The same four kinds the module input rows offer, held by the slot rather than
+   * by an input: `template` and `flow` are self-running, `script` needs a `when`
+   * list of entities to call it on, and `condition` needs the `device` it gates.
+   * A `kind` of `""` takes the rule back off the slot.
+   *
+   * Nothing here is decided in the panel. The server records the rule and its own
+   * watcher renders the template, calls the script or evaluates the condition as
+   * the world moves, writing the slot's entity as it goes -- so the answer is the
+   * whole module, redrawn from what the server worked out. `room_id` is which
+   * module: the rule belongs to the module, not to the room's binding, and two
+   * modules in one room may hold different rules on the same slot.
+   */
+  setModuleSlotRule(
+    roomId: string,
+    pack: string,
+    slot: string,
+    rule: {
+      kind: ModuleSlotRuleKind | "";
+      value?: unknown;
+      when?: string[];
+      device?: string | null;
+    },
+  ): Promise<InstalledModule> {
+    return this.call<InstalledModule>(COMMANDS.moduleSetSlotRule, {
+      room_id: roomId,
+      pack,
+      slot,
+      kind: rule.kind,
+      value: rule.value ?? null,
+      when: rule.when ?? [],
+      device: rule.device ?? null,
+    });
+  }
+
+  /**
    * The house's own page: its collected slots and its house-scoped modules.
    *
    * Not filtered by room, because there is no room to filter by -- "all the
@@ -303,8 +462,13 @@ export class OpenHouseClient {
    */
   setHouseOptions(
     values: Record<string, unknown>,
+    revision?: number,
   ): Promise<{ schema: unknown; values: Record<string, unknown> }> {
-    return this.call(COMMANDS.roomOptionsSet, { room_id: "", values });
+    return this.call(COMMANDS.roomOptionsSet, {
+      room_id: "",
+      values,
+      ...withRevision(revision),
+    });
   }
 
   async modules(): Promise<InstalledModule[]> {
@@ -333,6 +497,98 @@ export class OpenHouseClient {
       axis,
       profile,
     });
+  }
+
+  /**
+   * Put the house on a house profile.
+   *
+   * A separate method from `activateProfile` because it is a separate command:
+   * a house profile is not selected in a room, and sending it a room id would be
+   * inventing one. The answer is the profile list rather than a room detail,
+   * which is what a caller renders the new "active" chips from.
+   */
+  async activateHouseProfile(profile: string): Promise<ProfileRef[]> {
+    const response = await this.call<ListResponse<ProfileRef>>(
+      COMMANDS.profileActivateHouse,
+      { profile },
+    );
+    return response.profiles ?? [];
+  }
+
+  /** Take the house off its house profile. The room selections it set stay. */
+  async deactivateHouseProfile(): Promise<ProfileRef[]> {
+    const response = await this.call<ListResponse<ProfileRef>>(
+      COMMANDS.profileDeactivateHouse,
+    );
+    return response.profiles ?? [];
+  }
+
+  /**
+   * Take a profile from the house: what it is on, and what it is set to.
+   *
+   * `name` is the words a person typed and not an identifier: the server slugs
+   * it the way it slugs a module's title, because the name is what every
+   * selection of the profile is made by. The house goes on the new profile as
+   * part of taking it, so the answer is the profile list with it marked active.
+   */
+  async captureHouseProfile(name: string): Promise<ProfileRef[]> {
+    const response = await this.call<ListResponse<ProfileRef>>(
+      COMMANDS.profileCapture,
+      { name },
+    );
+    return response.profiles ?? [];
+  }
+
+  /**
+   * Rename a profile, keeping every room that is on it on it.
+   *
+   * `to` is the words a person typed, slugged by the server exactly as `name` is
+   * at capture: the name is what a selection is made by, so it is the same rule
+   * in both places rather than a second one that could be laxer.
+   */
+  async renameProfile(profile: string, to: string): Promise<ProfileRef[]> {
+    const response = await this.call<ListResponse<ProfileRef>>(
+      COMMANDS.profileRename,
+      { profile, to },
+    );
+    return response.profiles ?? [];
+  }
+
+  /** Drop a profile, and take everything that named it off with it. */
+  async removeProfile(profile: string): Promise<ProfileRef[]> {
+    const response = await this.call<ListResponse<ProfileRef>>(
+      COMMANDS.profileRemove,
+      { profile },
+    );
+    return response.profiles ?? [];
+  }
+
+  /**
+   * A profile's export, or every profile's, as the document to keep.
+   *
+   * One method for both halves because both answer the same thing -- a profile
+   * document -- and a second method would be a second place deciding what that
+   * is. Without a name the server sends the set form (`{ profiles: [...] }`).
+   */
+  exportProfile(profile?: string): Promise<Record<string, unknown>> {
+    return this.call<{ document: Record<string, unknown> }>(
+      COMMANDS.profileExport,
+      profile === undefined ? {} : { profile },
+    ).then((response) => response.document);
+  }
+
+  /**
+   * Read a profile document back, answering what was added and what replaced.
+   *
+   * `replace` is the caller's decision and not a guess: an import that quietly
+   * overwrote a profile a person had tuned would be the one write on this screen
+   * they cannot see coming.
+   */
+  importProfiles(
+    document: unknown,
+    replace = false,
+  ): Promise<{ imported: string[]; replaced: string[]; profiles: ProfileRef[] }> {
+    return this.call(COMMANDS.profileImport, { document, replace });
   }
 
   // -- store ---------------------------------------------------------------
@@ -400,27 +656,466 @@ export class OpenHouseClient {
     return response.issues ?? [];
   }
 
-  // -- import / export -----------------------------------------------------
-
-  exportDocument(): Promise<ExportDocument> {
-    return this.call<ExportDocument>(COMMANDS.exportDocument);
-  }
-
-  previewImport(document: unknown): Promise<ImportPreview> {
-    return this.call<ImportPreview>(COMMANDS.importPreview, { document });
-  }
-
-  applyImport(document: unknown): Promise<{
-    applied: boolean;
-    snapshot_id: string;
-    diff: ImportPreview["diff"];
-  }> {
-    return this.call(COMMANDS.importApply, { document, snapshot: true });
-  }
+  // -- dashboard -----------------------------------------------------------
 
   generateDashboard(
     roomId: string,
   ): Promise<{ created: boolean; url_path: string }> {
     return this.call(COMMANDS.dashboardGenerate, { room_id: roomId });
+  }
+
+  // -- dev: authoring and export -------------------------------------------
+
+  /**
+   * What may be imported, and what has already been authored.
+   *
+   * The one Dev command answerable with no house, so the tab renders a source
+   * list before setup as well as after.
+   */
+  devSources(): Promise<{
+    automations: DevSource[];
+    blueprints: DevSource[];
+    saved: DevSaved[];
+  }> {
+    return this.call(COMMANDS.devSources);
+  }
+
+  /**
+   * Read one source into the tables every decision is made against.
+   *
+   * Called again after each change to the decisions *only* when the source
+   * itself changes: the reading is a property of the document, not of the plan,
+   * so re-reading on every keystroke would re-walk the document for an answer
+   * that cannot have changed.
+   */
+  devRead(
+    kind: "automation" | "blueprint" | "text",
+    handle: { key?: string; text?: string },
+  ): Promise<DevReadReply> {
+    return this.call(COMMANDS.devRead, { kind, ...handle });
+  }
+
+  /** Write the module a plan describes, optionally installing it in one call. */
+  devSave(
+    kind: "automation" | "blueprint" | "text",
+    handle: { key?: string; text?: string },
+    plan: DevPlan,
+    install: { into?: string } | null,
+  ): Promise<{ saved: DevSaved & { yaml: string }; modules: InstalledModule[] }> {
+    return this.call(COMMANDS.devSave, {
+      kind,
+      ...handle,
+      plan,
+      install: install !== null,
+      // Against `undefined`, not against truth: the empty string is the house.
+      // `into ? ...` dropped it, so "the whole house" travelled as no room at
+      // all -- which the server reads as "place this by the entity join" and
+      // not as "this belongs to the house", the opposite of what was chosen.
+      ...(install?.into !== undefined ? { room_id: install.into } : {}),
+    });
+  }
+
+  /** Install a module a person authored, from the file they authored it to. */
+  devInstall(
+    name: string,
+    roomId?: string,
+  ): Promise<{ modules: InstalledModule[] }> {
+    return this.call(COMMANDS.devInstall, {
+      name,
+      // Again the house is `""`, so the test is against `undefined`.
+      ...(roomId !== undefined ? { room_id: roomId } : {}),
+    });
+  }
+
+  /** One module's behaviours, as the automations that would do the same. */
+  devExport(pack: string, roomId?: string): Promise<DevExportReply> {
+    return this.call(COMMANDS.devExport, {
+      pack,
+      // House scope is `""` here too: exporting at house scope asks the server
+      // for the house's own bindings, which a truthiness test never sent.
+      ...(roomId !== undefined ? { room_id: roomId } : {}),
+    });
+  }
+
+  // -- Hosted modules ------------------------------------------------------
+
+  /** Every module this house hosts, with what each output last read. */
+  modulesHosted(): Promise<{ modules: HostedModule[] }> {
+    return this.call(COMMANDS.modulesHosted);
+  }
+
+  /**
+   * Read one source as something to host: its inputs, its candidates, the house.
+   *
+   * `bindings` is the person's choices so far, and it changes the answer: an
+   * entity input is only offered as a readable candidate once it has been bound
+   * to a device, so a screen that asked before a choice was made would be offered
+   * a reading of nothing.
+   *
+   * `castRows` is the same thing for the rows answered with *logic*: the input
+   * names a condition, a flow or a script is behind, because such a row is one
+   * more thing the module may publish and the candidate list is built from the
+   * screen's own answers as well as the document's. Omitted entirely when the
+   * screen has not read yet -- the server then answers from the module's own
+   * record, which is the only truth there is about a screen nobody has touched.
+   */
+  modulesRead(
+    kind: "automation" | "blueprint" | "text",
+    handle: { key?: string; text?: string },
+    bindings: Record<string, ModuleBinding> = {},
+    module = "",
+    castRows: { casts?: string[]; flows?: string[]; scripts?: string[] } = {},
+  ): Promise<ModuleReadReply> {
+    return this.call(COMMANDS.modulesRead, {
+      kind,
+      ...handle,
+      bindings,
+      // Omitted rather than sent empty when this is a fresh import: the two are
+      // the same reading of a source and a different reading of a *module*,
+      // and `""` is not a module name.
+      ...(module ? { module } : {}),
+      ...castRows,
+    });
+  }
+
+  /**
+   * Host one source as a module, and answer with the house it landed in.
+   *
+   * `outputs` is the ticked candidates, each as `{ name, key }` -- the
+   * candidate's own name and the key the person called the output. Both are
+   * sent because the candidate's name is the blueprint's (`input:lux_sensor` is
+   * not an output name) and the key is what the entity is called.
+   */
+  modulesHost(
+    kind: "automation" | "blueprint" | "text",
+    handle: { key?: string; text?: string },
+    title: string,
+    bindings: Record<string, ModuleBinding>,
+    outputs: { name: string; key: string }[],
+    settings: string[] = [],
+    roomId = "",
+    flows: string[] = [],
+    scripts: Record<string, string> = {},
+  ): Promise<{ module: string; modules: HostedModule[] }> {
+    return this.call(COMMANDS.modulesHost, {
+      kind,
+      ...handle,
+      title,
+      bindings,
+      outputs,
+      settings,
+      room_id: roomId,
+      flows,
+      scripts,
+    });
+  }
+
+  /**
+   * Change a module's settings, and answer with the house as it now is.
+   *
+   * The automation is built again under the same id, so this replaces the module
+   * rather than making a second one; `bindings` is merged over what the module
+   * already answers, so sending only the exposed settings is what the screen is
+   * meant to do.
+   *
+   * `casts`, `flows` and `scripts` are the three kinds of *logic* a setting may
+   * be answered with rather than by a value, and each travels in its own shape
+   * for the reason `protocol.ts` gives: a condition is a config the server turns
+   * into an entity, a flow is a set of names because the id is Node-RED's to
+   * assign, and a script is a map of names to ids because the script already
+   * exists in this house and Open House only ever names it.
+   */
+  modulesSettings(
+    module: string,
+    bindings: Record<string, ModuleBinding> = {},
+    settings?: string[],
+    casts?: Record<string, unknown>,
+    flows?: string[],
+    scripts?: Record<string, string>,
+    revision?: number,
+  ): Promise<{ module: string; modules: HostedModule[] }> {
+    return this.call(COMMANDS.modulesSettings, {
+      module,
+      bindings,
+      settings,
+      casts,
+      flows,
+      scripts,
+      ...withRevision(revision),
+    });
+  }
+
+  /**
+   * Edit the module a room is running, and every other room running it.
+   *
+   * **The one module command whose subject is the module rather than a copy of
+   * it.** `module` is the name the house hosts it under -- what the card knows --
+   * and the server follows that back to the store row behind it, rewrites it, and
+   * builds every installation again. Which answers each room ends up with is the
+   * server's rule and not this screen's: an answer a room moved is the room's and
+   * stays, one it never moved follows the module.
+   */
+  modulesEdit(
+    module: string,
+    kind: "automation" | "blueprint" | "text",
+    handle: { key?: string; text?: string },
+    definition: {
+      title: string;
+      description?: string;
+      author?: string;
+      version?: string;
+      licence?: string;
+      bindings?: Record<string, ModuleBinding>;
+      outputs?: { name: string; key: string }[];
+      settings?: string[];
+      casts?: Record<string, unknown>;
+      flows?: string[];
+      scripts?: Record<string, string>;
+    },
+  ): Promise<{
+    module: string;
+    modules: HostedModule[];
+    store: ModuleOfferRow[];
+  }> {
+    return this.call(COMMANDS.modulesEdit, {
+      module,
+      kind,
+      ...handle,
+      ...definition,
+    });
+  }
+
+  // -- configurations: several answer-sets for one placed module ------------
+
+  /**
+   * Make one of a module's configurations the one it is running.
+   *
+   * A configuration *is* the person's answers, so this is `modulesSettings` by
+   * another name: the module is built again from the named answers, into the
+   * same automation and the same output entities. Everything the card was
+   * showing is that configuration's, so the caller refetches -- which is what
+   * the reply's module list is for.
+   */
+  modulesConfigSwitch(
+    module: string,
+    config: string,
+    revision?: number,
+  ): Promise<{ module: string; modules: HostedModule[] }> {
+    return this.call(COMMANDS.modulesConfigSwitch, {
+      module,
+      config,
+      ...withRevision(revision),
+    });
+  }
+
+  /** Start a new configuration from the running one, and switch the module to it. */
+  modulesConfigAdd(
+    module: string,
+    config: string,
+  ): Promise<{ module: string; modules: HostedModule[] }> {
+    return this.call(COMMANDS.modulesConfigAdd, { module, config });
+  }
+
+  /** Rename a configuration. Nothing about the module itself moves. */
+  modulesConfigRename(
+    module: string,
+    config: string,
+    to: string,
+  ): Promise<{ module: string; modules: HostedModule[] }> {
+    return this.call(COMMANDS.modulesConfigRename, { module, config, to });
+  }
+
+  /** Drop a configuration -- refused when it is the last one the module holds. */
+  modulesConfigRemove(
+    module: string,
+    config: string,
+  ): Promise<{ module: string; modules: HostedModule[] }> {
+    return this.call(COMMANDS.modulesConfigRemove, { module, config });
+  }
+
+  // -- the store: the modules this house offers -----------------------------
+
+  /**
+   * The modules this house offers, and where each one is installed.
+   *
+   * `roomId` decides whose verdict each row's `missing_slots` is: the house by
+   * default, which is what the Store tab wants, or a room, which is what "Add
+   * module to room" asks -- the same module can be missing a device in one room
+   * and not in another.
+   */
+  modulesStore(roomId = ""): Promise<{
+    store: ModuleOfferRow[];
+    rooms: { id: string; name: string }[];
+  }> {
+    return this.call(COMMANDS.modulesStore, { room_id: roomId });
+  }
+
+  /**
+   * Save an imported source as a module this house offers.
+   *
+   * The import screen's last step, and the one that does not touch the house: a
+   * definition is a module a person decided the shape of, and installing it is a
+   * separate act with a room attached. `replace` is the caller's decision for the
+   * reason an import's is: re-importing a blueprint somebody has edited is an
+   * update, and overwriting a module they authored has to be asked for.
+   */
+  modulesDefine(
+    kind: "automation" | "blueprint" | "text",
+    handle: { key?: string; text?: string },
+    definition: {
+      title: string;
+      description?: string;
+      author?: string;
+      version?: string;
+      licence?: string;
+      bindings?: Record<string, ModuleBinding>;
+      outputs?: { name: string; key: string }[];
+      settings?: string[];
+      replace?: boolean;
+      /**
+       * The inputs answered with a condition rather than with a value, each as
+       * Home Assistant's own condition config. Kept apart from `bindings`
+       * because a condition is not a value: Open House makes it into an entity
+       * of its own and binds the input to that, because a condition written
+       * into an input a *trigger* names would be matched as text and never fire.
+       */
+      casts?: Record<string, unknown>;
+      /**
+       * The inputs answered with a **flow of nodes**, by input name. A
+       * definition carries the *names* and not the flow ids, because the flows
+       * are pushed per installation: the id Node-RED assigns belongs to the
+       * house hosting the module, and a definition is a thing that moves.
+       */
+      flows?: string[];
+      /**
+       * The inputs answered with a **script**, by input name and script id.
+       *
+       * A map rather than the list the flows are, and the difference is which
+       * half there is to carry: nothing pushes a script and nothing assigns it
+       * an id, because a script is a thing the house already has -- so a name
+       * with no id behind it is not a promise to fill in later, it is a call to
+       * something nobody named.
+       */
+      scripts?: Record<string, string>;
+    },
+  ): Promise<{ module: string; store: ModuleOfferRow[] }> {
+    return this.call(COMMANDS.modulesDefine, { kind, ...handle, ...definition });
+  }
+
+  /**
+   * Install a module this house offers into a room, or into the house.
+   *
+   * `bindings` is only what this room answers differently: everything else comes
+   * from the definition, which is what defining it once bought.
+   */
+  modulesDeploy(
+    module: string,
+    roomId = "",
+    bindings: Record<string, ModuleBinding> = {},
+    settings?: string[],
+    casts?: Record<string, unknown>,
+    flows?: string[],
+    scripts?: Record<string, string>,
+  ): Promise<{ module: string; modules: HostedModule[]; store: ModuleOfferRow[] }> {
+    return this.call(COMMANDS.modulesDeploy, {
+      module,
+      room_id: roomId,
+      bindings,
+      settings,
+      casts,
+      flows,
+      scripts,
+    });
+  }
+
+  /**
+   * Give one row's logic a module of its own, and point the row at it.
+   *
+   * `module` and `input` name the row: the logic is read from the module's own
+   * record rather than from the screen, so a cast that has not been saved is not
+   * one there is anything to detach. `roomId` is where the new module sits -- the
+   * house, or a room -- and `trigger` is what should start it where the cast
+   * cannot say (a template, a script; without one of those a module that never
+   * runs).
+   *
+   * The answer carries the new module's name, the output `key` the row now
+   * reads, and `watched`, which is the entities that will start it -- the one
+   * part of this a person cannot see from the row they pressed the button beside.
+   */
+  modulesDetach(
+    module: string,
+    row: { input: string } | { slot: string },
+    title = "",
+    roomId = "",
+    trigger: string[] = [],
+    revision?: number,
+  ): Promise<{
+    module: string;
+    title: string;
+    room_id: string;
+    key: string;
+    watched: string[];
+    source: string;
+    modules: HostedModule[];
+  }> {
+    return this.call(COMMANDS.modulesDetach, {
+      module,
+      // The row, in whichever of its two spellings the caller named. Sent as
+      // what it is rather than as a `where` beside a name, because the server
+      // reads the one field it was given and a tag that could disagree with it
+      // would be a second answer to "which row".
+      ...row,
+      title,
+      room_id: roomId,
+      trigger,
+      ...withRevision(revision),
+    });
+  }
+
+  /**
+   * Take one installation out of a room, or out of the house.
+   *
+   * The other half of `modulesDeploy` and a different act from `modulesRemove`:
+   * that stops the house offering a module, this stops one room running its copy.
+   * The whole hosted list comes back, because the screen that pressed this is a
+   * room's page and the list is what it draws.
+   */
+  modulesUnhost(
+    module: string,
+  ): Promise<{ module: string; modules: HostedModule[] }> {
+    return this.call(COMMANDS.modulesUnhost, { module });
+  }
+
+  /**
+   * Stop offering a module. What is installed from it keeps running.
+   *
+   * `installed` is how many installations are still running it, so the screen can
+   * say so rather than leaving a person to find out room by room.
+   */
+  modulesRemove(
+    module: string,
+  ): Promise<{ removed: string; installed: number; store: ModuleOfferRow[] }> {
+    return this.call(COMMANDS.modulesRemove, { module });
+  }
+
+  /** One module as the document to keep -- blueprint and answers in one file. */
+  modulesExport(module: string): Promise<Record<string, unknown>> {
+    return this.call<{ document: Record<string, unknown> }>(
+      COMMANDS.modulesExport,
+      { module },
+    ).then((response) => response.document);
+  }
+
+  /**
+   * Read a module document back, answering what arrived and what it replaced.
+   *
+   * Nothing is installed by this: what arrives is a module this house now
+   * *offers*. Reading somebody else's file is not consenting to run it.
+   */
+  modulesImport(
+    document: unknown,
+    replace = false,
+  ): Promise<{ imported: string; replaced: boolean; store: ModuleOfferRow[] }> {
+    return this.call(COMMANDS.modulesImport, { document, replace });
   }
 }

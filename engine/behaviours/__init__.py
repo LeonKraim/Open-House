@@ -33,11 +33,36 @@ from engine.behaviours.base import (
     priority_key,
     scope_key,
 )
+from engine.behaviours.declared import (
+    SLOT_ENTITY,
+    SLOT_LABEL,
+    SLOT_RULE_DEVICE,
+    SLOT_RULE_FACTS,
+    SLOT_RULE_KIND,
+    SLOT_RULE_VALUE,
+    SLOT_RULE_WHEN,
+    DeclaredBehaviour,
+    slot_entity_key,
+    slot_key,
+    slot_label_key,
+    slot_rule_device_key,
+    slot_rule_key,
+    slot_rule_kind_key,
+    slot_rule_value_key,
+    slot_rule_when_key,
+)
 from engine.behaviours.motion_lighting import MotionLightingBehaviour
 from engine.behaviours.override import OverrideBehaviour
 from engine.behaviours.safety_alert import SafetyAlertBehaviour
 
 __all__ = [
+    "SLOT_ENTITY",
+    "SLOT_LABEL",
+    "SLOT_RULE_DEVICE",
+    "SLOT_RULE_FACTS",
+    "SLOT_RULE_KIND",
+    "SLOT_RULE_VALUE",
+    "SLOT_RULE_WHEN",
     "AwayShutdownBehaviour",
     "Behaviour",
     "BehaviourContext",
@@ -52,7 +77,31 @@ __all__ = [
     "module_enable_key",
     "priority_key",
     "scope_key",
+    "slot_entity_key",
+    "slot_key",
+    "slot_label_key",
+    "slot_rule_device_key",
+    "slot_rule_key",
+    "slot_rule_kind_key",
+    "slot_rule_value_key",
+    "slot_rule_when_key",
+    "suppresses",
 ]
+
+
+def suppresses(unit: Behaviour) -> tuple[str, ...]:
+    """The packs `unit` declares it holds off, or none.
+
+    A pack's clause rather than a protocol fact -- `Behaviour` is the seam a
+    Phase 2 interpreter is written against, and a built-in unit of this phase
+    has no packs to name -- so the answer comes from the declared reading and
+    every other unit answers "nothing". Asked through one function rather than
+    by `isinstance(unit, DeclaredBehaviour)` at each call site, because the
+    default is a decision about what a *unit* is, and a reader of the engine
+    should not have to know which class is which to learn that a behaviour
+    which says nothing suppresses nothing.
+    """
+    return unit.suppresses if isinstance(unit, DeclaredBehaviour) else ()
 
 
 def default_behaviours() -> Mapping[str, Behaviour]:

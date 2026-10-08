@@ -72,6 +72,7 @@ from engine.vocabulary import Vocabulary
 
 from .adapter import HAAdapter
 from .declared_units import installed_units, with_declared_slots
+from .slot_parts import grow as with_slot_parts
 from .transport import HaTransport
 
 __all__ = [
@@ -269,6 +270,41 @@ class LiveHouse:
         self.engine.modes.activate(mode_name(label))
 
 
+def _room_layer(
+    rooms: Sequence[LiveRoom],
+    recorded: Mapping[str, Mapping[str, object]] | None,
+) -> dict[str, dict[str, object]]:
+    """The resolver's ROOM layer: each room's switch, then what a person recorded.
+
+    The room's `auto_lighting` is written first for the lighting behaviours --
+    it is a fact about the room, taken from setup and edited on the Rooms tab --
+    and the recorded values are laid over it, because a person's deliberate edit
+    of a module or a pack option has to win over a switch they did not touch for
+    the edit to do anything. A key that is recorded *for* a lighting behaviour is
+    cleared by whoever moved the room's switch (`LiveSession.set_room_auto_lighting`
+    and `set_auto_lighting` both call `_forget_lighting_flags`), so the two
+    writers never meet on one key.
+
+    A recorded room the house does not hold is skipped rather than refused: the
+    record outlives the room it describes across a rename in the store, and
+    refusing the whole house would strand the person outside their own panel.
+    `LiveSession.set_rooms` is what prunes a room's record when it is truly gone,
+    so this skip is the belt to that braces.
+    """
+    layer: dict[str, dict[str, object]] = {
+        room.id: {
+            enable_key(behaviour): room.auto_lighting
+            for behaviour in AUTO_LIGHTING_BEHAVIOURS
+        }
+        for room in rooms
+    }
+    for room_id, values in (recorded or {}).items():
+        held = layer.get(room_id)
+        if held is not None:
+            held.update(values)
+    return layer
+
+
 def build_live_house(
     *,
     house_name: str,
@@ -280,11 +316,14 @@ def build_live_house(
     clock: Clock | None = None,
     house_settings: Mapping[str, object] | None = None,
     house_bindings: Mapping[str, str] | None = None,
+    slot_parts: Mapping[str, tuple[str, ...]] | None = None,
+    room_settings: Mapping[str, Mapping[str, object]] | None = None,
     installed: InstalledSet | None = None,
     module_rooms: Mapping[str, str] | None = None,
     profiles: ProfileSet | None = None,
     state: Mapping[str, object] | None = None,
     adapter: HAAdapter | None = None,
+    user_root: Path | None = None,
 ) -> LiveHouse:
     """Build the engine a running Home Assistant is decided for.
 
@@ -326,6 +365,32 @@ def build_live_house(
     (`engine.binding.resolve_slot`). It is not in the house document the schema
     freezes -- that document binds slots room by room -- so it travels as its own
     argument, from the session that persists it.
+
+    `slot_parts` is the slots a person has split, by the slot each part belongs
+    to (`ha_adapter.slot_parts`). It grows the vocabulary beside the packs'
+    declarations and for the same reason: `engine/binding.py` refuses a binding
+    for a name the vocabulary does not carry, so a part that is not grown is a
+    part no room can be given a device for -- and a module naming one would wait
+    for a device the screen gave no way to bind.
+
+    `room_settings` is the ROOM layer's recorded values, by room id and resolver
+    key: the module a person switched on in the kitchen, the pack option they
+    tuned there. Two things write that layer and this is where they meet. The
+    room's own switch is written first, because it is a fact about the room --
+    `LiveRoom.auto_lighting` came from setup and from the Rooms tab -- and a
+    person's later, deliberate edit is laid over it, because an edit that the
+    room's switch silently overrode would be a switch that does nothing. A key the
+    person never touched is simply not in the mapping and the switch's answer
+    stands.
+
+    `room_settings` used to be built from the rooms alone and the engine's
+    *override* layer was where a person's edits went -- but that layer is
+    in-memory by definition, so every rebuild dropped them, and a rebuild is what
+    every profile activation performs. A key recorded for a room this house no
+    longer holds is skipped rather than refused: the record outlives the room it
+    describes across a rename in the store, and refusing the house would strand
+    the person outside their own panel. `LiveSession.set_rooms` is what prunes
+    the record when a room is genuinely removed.
     """
     if not rooms:
         raise LiveHouseError("a live house needs at least one room")
@@ -340,10 +405,21 @@ def build_live_house(
     # the vocabulary when the pack installs (`declared_units.with_declared_slots`).
     # The extension comes from the same registry the units are built from, so a
     # restart restores the same house: the binds a person made and the words they
-    # were allowed to make them under.
+    # were allowed to make them under. `user_root` is the second catalog the Dev
+    # tab writes to, and it is passed for the same reason it is passed to
+    # `installed_units` below: a module a person wrote is published by no index.
     vocabulary = with_declared_slots(
-        vocabulary_root, installed, Vocabulary.load(vocabulary_root)
+        vocabulary_root,
+        installed,
+        Vocabulary.load(vocabulary_root),
+        user_root=user_root,
     )
+    # And the slots a person has split. Read after the packs' declarations rather
+    # than before, because the parent a part hangs off may itself be a key a pack
+    # brought with it (`fridge_guard__fridge_contact__left`) -- the part is a
+    # device of a room's own either way, and the record names the parent by the
+    # key it binds under.
+    vocabulary = with_slot_parts(vocabulary, slot_parts or {})
     document = house_document(house_name, rooms, vocabulary)
     house = House.from_document(
         document,
@@ -365,11 +441,18 @@ def build_live_house(
     # way and the two cannot collide: a declared unit's id is pack-qualified
     # (`pack.behaviour`, `engine/behaviours/declared.py`), and no shipped unit's
     # id contains a dot.
+    #
+    # `user_root` reaches this call or an authored module is listed with no unit
+    # behind it: its card would draw each atom with an empty description and no
+    # settings at all, because those two are read off the engine's unit and not
+    # off the record.
     behaviours = {
         **default_behaviours(),
         **{
             unit.id: unit
-            for unit in installed_units(vocabulary_root, installed, vocabulary)
+            for unit in installed_units(
+                vocabulary_root, installed, vocabulary, user_root=user_root
+            )
         },
     }
     engine = Engine(
@@ -380,13 +463,7 @@ def build_live_house(
         modes=ModeSet(mode_documents(modes), vocabulary=vocabulary),
         behaviours=behaviours.values(),
         house_settings=house_settings,
-        room_settings={
-            room.id: {
-                enable_key(behaviour): room.auto_lighting
-                for behaviour in AUTO_LIGHTING_BEHAVIOURS
-            }
-            for room in rooms
-        },
+        room_settings=_room_layer(rooms, room_settings),
         profile_settings=None if profiles is None else profiles.effective_house(),
         profile_room_settings=None if profiles is None else profiles.effective_rooms(),
         installed=installed,

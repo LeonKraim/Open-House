@@ -58,7 +58,7 @@ from engine.adapter import (
     HouseAdapter,
 )
 from engine.arbitration import Proposal, arbitrate
-from engine.behaviours import behaviour_defaults, default_behaviours
+from engine.behaviours import behaviour_defaults, default_behaviours, suppresses
 from engine.behaviours.base import (
     Behaviour,
     BehaviourContext,
@@ -69,7 +69,7 @@ from engine.behaviours.base import (
     priority_key,
     scope_key,
 )
-from engine.behaviours.declared import option_key
+from engine.behaviours.declared import option_key, slot_entity_key, slot_part_key
 from engine.binding import (
     House,
     HouseScope,
@@ -97,12 +97,14 @@ from engine.decision_log import (
     Input,
     ModeReading,
     ModeRequest,
+    ModuleSuppression,
     Outcome,
     OverrideNote,
     ProposedCommand,
     Repair,
     StateChange,
 )
+from engine.declared_slots import QUALIFIER
 from engine.dwell import DwellRegistry
 from engine.install import InstalledSet
 from engine.modes import ModeSet
@@ -545,6 +547,13 @@ class Engine:
             )
             if not master.flag():
                 return ()
+            # A module another module is holding off runs nowhere, which is the
+            # same answer as "switched off" and the honest one: the ticks are
+            # empty and the person asking "where does this apply" is owed the
+            # reason in the module view, not a reach this control would offer to
+            # widen.
+            if self.suppressed_by(unit.module) is not None:
+                return ()
         return tuple(
             scope.room_id
             for scope in self._scopes(unit)
@@ -552,6 +561,70 @@ class Engine:
             and self._settings.resolve_or(
                 enable_key(unit.id), scope, unit.enabled
             ).flag()
+        )
+
+    def suppressions(self) -> Mapping[str, tuple[str, str]]:
+        """Which modules are held off right now, and by whom: pack -> (pack, atom).
+
+        One module switching another off, derived rather than stored. The
+        suppressor declares the packs it overrides (`pack-manifest`'s
+        `suppresses`), and this asks of the house which of those declarers are
+        currently switched on -- so a suppression has no lifecycle of its own to
+        get wrong: the target's own switch is untouched, nothing is written down,
+        and the moment the suppressor goes off the target is back. "Never
+        permanently" is therefore not a rule this method obeys but a fact about
+        where the answer lives.
+
+        A suppressor is switched on when it is on in *any* scope it is evaluated
+        in (`_switched_on`), which is the reading a person means by "the motion
+        lighting is running" -- and deliberately the reading `_gate` makes with
+        the suppression stage removed, so a suppressor's own state is never asked
+        through the thing it decides. Two packs suppressing each other therefore
+        both go quiet, which is the fixpoint the reading gives and not a loop.
+
+        First declarer wins when two packs name the same target, in the engine's
+        fixed ascending-`id` order, so the answer a screen draws is the same on
+        every rebuild; the loser's declaration is still visible in the pack's own
+        manifest, and a house that cares can turn one of the two off.
+        """
+        held: dict[str, tuple[str, str]] = {}
+        for unit in self._behaviours.values():
+            for target in suppresses(unit):
+                # A pack cannot hold itself off: the clause would be a pack
+                # saying "I am off", which is the module switch and not this.
+                # `engine/manifest.py` refuses it at authoring time; the skip
+                # here is what keeps a hand-edited document from making a module
+                # that can never run and cannot be explained by any switch.
+                if target == unit.module or target in held:
+                    continue
+                if self._switched_on(unit):
+                    held[target] = (unit.module or unit.id, unit.id)
+        return held
+
+    def suppressed_by(self, module: str) -> str | None:
+        """The pack holding `module` off, or `None` when nothing is."""
+        found = self.suppressions().get(module)
+        return None if found is None else found[0]
+
+    def _switched_on(self, unit: Behaviour) -> bool:
+        """Whether `unit` is switched on in any scope it is evaluated in.
+
+        The module master flag and the unit's own enable flag, asked in every
+        scope `_scopes` gives -- the same two gates `_gate` applies, and the
+        reason this is a method rather than a line inside `suppressions`: it must
+        *not* consult the suppression, or two packs naming each other could never
+        be answered.
+        """
+        if (
+            unit.module is not None
+            and not self._settings.resolve_or(
+                module_enable_key(unit.module), HouseScope(), False
+            ).flag()
+        ):
+            return False
+        return any(
+            self._settings.resolve_or(enable_key(unit.id), scope, unit.enabled).flag()
+            for scope in self._scopes(unit)
         )
 
     def reaches_house(self, unit_id: str) -> bool:
@@ -605,7 +678,9 @@ class Engine:
         gate = self._gate(unit, scope, now)
         if gate is not None:
             return gate
-        ctx = _Evaluation(engine=self, actor=unit.id, scope=scope, now=now)
+        ctx = _Evaluation(
+            engine=self, actor=unit.id, scope=scope, now=now, pack=unit.module
+        )
         unit.evaluate(ctx)
         return _Draft(
             actor=unit.id,
@@ -621,13 +696,15 @@ class Engine:
     def _gate(self, unit: Behaviour, scope: Scope, now: datetime) -> _Draft | None:
         """The record a gated unit leaves instead of evaluating, or `None` to run it.
 
-        Two gates, both before any rule is reached, which is why both leave
-        `rule` as `None`: the enable flag (`engine-core`: "the evaluation gate
-        SHALL evaluate a behaviour's policy only when that behaviour is enabled")
-        and the required slots (`engine-core`: a required slot that resolves empty
-        "SHALL be skipped ... recorded with outcome `skipped: unbound slot` naming
-        the behaviour and the slot"). A module's flag gates its whole family
-        ahead of the unit's own.
+        Three gates, all before any rule is reached, which is why all three
+        leave `rule` as `None`: the enable flag (`engine-core`: "the evaluation
+        gate SHALL evaluate a behaviour's policy only when that behaviour is
+        enabled"), the required slots (`engine-core`: a required slot that
+        resolves empty "SHALL be skipped ... recorded with outcome `skipped:
+        unbound slot` naming the behaviour and the slot"), and a module another
+        module is holding off. A module's flag gates its whole family ahead of
+        the unit's own, and the suppression is read after it so the record says
+        which of the two it was.
         """
         if unit.module is not None:
             module_flag = self._settings.resolve_or(
@@ -635,11 +712,34 @@ class Engine:
             )
             if not module_flag.flag():
                 return _skipped(unit, scope, now, Outcome.SKIPPED_DISABLED, (), None)
+            # Another module holding this one off is a third gate beside the two
+            # `_gate`'s docstring names, and it sits *after* the module's own
+            # switch because the two are different answers: "you switched it off"
+            # and "another module is holding it off". The record carries who.
+            holder = self.suppressions().get(unit.module)
+            if holder is not None:
+                return _skipped(
+                    unit,
+                    scope,
+                    now,
+                    Outcome.SKIPPED_SUPPRESSED,
+                    (
+                        ModuleSuppression(
+                            module=unit.module, by=holder[0], behaviour=holder[1]
+                        ),
+                    ),
+                    None,
+                )
         flag = self._settings.resolve_or(enable_key(unit.id), scope, unit.enabled)
         if not flag.flag():
             return _skipped(unit, scope, now, Outcome.SKIPPED_DISABLED, (flag,), None)
         for slot in unit.required_slots:
-            binding = resolve_slot(self._house, scope, slot)
+            binding = resolve_slot(
+                self._house,
+                scope,
+                _slot_key(slot, _slot_part(self._settings, unit.module, scope, slot)),
+                own=_slot_override(self._settings, unit.module, scope, slot),
+            )
             if binding.is_empty:
                 return _skipped(
                     unit,
@@ -1011,14 +1111,18 @@ def _skipped(
 ) -> _Draft:
     """The record a gated unit leaves. It read nothing, so it consulted nothing.
 
-    `outcome` is passed by the caller rather than derived: both gates propose
-    nothing, so the two are indistinguishable from the fields above and the
-    answer has to come from whichever gate ran. It is checked here because a
-    draft that proposed nothing can report only a skip or a decline, and a caller
-    passing the second would be recording "the rule ran and chose not to act" for
-    a unit whose rule never ran.
+    `outcome` is passed by the caller rather than derived: the gates propose
+    nothing, so they are indistinguishable from the fields above and the answer
+    has to come from whichever gate ran. It is checked here because a draft that
+    proposed nothing can report only a skip or a decline, and a caller passing
+    the second would be recording "the rule ran and chose not to act" for a unit
+    whose rule never ran.
     """
-    if outcome not in (Outcome.SKIPPED_DISABLED, Outcome.SKIPPED_UNBOUND_SLOT):
+    if outcome not in (
+        Outcome.SKIPPED_DISABLED,
+        Outcome.SKIPPED_UNBOUND_SLOT,
+        Outcome.SKIPPED_SUPPRESSED,
+    ):
         raise EngineError(f"{outcome!r} is not an outcome a gate leaves")
     return _Draft(
         actor=unit.id,
@@ -1039,6 +1143,81 @@ def _unbound(binding: SlotBinding) -> SlotRead:
     name, which is what `engine-core` requires the skip to name.
     """
     return binding.read(Reduction.ANY)
+
+
+def _slot_override(
+    settings: ConfigResolver, pack: str | None, scope: Scope, slot: str
+) -> str | None:
+    """The entity the pack `pack` points `slot` at, or `None` when it takes the binding.
+
+    A module may aim one of its own slots at an entity of its own rather than at
+    whatever the room bound -- the per-user override a person sets for the single
+    device a module reaches. It is stored under
+    `module.<pack>.slot.<slot>.entity` (`engine.behaviours.declared.slot_key`),
+    which is to say in the same namespace as the pack's options, so it resolves
+    through the layered resolver like every other setting and a room's answer can
+    beat the house's.
+
+    The override belongs to the *pack*, not to the behaviour: two behaviours of
+    one pack reaching the same slot see one entity, because a person overriding
+    "the lamp this module acts on" is answering a question about the module. A
+    declared behaviour's pack is the family `unit.module` names
+    (`DeclaredBehaviour.module`), and a built-in unit answers `None`: it belongs
+    to no pack, holds nothing in that namespace, and so has no override to read.
+
+    A value that is not a non-empty string is not an entity and is read as no
+    override at all, which is the safe reading: a hand-edited file cannot make a
+    slot resolve to `None` or to a number, it simply fails to override.
+    """
+    if pack is None:
+        return None
+    value = settings.resolve_or(
+        option_key(pack, slot_entity_key(slot)), scope, ""
+    ).value
+    return value if isinstance(value, str) and value else None
+
+
+def _slot_part(
+    settings: ConfigResolver, pack: str | None, scope: Scope, slot: str
+) -> str | None:
+    """Which part of a split slot `pack` acts through, or `None` for the slot itself.
+
+    A role a person divided (`ha_adapter.slot_parts`) is still one role with one
+    name, and each half binds under a key of its own -- `light_group__a`. A module
+    on a half therefore reaches a *different slot key* while everything it was
+    authored against still says `light_group`, and this is the reader that turns
+    one into the other. The part's key is looked up instead of the parent's, so two
+    modules on two halves act on two devices and two modules on one half provably
+    act on one.
+
+    Stored beside the entity override (`module.<pack>.slot.<slot>.part`), in the
+    same namespace and for the same reason: it is a setting about one module, so a
+    room's answer can beat the house's and a rebuild carries it.
+
+    It does **not** replace the entity override. A person who has pointed this
+    module's slot at their own lamp has answered the same question more precisely
+    than the part did, so the override is the last word (`Binding.__init__`'s
+    `own=`), exactly as it is for an unsplit slot.
+
+    A part name that is not a non-empty string is read as no part at all -- the
+    same safe reading `_slot_override` makes, and the whole of why a hand-edited
+    file cannot make a slot resolve to nothing.
+    """
+    if pack is None:
+        return None
+    value = settings.resolve_or(option_key(pack, slot_part_key(slot)), scope, "").value
+    return value if isinstance(value, str) and value else None
+
+
+def _slot_key(slot: str, part: str | None) -> str:
+    """The name `slot` resolves under once a module's part is folded in.
+
+    The slot's own name, or the part's key -- `slot_parts.key_of`'s join, spelled
+    here rather than imported because the engine is what the adapter is built on:
+    the joiner is `engine.declared_slots.QUALIFIER`, and a part is the same shape
+    of key a `separate: true` declaration already mints.
+    """
+    return slot if part is None else f"{slot}{QUALIFIER}{part}"
 
 
 # --------------------------------------------------------------------------
@@ -1062,11 +1241,13 @@ class _Evaluation(BehaviourContext):
         actor: str,
         scope: Scope,
         now: datetime,
+        pack: str | None = None,
     ) -> None:
         self._engine = engine
         self._actor = actor
         self._scope = scope
         self._now = now
+        self._pack = pack
         self._inputs: list[Input] = []
         self._commands: list[ProposedCommand] = []
         self._modes: list[str] = []
@@ -1112,7 +1293,38 @@ class _Evaluation(BehaviourContext):
         return self._now
 
     def binding(self, slot: str) -> SlotBinding:
-        return resolve_slot(self._engine.house, self._scope, slot)
+        """Resolve `slot`, honouring the entity and the part this module names.
+
+        Two answers narrow the broadest one, and this is the reader that applies
+        both. The **part** says *which half of the role* this module stands in:
+        a person who split the role has said the halves are two devices, so the
+        module resolves at the part's key (`light_group__a`) rather than at the
+        role's, and two modules on one half provably act on one entity. The
+        **override** then beats even that, because it is the narrowest answer of
+        all -- one device for one module -- so an unsplit role with a pointer and a
+        split role with a pointer both end at the device the person chose.
+
+        Reading both here rather than at each call site is what keeps `read`,
+        `propose`, `quiet_for` and `held_for` moving together -- a behaviour that
+        resolved the slot one way and proposed to it another would be worse than
+        one that ignored the part entirely.
+        """
+        return resolve_slot(
+            self._engine.house,
+            self._scope,
+            self._key(slot),
+            own=self._own(slot),
+        )
+
+    def _key(self, slot: str) -> str:
+        """The key `slot` resolves under for this module: the role's, or its part's."""
+        return _slot_key(
+            slot, _slot_part(self._engine.settings, self._pack, self._scope, slot)
+        )
+
+    def _own(self, slot: str) -> str | None:
+        """This module's entity for `slot`, or `None` when it takes the binding."""
+        return _slot_override(self._engine.settings, self._pack, self._scope, slot)
 
     def read(self, slot: str, reduction: Reduction) -> SlotRead:
         read = self.binding(slot).read(reduction)
@@ -1147,7 +1359,7 @@ class _Evaluation(BehaviourContext):
                 "a quiet period is a room's; a house-scoped evaluation has none"
             )
         return self._engine._dwell.quiet(
-            self._scope.room_id, slot, at=self._now, timeout=timeout
+            self._scope.room_id, self._dwell_key(slot), at=self._now, timeout=timeout
         )
 
     def held_for(self, slot: str, read: SlotRead) -> timedelta | None:
@@ -1163,15 +1375,16 @@ class _Evaluation(BehaviourContext):
         """
         views = read.views(self._engine.house_adapter)
         reading = "|".join(sorted(view.state for view in views))
+        key = self._dwell_key(slot)
         self._engine._dwell.observe(
             self._dwell_room(),
-            slot,
+            key,
             active=False,
             at=self._now,
             known=all(view.available for view in views),
             reading=reading,
         )
-        return self._engine._dwell.held_for(self._dwell_room(), slot, at=self._now)
+        return self._engine._dwell.held_for(self._dwell_room(), key, at=self._now)
 
     def option(self, pack: str, key: str, default: object) -> ResolvedSetting:
         resolved = self._engine.settings.resolve_or(
@@ -1190,6 +1403,24 @@ class _Evaluation(BehaviourContext):
         separate facts.
         """
         return self._scope.room_id if isinstance(self._scope, RoomScope) else ""
+
+    def _dwell_key(self, slot: str) -> str:
+        """The name the duration registry holds `slot` under for this evaluation.
+
+        The part's key, unless this module has pointed the slot at an entity of
+        its own -- in which case the override is folded in too. The registry is
+        keyed by a `(room, slot)` pair, so a module acting on its own lamp and the
+        room's premade binding for the same slot would otherwise share one record:
+        the module's lamp would age the room's reading, or reset it, and a `for`
+        clause on either would be measured against a device it never read. A part
+        is the same collision one level in -- two modules on two halves of one role
+        in one room are two devices -- so the part is folded in for the same
+        reason. A slot with neither stays under exactly the name every existing
+        record and clause already uses.
+        """
+        key = self._key(slot)
+        own = self._own(slot)
+        return key if own is None else f"{key}@{own}"
 
     def house_is_empty(self) -> bool:
         rooms = self._engine.empty_rooms(self._now)

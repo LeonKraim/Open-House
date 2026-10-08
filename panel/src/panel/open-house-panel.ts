@@ -26,16 +26,72 @@ import { TABS, tabsFor, type TabDefinition, type TabId } from "../tabs/types.ts"
 import "../tabs/overview.ts";
 import "../tabs/rooms.ts";
 import "../tabs/house.ts";
-import "../tabs/modules.ts";
 import "../tabs/profiles.ts";
 import "../tabs/store.ts";
 import "../tabs/activity.ts";
 import "../tabs/health.ts";
-import "../tabs/import-export.ts";
+import "../tabs/dev.ts";
 import "../tabs/room-settings.ts";
 import "../tabs/add-module.ts";
 import "../components/dialog.ts";
 import "../components/schema-form.ts";
+
+/**
+ * The tab the panel was last on, carried in the URL so a reload lands back
+ * there instead of on Overview.
+ *
+ * A reload of `…/open-house` used to open the overview every time, because the
+ * showing tab was a plain field and nothing outside the element ever knew it.
+ * The query string is the record: it is what a reload re-reads, it survives a
+ * bookmark, and it can be pasted to somebody else. The room a tab asked Rooms
+ * to open rides along for the same reason -- `?tab=rooms&room=kitchen` is a
+ * link to the kitchen.
+ *
+ * `sessionStorage` repeats the tab for the one case the URL cannot cover: Home
+ * Assistant's own router rewrites the address of an embedded panel when the
+ * sidebar is used, and a query parameter it does not know is not guaranteed to
+ * survive that. The URL is read first, and is what makes a link shareable.
+ */
+const TAB_PARAM = "open_house_tab";
+const ROOM_PARAM = "open_house_room";
+
+function recalled(key: string): string | null {
+  try {
+    return window.sessionStorage.getItem(key);
+  } catch {
+    // Storage can be denied outright (a hardened browser, a sandboxed frame);
+    // the URL is then the only record, which is the one that matters anyway.
+    return null;
+  }
+}
+
+function remembered(key: string, value: string): void {
+  try {
+    window.sessionStorage.setItem(key, value);
+  } catch {
+    // As above: nothing here is worth failing a render over.
+  }
+}
+
+/** The tab the address bar asks for, or the last one, or the first ever. */
+function tabFromUrl(): TabId {
+  const named = new URLSearchParams(window.location.search).get(TAB_PARAM);
+  if (named && TABS.some((tab) => tab.id === named)) return named as TabId;
+  const recalledTab = recalled(TAB_PARAM);
+  if (recalledTab && TABS.some((tab) => tab.id === recalledTab)) {
+    return recalledTab as TabId;
+  }
+  return "overview";
+}
+
+/** The room the address bar asked Rooms to open, if it asked for one. */
+function roomFromUrl(): string {
+  return (
+    new URLSearchParams(window.location.search).get(ROOM_PARAM) ??
+    recalled(ROOM_PARAM) ??
+    ""
+  );
+}
 
 export class OpenHousePanel extends OpenHouseElement {
   /**
@@ -55,14 +111,16 @@ export class OpenHousePanel extends OpenHouseElement {
     navigateRoomId: { state: true },
   };
 
-  private activeTab: TabId = "overview";
+  private activeTab: TabId = tabFromUrl();
   private capabilities: Capabilities | null = null;
   private capabilityError: ReturnType<OpenHouseElement["toError"]> | null = null;
   private loadingCapabilities = false;
   /** A room another tab asked Rooms to open. */
-  private navigateRoomId = "";
+  private navigateRoomId = roomFromUrl();
   /** The last `hass` the client was built from, to rebuild only on change. */
   private clientHass: unknown = null;
+  /** Whether the automation editor's strings have been asked for yet. */
+  private askedForConfigStrings = false;
 
   override updated(changed: Map<string, unknown>): void {
     // `hass` is reassigned by the frontend on every state change, so compare by
@@ -76,6 +134,40 @@ export class OpenHousePanel extends OpenHouseElement {
         : null;
       void this.loadCapabilities();
     }
+    void this.loadConfigStrings();
+  }
+
+  /**
+   * Ask the frontend for the strings Home Assistant's condition editor is
+   * labelled with, and re-render once they are here.
+   *
+   * A cast may be Home Assistant's own condition builder, and that component
+   * reads every one of its labels through `hass.localize` -- the "Add condition"
+   * button, the condition-type menu, the fields inside each type. The strings
+   * are not in the fragment a `panel_custom` panel is served: the frontend loads
+   * one translation fragment per panel (`config` for the config panel, `custom`
+   * for this one), and the automation editor's are in `config`. Unloaded, the
+   * whole editor renders with empty labels -- a bare `+` and a menu of blank
+   * rows, which reads as "there is no UI for this" rather than as a missing
+   * translation.
+   *
+   * Asked for once, at the panel root, because both places a condition is built
+   * (the import screen and a hosted module's card) are below it. The promise is
+   * not awaited: nothing here depends on the strings, and a failure leaves the
+   * panel exactly as it was -- a screen that still works, with an editor that
+   * reads poorly.
+   */
+  private async loadConfigStrings(): Promise<void> {
+    if (this.askedForConfigStrings) return;
+    const ask = this.hass?.loadFragmentTranslation;
+    if (typeof ask !== "function") return;
+    this.askedForConfigStrings = true;
+    try {
+      await ask.call(this.hass, "config");
+      this.requestUpdate();
+    } catch {
+      // A frontend that will not answer is not a panel that cannot run.
+    }
   }
 
   private async loadCapabilities(): Promise<void> {
@@ -88,6 +180,9 @@ export class OpenHousePanel extends OpenHouseElement {
       const allowed = tabsFor(this.admin);
       if (!allowed.some((tab) => tab.id === this.activeTab)) {
         this.activeTab = "overview";
+        // A tab this person may not see must not stay in the address bar either,
+        // or a reload would keep asking for a screen that is not there.
+        this.rememberLocation();
       }
     } catch (error) {
       this.capabilityError = this.toError(error);
@@ -97,9 +192,41 @@ export class OpenHousePanel extends OpenHouseElement {
     }
   }
 
+  /**
+   * Write the showing tab -- and the room it is showing -- into the address bar.
+   *
+   * `replaceState` rather than `pushState`: a tab click is not a page in
+   * somebody's history, and pushing one per click would make the browser's Back
+   * button a tour of the tab bar instead of a way out of the panel. The state
+   * Home Assistant's router put beside the URL is carried through untouched,
+   * because that router reads it back on its way past.
+   *
+   * The overview is written as *no* parameter, so the address of the default
+   * screen stays the panel's plain address rather than one carrying a
+   * parameter that means what its absence already means.
+   */
+  private rememberLocation(): void {
+    const params = new URLSearchParams(window.location.search);
+    if (this.activeTab === "overview") params.delete(TAB_PARAM);
+    else params.set(TAB_PARAM, this.activeTab);
+    if (this.activeTab === "rooms" && this.navigateRoomId) {
+      params.set(ROOM_PARAM, this.navigateRoomId);
+    } else {
+      params.delete(ROOM_PARAM);
+    }
+    remembered(TAB_PARAM, this.activeTab);
+    if (this.navigateRoomId) remembered(ROOM_PARAM, this.navigateRoomId);
+    const query = params.toString();
+    const address = `${window.location.pathname}${query ? `?${query}` : ""}`;
+    if (address !== `${window.location.pathname}${window.location.search}`) {
+      history.replaceState(history.state, "", address);
+    }
+  }
+
   private selectTab(id: TabId): void {
     this.activeTab = id;
     if (id !== "rooms") this.navigateRoomId = "";
+    this.rememberLocation();
   }
 
   private onNavigate(event: Event): void {
@@ -107,6 +234,7 @@ export class OpenHousePanel extends OpenHouseElement {
     if (!detail?.tab) return;
     this.activeTab = detail.tab;
     if (detail.roomId) this.navigateRoomId = detail.roomId;
+    this.rememberLocation();
   }
 
   private onRepair(event: Event): void {
@@ -240,25 +368,33 @@ export class OpenHousePanel extends OpenHouseElement {
    * *which* element, so adding a tab stays one array entry plus one branch.
    */
   private renderTabElement(tag: string, roomId: string): TemplateResult {
-    const common = { client: this.client, admin: this.admin, narrow: this.narrow };
+    // `hass` rides with the client into every tab, not only the Dev one. A tab
+    // reaches it through the client for its own data, but Home Assistant's own
+    // components do not: a condition editor is drawn by `ha-automation-condition`
+    // and reads `hass` to know which entities exist and what to call them, so a
+    // card that hands the frontend's components no `hass` draws an editor with
+    // nothing in it -- a label, an empty box, and no way to build anything.
+    const common = {
+      client: this.client,
+      admin: this.admin,
+      narrow: this.narrow,
+      hass: this.hass,
+    };
     switch (tag) {
       case "open-house-tab-rooms":
         return html`<open-house-tab-rooms
           .client=${common.client}
           .admin=${common.admin}
           .narrow=${common.narrow}
+          .hass=${common.hass}
           .initialRoomId=${roomId}
         ></open-house-tab-rooms>`;
       case "open-house-tab-house":
         return html`<open-house-tab-house
           .client=${common.client}
           .admin=${common.admin}
+          .hass=${common.hass}
         ></open-house-tab-house>`;
-      case "open-house-tab-modules":
-        return html`<open-house-tab-modules
-          .client=${common.client}
-          .admin=${common.admin}
-        ></open-house-tab-modules>`;
       case "open-house-tab-profiles":
         return html`<open-house-tab-profiles
           .client=${common.client}
@@ -279,11 +415,12 @@ export class OpenHousePanel extends OpenHouseElement {
           .client=${common.client}
           .admin=${common.admin}
         ></open-house-tab-health>`;
-      case "open-house-tab-import-export":
-        return html`<open-house-tab-import-export
+      case "open-house-tab-dev":
+        return html`<open-house-tab-dev
           .client=${common.client}
           .admin=${common.admin}
-        ></open-house-tab-import-export>`;
+          .hass=${this.hass}
+        ></open-house-tab-dev>`;
       default:
         return html`<open-house-tab-overview
           .client=${common.client}

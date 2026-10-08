@@ -49,6 +49,19 @@ export interface HassLike {
   callWS?: <T = unknown>(message: Record<string, unknown>) => Promise<T>;
   auth?: HassAuth;
   language?: string;
+  /**
+   * Ask the frontend for another panel's strings, by fragment name.
+   *
+   * Home Assistant loads one translation *fragment* per panel -- `config`,
+   * `lovelace`, `custom` -- and a `panel_custom` panel is served the `custom`
+   * one. That fragment does not carry the automation editor's strings, so every
+   * label inside `ha-automation-condition` comes back empty and Home Assistant's
+   * own condition builder draws a bare `+` with no text and a type menu of blank
+   * rows. This is how the panel asks for the rest; it is a mixin method on the
+   * element's `hass` and answers a promise, and it is optional because a
+   * standalone mount has no frontend to ask.
+   */
+  loadFragmentTranslation?: (fragment: string) => Promise<unknown>;
 }
 
 /**

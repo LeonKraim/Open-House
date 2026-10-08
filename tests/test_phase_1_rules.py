@@ -415,6 +415,7 @@ def test_the_log_is_the_oracle_for_the_disabled_gate() -> None:
         "rate-limited",
         "skipped: unbound slot",
         "skipped: disabled",
+        "skipped: suppressed",
         "refused: unsafe",
     }
 

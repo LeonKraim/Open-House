@@ -87,11 +87,25 @@ from engine import sandbox as pack_sandbox
 from engine import semver
 from engine import vocabulary as engine_vocabulary
 from engine.adapter import EntityView, UnknownEntityError
-from engine.behaviours import enable_key, module_enable_key, scope_key
+from engine.behaviours import enable_key, module_enable_key, priority_key, scope_key
 from engine.behaviours.base import BehaviourScope
-from engine.behaviours.declared import behaviour_id, option_rows
-from engine.binding import HouseScope, RoomScope, resolve_slot
-from engine.declared_slots import optional_keys, required_keys
+from engine.behaviours.declared import (
+    SLOT_RULE_DEVICE,
+    SLOT_RULE_FACTS,
+    SLOT_RULE_KIND,
+    SLOT_RULE_VALUE,
+    SLOT_RULE_WHEN,
+    behaviour_id,
+    option_key,
+    option_rows,
+    slot_entity_key,
+    slot_label_key,
+    slot_part_key,
+    slot_rule_key,
+)
+from engine.binding import HouseScope, RoomScope, UnknownSlotError, resolve_slot
+from engine.config import InvalidSettingError
+from engine.declared_slots import QUALIFIER, optional_keys, required_keys
 from engine.install import InstalledPack, InstalledSet
 from engine.vocabulary import SlotDefinition
 from openhouse import packs
@@ -99,6 +113,7 @@ from tools.registry.errors import RegistryError
 from tools.registry.pointer import SELF_REPO
 from tools.registry.store import Store as RegistryStore
 
+from . import slot_parts, slot_rules
 from .composition import LiveRoom
 from .live import HOUSE, LiveSession, LiveSessionError
 from .live_profiles import (
@@ -109,17 +124,30 @@ from .live_profiles import (
     reaches_room,
 )
 from .live_profiles import options as room_options
+from .pack_authoring import AuthoringError
 
 __all__ = [
     "StorePackMissingError",
     "StorePackRefusedError",
+    "bound_slots",
     "install",
     "installed_modules",
+    "installed_names_by_room",
+    "modules_on_part",
     "offers",
     "preload",
+    "rename_slot_part",
     "set_enabled",
+    "set_slot",
+    "set_slot_rule",
+    "settle_slot_rule",
+    "slot_overrides",
+    "slot_parts_of",
+    "slot_rules_of",
+    "slots_reached_by",
     "store_pack",
     "uninstall",
+    "validate",
 ]
 
 #: Where the checkout keeps its registry, relative to a root: the generated
@@ -162,12 +190,100 @@ def _stamp(path: Path) -> tuple[int, int]:
     return (info.st_mtime_ns, info.st_size)
 
 
+def _checked(
+    session: LiveSession,
+    loaded: pack_manifest.Manifest,
+    path: Path,
+    where: Path,
+    *,
+    pack_base: Path | None,
+) -> tuple[Mapping[str, object], pack_sandbox.SandboxResult]:
+    """Every refusal `install` makes before it records anything, and the projection.
+
+    Split out so that a caller who wants a verdict and not an installation --
+    the Dev tab's save, which writes a module and asks whether this house would
+    take it -- gets the *same* answer the installer would give, from the same
+    three checks: the schema, the slots, and the sandbox. A second, weaker
+    validation written for that caller is how a module comes to be saved as
+    installable and refused at install.
+
+    Answers the projected document and the sandbox verdict, which is what the
+    caller still needs: the projection is what the slots are bound against, and
+    the verdict carries the flags `install` hands to `pack_install`.
+    """
+    name = loaded.name
+    document = loaded.document
+
+    artifacts = engine_vocabulary.load_manifest_artifacts(where)
+    published = engine_vocabulary.load_behaviour_vocabulary(where)
+
+    verdict = pack_manifest.validate_manifest(loaded, artifacts, session.vocabulary)
+    if not verdict.ok:
+        # The reason is carried beside the message for the same purpose the
+        # facade's is: a caller branching on *why* a manifest was refused
+        # needs the token the schema refused under, not prose to parse.
+        raise LiveSessionError(
+            _refusal(
+                name,
+                [
+                    f"{failure.reason}: {failure.message}"
+                    for failure in verdict.failures
+                ],
+            )
+        )
+
+    try:
+        packs.check_slots(document, session.engine.house)
+    except packs.PackError as error:
+        raise LiveSessionError(_refusal(name, [error.reason])) from error
+
+    projected = _projected(path)
+    sandboxed = pack_sandbox.check_pack(
+        projected, where, session.vocabulary, published, pack_base=pack_base
+    )
+    if not sandboxed.ok:
+        raise LiveSessionError(
+            _refusal(name, [refusal.message for refusal in sandboxed.refusals])
+        )
+    return projected, sandboxed
+
+
+def validate(
+    session: LiveSession,
+    manifest_path: Path,
+    *,
+    root: Path | None = None,
+    pack_base: Path | None = None,
+) -> Mapping[str, object]:
+    """Check a pack the way `install` checks it, and record nothing.
+
+    For a caller who has written a module and wants to know whether this house
+    would take it, without taking it. It is `install`'s own checks and not a
+    lighter set -- see `_checked` -- so a pack this accepts is a pack the schema,
+    the slot rules and the sandbox all accepted, in the installer's own words.
+
+    **What it does not check is what a module already installed makes of it.**
+    `pack_install` also refuses a conflict or a missing dependency, and it
+    refuses them against the installed set, which this operation exists to leave
+    alone. A module on disk conflicts with nothing, so the module a Save accepts
+    is the module an Install may still refuse -- and that is the honest claim to
+    make to somebody looking at a Save button, not "installing this will not
+    refuse".
+    """
+    where = session.root if root is None else Path(root)
+    path = Path(manifest_path)
+    loaded = _loaded(path)
+    _checked(session, loaded, path, where, pack_base=pack_base)
+    return loaded.document
+
+
 def install(
     session: LiveSession,
     manifest_path: Path,
     *,
     room_id: str | None = None,
     root: Path | None = None,
+    pack_base: Path | None = None,
 ) -> Mapping[str, object]:
     """Validate a pack, resolve it against this house, record it, and report it.
 
@@ -232,35 +348,7 @@ def install(
     name = loaded.name
     document = loaded.document
 
-    artifacts = engine_vocabulary.load_manifest_artifacts(where)
-    published = engine_vocabulary.load_behaviour_vocabulary(where)
-
-    verdict = pack_manifest.validate_manifest(loaded, artifacts, session.vocabulary)
-    if not verdict.ok:
-        # The reason is carried beside the message for the same purpose the
-        # facade's is: a caller branching on *why* a manifest was refused
-        # needs the token the schema refused under, not prose to parse.
-        raise LiveSessionError(
-            _refusal(
-                name,
-                [
-                    f"{failure.reason}: {failure.message}"
-                    for failure in verdict.failures
-                ],
-            )
-        )
-
-    try:
-        packs.check_slots(document, session.engine.house)
-    except packs.PackError as error:
-        raise LiveSessionError(_refusal(name, [error.reason])) from error
-
-    projected = _projected(path)
-    sandboxed = pack_sandbox.check_pack(projected, where, session.vocabulary, published)
-    if not sandboxed.ok:
-        raise LiveSessionError(
-            _refusal(name, [refusal.message for refusal in sandboxed.refusals])
-        )
+    projected, sandboxed = _checked(session, loaded, path, where, pack_base=pack_base)
 
     arrival = _arrival(loaded)
     room = (
@@ -419,10 +507,19 @@ def set_enabled(
     makes for the built-in units, and the reason it is a call and not a rebuild
     is that a person flipping a switch is not a person re-configuring the house.
 
-    Enabling writes an `True` override; disabling *clears* the override rather
-    than writing `False`, so "off" is the absence of a decision rather than a
-    second decision that happens to agree -- which is what lets a profile or a
-    pack default enable it later without the switch's ghost standing in the way.
+    **The flag is written twice, and the two writes are for two different times.**
+    `LiveSession.remember_setting` records it in the session's own settings --
+    the room's or the house's, following the module's placement -- so it survives
+    a rebuild and a restart, and applies it to the running engine as an override
+    so it takes effect now. Until this was one call the module wrote only the
+    override, which is the layer `engine/config.py` defines as temporary by
+    definition: a person enabled a module in the Kitchen, activated a profile --
+    which rebuilds -- and the module was off again with nothing said.
+
+    Enabling records `True`; disabling *forgets* the setting rather than
+    recording `False`, so "off" is the absence of a decision rather than a second
+    decision that happens to agree -- which is what lets a profile or a pack
+    default enable it later without the switch's ghost standing in the way.
 
     Enabling is refused while the pack's required slots are bound to nothing in
     this room (`_unbound_required`), because turning a module on is asking the
@@ -443,9 +540,9 @@ def set_enabled(
     scope = _scope_for(room_id)
     for unit in record.behaviours:
         if enabled:
-            session.engine.settings.set_override(enable_key(unit), scope, True)
+            session.remember_setting(enable_key(unit), scope, True)
         else:
-            session.engine.settings.clear_override(enable_key(unit), scope)
+            session.forget_setting(enable_key(unit), scope)
     _sync_module_flag(session, record)
     return _installed_module(session, record, room_id)
 
@@ -496,10 +593,14 @@ def set_behaviour_enabled(
     The same flag the pack-level switch writes, at the same scope, on one unit
     instead of every one: `set_enabled` is this looped over `record.behaviours`,
     and the two cannot disagree because they are one mechanism with one key
-    (`engine.behaviours.enable_key`) and one store. Disabling clears the override
-    rather than writing `False`, for the reason `set_enabled` gives -- "off" is
+    (`engine.behaviours.enable_key`) and one store. Disabling forgets the setting
+    rather than recording `False`, for the reason `set_enabled` gives -- "off" is
     the absence of a decision, and a written `False` is a second decision that
     would stand in the way of a profile that wants the atom on.
+
+    Both halves of the write are `LiveSession`'s (`remember_setting`,
+    `forget_setting`), so the atom switched here survives a rebuild exactly as
+    the pack-level switch does.
 
     `behaviour` is the pack-qualified unit id the panel already carries in each
     `InstalledModule` behaviour row, and the bare declared name is accepted too
@@ -520,9 +621,9 @@ def set_behaviour_enabled(
     unit = _unit_of(record, behaviour)
     scope = _scope_for(room_id)
     if enabled:
-        session.engine.settings.set_override(enable_key(unit), scope, True)
+        session.remember_setting(enable_key(unit), scope, True)
     else:
-        session.engine.settings.clear_override(enable_key(unit), scope)
+        session.forget_setting(enable_key(unit), scope)
     _sync_module_flag(session, record)
     return _installed_module(session, record, room_id)
 
@@ -586,14 +687,794 @@ def set_behaviour_scope(
         )
     key = scope_key(unit)
     if wanted is _declared_scope(session, unit):
-        session.house_settings = {
-            name: value for name, value in session.house_settings.items() if name != key
-        }
-        session.engine.settings.clear_override(key, HouseScope())
+        session.forget_setting(key, HouseScope())
     else:
-        session.house_settings = {**session.house_settings, key: str(wanted)}
-        session.engine.settings.set_override(key, HouseScope(), str(wanted))
+        session.remember_setting(key, HouseScope(), str(wanted))
     return _installed_module(session, record, room_id)
+
+
+def set_behaviour_priority(
+    session: LiveSession,
+    *,
+    room_id: str,
+    pack: str,
+    behaviour: str,
+    priority: int,
+) -> Mapping[str, object]:
+    """Rank one of a pack's behaviours, so it wins or loses against its rivals.
+
+    **Priority is how two modules settle a disagreement about one device.** They
+    do not have to be in conflict to want opposite things: a motion rule and a
+    bedtime shutdown both propose for the hall light in the same tick, and the
+    engine's arbitration picks one by the highest `priority`, with the pack's own
+    order as the tie-break (`engine/arbitration.py`). A pack declares a rank per
+    behaviour -- that is what the manifest's clause is for and what
+    `catalog/pack-policy.yaml` publishes a default for -- but a *house* is the
+    only place that knows which of the two modules its owner would rather have
+    win, and a rank is a preference about that house's devices rather than a fact
+    about the pack.
+
+    So this is the per-installation answer, and it is resolved at **house
+    scope**: an entity can be named by units evaluated in different rooms, so a
+    rank that varied per room would leave the same pair of proposals ordered
+    differently depending on which room was asked (`Engine._priority` says the
+    same thing from the other side). The setting is therefore written at house
+    scope whichever room the module sits in, which is why `room_id` is checked as
+    a placement and then not used for the key.
+
+    Setting the rank back to what the pack declared *forgets* the setting rather
+    than writing the declared number, for the reason `set_behaviour_scope` gives:
+    a house that has not been asked has no opinion, and a written opinion that
+    agrees with today's default would stand in the way of a pack that raises it
+    tomorrow.
+
+    `priority` must be an integer and not a boolean -- `True` is an `int` in
+    Python and is not a rank -- and it is refused rather than coerced, because a
+    manifest written `priority: true` is refused by the same rule
+    (`engine/behaviours/declared.py`), and a panel that accepted what the file
+    format rejects would be a second, looser vocabulary for one word.
+    """
+    _require_placement(session, room_id)
+    record = session.engine.installed.get(pack)
+    if record is None:
+        raise LiveSessionError(f"there is no module {pack!r} in this house")
+    if isinstance(priority, bool) or not isinstance(priority, int):
+        raise LiveSessionError(
+            f"{priority!r} is not a priority; a behaviour's rank is a whole "
+            "number, and a higher one wins when two modules want one device"
+        )
+    unit = _unit_of(record, behaviour)
+    key = priority_key(unit)
+    if priority == _declared_priority(session, unit):
+        session.forget_setting(key, HouseScope())
+    else:
+        session.remember_setting(key, HouseScope(), priority)
+    return _installed_module(session, record, room_id)
+
+
+def set_slot(
+    session: LiveSession,
+    *,
+    room_id: str,
+    pack: str,
+    slot: str,
+    entity_id: str | None,
+    label: str | None,
+    part: str | None = None,
+) -> Mapping[str, object]:
+    """Point one of a module's slots at an entity of its own, and name it.
+
+    **The per-module, per-slot override.** A room binds one device per slot and
+    every module reaching that slot acts on it -- which is right until it is not:
+    a bedtime pack a person wants to close *their* lamps with, a fridge guard whose
+    contact is the fridge's, two chatty packs that should not share one speaker.
+    This is the answer, and it is deliberately narrower than a rebind: the room's
+    binding is untouched, so every other module keeps acting on the device the
+    room bound, and only this module moves.
+
+    Both halves are *settings*, recorded through `LiveSession.remember_setting`,
+    which is what makes them survive a rebuild and a restart and take effect at
+    once -- the same two-times write the enable flags use, for the same reason:
+    a profile activation rebuilds, and an override that lived only in the engine's
+    transient layer would be gone the moment somebody switched to Vacation.
+
+    Two facts travel together because they are one act of configuration -- which
+    device, and what this module calls it -- and the panel sends both:
+
+    * `entity_id` is the device. A string must name an entity the house actually
+      holds, refused by naming the one it does not: the engine resolves the
+      override straight to a binding with no adapter read in between
+      (`engine.binding.resolve_slot`), so an entity that does not exist would
+      turn every tick the module ran into an unavailable reading rather than a
+      sentence a person could act on. `None` **clears** the override, which is
+      how the panel's reset works and the only way back to the room's binding.
+    * `label` is the name this module uses for the slot. It is display-only and
+      deliberately so: the engine never reads it, the record keeps the slot's own
+      name beside it (`declared_label`), and a person who names the fridge's
+      contact "the fridge door" has renamed nothing the house resolves. A label
+      that is empty or only whitespace is no name at all, and is read as `None`
+      rather than recorded as a blank -- the same "off is the absence of a
+      decision" rule the switches follow.
+    * `part` is which part of a split slot this module is on
+      (`ha_adapter.slot_parts`), and it is the *third* thing a row can be asked
+      for -- two modules sharing one role's parts, each on its own device. An
+      empty string is the slot itself, which is what every module is on until
+      somebody splits the slot, and `None` means **not touched**: the panel's
+      Reset clears the device override, and a person who has just put this module
+      on part `a` has not asked for it to be taken off that part by resetting the
+      device. The distinction is the reason this argument is not defaulted to the
+      empty string like the other two.
+
+      A part the house does not carry for this slot is refused rather than
+      recorded: it would resolve to no binding at all, and the module would wait
+      for a device nobody could give it.
+
+    A `slot` the module does not reach is refused, naming the ones it does: the
+    panel offers a row per slot and a command naming something else has been given
+    a wrong name, which is exactly the case that must not silently write a setting
+    no resolver will ever read. The slots a module reaches are the union over its
+    behaviours of what they name and what they require
+    (`_module_slot_keys`), so a device the pack merely requires -- the one that
+    gates the whole pack -- can be overridden too.
+    """
+    _require_placement(session, room_id)
+    record = session.engine.installed.get(pack)
+    if record is None:
+        raise LiveSessionError(f"there is no module {pack!r} in this house")
+    reachable = _module_slot_keys(session, record)
+    if slot not in reachable:
+        named = ", ".join(repr(key) for key in reachable) or "none"
+        raise LiveSessionError(
+            f"the module {pack!r} does not reach a slot {slot!r}; the slots it "
+            f"acts through are {named}"
+        )
+    if entity_id is not None and _view(session, entity_id) is None:
+        raise LiveSessionError(
+            f"there is no entity {entity_id!r} in this house, so the module "
+            f"{pack!r} cannot be pointed at it"
+        )
+    name = None if label is None else (label.strip() or None)
+    scope = _scope_for(room_id)
+    if part is not None:
+        chosen = part.strip()
+        if chosen and chosen not in slot_parts.parts_of(session.slot_parts, slot):
+            named = (
+                ", ".join(
+                    repr(key) for key in slot_parts.parts_of(session.slot_parts, slot)
+                )
+                or "none"
+            )
+            raise LiveSessionError(
+                f"the slot {slot!r} has no part {chosen!r}; its parts are {named}, "
+                "and a module can only be put on a part the house carries"
+            )
+        _set_or_forget(
+            session, option_key(pack, slot_part_key(slot)), scope, chosen or None
+        )
+    _set_or_forget(session, option_key(pack, slot_entity_key(slot)), scope, entity_id)
+    _set_or_forget(session, option_key(pack, slot_label_key(slot)), scope, name)
+    return _installed_module(session, record, room_id)
+
+
+def set_slot_rule(
+    session: LiveSession,
+    *,
+    room_id: str,
+    pack: str,
+    slot: str,
+    kind: str = "",
+    value: object = None,
+    when: Sequence[str] = (),
+    device: object = None,
+) -> Mapping[str, object]:
+    """Put logic on one of a module's slots, instead of a device of its own.
+
+    The "Set it to" half of a slot row, and the sibling of `set_slot` beside it:
+    that one says *which* device this module reaches through a slot, and this one
+    says that the device is to be *worked out* -- a template or a script that
+    produces an entity id, a flow whose own entity holds one, or a condition that
+    decides whether the device it gates is used at all (`ha_adapter.slot_rules`
+    says what each kind means).
+
+    **One decision, and the device follows from it.** The whole of a rule is which
+    of the two a row is: a person has either picked a device or written logic. So
+    every rule takes the device override away from the person -- a producing rule
+    because it writes that key itself, and a condition because its watcher has to
+    be able to *empty* it and a pick still sitting in it would put the device back
+    the moment the condition failed. Where a condition's device is kept instead is
+    inside the rule (`slot_rules.device_of`), which is what `device` is for.
+
+    Clearing is one write with an empty `kind`, which is the same "the absence of
+    a decision is not a decision" rule the switches and the device override both
+    follow; it forgets all three keys the last rule may have written, and forgets
+    the device override too. Either way the room's own binding is where the module
+    falls back to, which is the reset a person already knows from `set_slot`.
+    """
+    _require_placement(session, room_id)
+    record = session.engine.installed.get(pack)
+    if record is None:
+        raise LiveSessionError(f"there is no module {pack!r} in this house")
+    reachable = _module_slot_keys(session, record)
+    if slot not in reachable:
+        named = ", ".join(repr(key) for key in reachable) or "none"
+        raise LiveSessionError(
+            f"the module {pack!r} does not reach a slot {slot!r}; the slots it "
+            f"acts through are {named}"
+        )
+    # The writer's reader, so a half-rule -- "a script" with no script -- is
+    # refused here with a sentence rather than recorded and read back as a rule
+    # nothing can evaluate. `AuthoringError` is the cast vocabulary's own refusal
+    # type, and it is turned into this layer's so the command path has one kind of
+    # error to report.
+    try:
+        rule = slot_rules.rule_from(kind, value, when, device)
+    except AuthoringError as refusal:
+        raise LiveSessionError(str(refusal)) from refusal
+
+    scope = _scope_for(room_id)
+    facts = {} if rule is None else slot_rules.facts_of(rule)
+    for key in SLOT_RULE_FACTS:
+        setting = option_key(pack, slot_rule_key(slot, key))
+        if key in facts:
+            session.remember_setting(setting, scope, facts[key])
+        else:
+            session.forget_setting(setting, scope)
+    # Whatever the rule is, the device override is the *rule's* to write from here
+    # -- see the docstring. Clearing a rule takes it back too: with no rule at all
+    # the slot falls back to the room's binding, which is the reset `set_slot`
+    # offers, and leaving the last device a rule worked out in place would be a
+    # slot pointed at a device nobody chose any more.
+    session.forget_setting(option_key(pack, slot_entity_key(slot)), scope)
+    # And the slot's *part* goes with it, for the same reason and one more: a
+    # part says which device this module resolves through, and a rule *produces*
+    # the device instead -- so a row that kept both would be a module whose
+    # automation is on the rule's entity while its row still claimed a part of
+    # the room's. Nothing is lost by clearing it: a person who takes the rule off
+    # is back on "a device", and the part control is right there.
+    session.forget_setting(option_key(pack, slot_part_key(slot)), scope)
+    return _installed_module(session, record, room_id)
+
+
+def settle_slot_rule(
+    session: LiveSession,
+    *,
+    room_id: str,
+    pack: str,
+    slot: str,
+    entity_id: str | None,
+) -> bool:
+    """Record where a slot's rule has got to, and answer whether that is new.
+
+    The other half of `set_slot_rule`, and the one the *watcher* calls: that
+    method writes the logic, and this writes what the logic worked out. A template
+    that renders to an entity id, a script that returns one, a flow whose own
+    entity holds one -- each of them is a value that arrives some time after the
+    rule was written, and arrives again every time it changes. This is where that
+    value becomes the device the slot is pointed at.
+
+    For a condition the answer is the device it *gates* when the condition holds
+    and nothing when it does not, and the caller supplying the device is the
+    watcher reading it out of the rule (`slot_rules.device_of`) rather than this
+    reaching into the rule itself: the value a rule produces and the value a
+    condition gates arrive by the same path, and one method that took both would
+    be two methods with a branch between them.
+
+    **The device a person picked and the device a rule worked out are one key.**
+    A rule does not get a resolution layer of its own: it writes
+    `slot.<slot>.entity`, which is exactly what picking a device writes, so
+    everything downstream -- the engine's `_slot_override`, the module's card, the
+    module's own automation through `slot_overrides` -- reads one answer and
+    cannot be told about the rule by one path and about the device by another. The
+    rule facts beside it are what say *why* that entity is there.
+
+    `None` is a real answer and not a failure: a template whose entities are not
+    in this house, a script that returned nothing, a condition that does not
+    hold -- each means this module is back on what its room binds, so the override
+    is forgotten and the slot falls back, which is the same shape "no rule" has.
+
+    A rule that is not there is refused rather than written. A `slot.<slot>.entity`
+    with no rule behind it is a device nobody chose, and the one caller that can
+    reach here holding a stale rule is a watcher whose change was already in
+    flight when somebody took the rule off the row -- a caller that must be told
+    to stop rather than one whose write should quietly succeed.
+
+    Answered `True` when the recorded value actually moved, so a caller can skip
+    `async_save` and a module rebuild on the many renders that change nothing.
+    """
+    _require_placement(session, room_id)
+    record = session.engine.installed.get(pack)
+    if record is None:
+        raise LiveSessionError(f"there is no module {pack!r} in this house")
+    scope = _scope_for(room_id)
+    if _slot_rule(session, pack, scope, slot) is None:
+        raise LiveSessionError(
+            f"the module {pack!r} has no rule on a slot {slot!r}, so there is "
+            "nothing for a value to be the answer to"
+        )
+    if entity_id is not None and _view(session, entity_id) is None:
+        raise LiveSessionError(
+            f"there is no entity {entity_id!r} in this house, so the slot rule on "
+            f"{pack!r} cannot point {slot!r} at it"
+        )
+    before = _slot_override(session, pack, scope, slot)
+    if before == entity_id:
+        return False
+    _set_or_forget(session, option_key(pack, slot_entity_key(slot)), scope, entity_id)
+    return True
+
+
+def _set_or_forget(
+    session: LiveSession, key: str, scope: HouseScope | RoomScope, value: object | None
+) -> None:
+    """Record one slot setting, or forget it when there is nothing to record.
+
+    The pair the switches use, in one place: `remember_setting` writes the
+    persistent layer and the live override, and `forget_setting` clears both --
+    and "no override" has to be the *absence* of the setting rather than a `None`
+    written over it, because a written `None` resolves as a value and would shadow
+    the room's binding instead of falling back to it.
+    """
+    if value is None:
+        session.forget_setting(key, scope)
+    else:
+        session.remember_setting(key, scope, value)
+
+
+def _module_slot_keys(session: LiveSession, record: InstalledPack) -> tuple[str, ...]:
+    """Every device slot this module's behaviours reach, as binding keys, in order.
+
+    The union over the pack's registered behaviours of the slots they name and the
+    slots they require. A device the pack only *requires* is still one the module
+    interacts with -- it gates the whole pack, and a person whose fridge contact
+    is on the wrong door is answering the same question as one whose lamp is --
+    so both clauses are read. Deduplicated and sorted, because two behaviours
+    sharing one slot must give one row and two runs must give one order.
+
+    Keys rather than the names a manifest writes, for the reason `declared_units`
+    gives: a declaration the pack asked to hold separately binds under a
+    pack-qualified key, so a row carrying the written name would offer a slot the
+    house holds nothing under and the override written for it would never resolve.
+    """
+    keys: set[str] = set()
+    for unit_id in record.behaviours:
+        unit = session.engine.behaviours.get(unit_id)
+        if unit is None:
+            continue
+        # `getattr` on both, the way `pack_option_keys` reads them: `slots` is the
+        # *declared* spelling (the qualified keys a manifest asked to hold
+        # separately), and a built-in unit of the engine has `required_slots` and
+        # `optional_slots` and no `slots` at all -- so reading the attribute
+        # directly makes this a function that crashes on the engine's own
+        # behaviours rather than one that answers "which slots does this reach".
+        keys.update(getattr(unit, "slots", ()))
+        keys.update(getattr(unit, "required_slots", ()))
+    return tuple(sorted(keys))
+
+
+def slots_reached_by(
+    session: LiveSession, *, room_id: str
+) -> Mapping[str, tuple[str, ...]]:
+    """Which of a room's modules act through each slot, by slot key.
+
+    The join a room's slot table draws under each slot's name: "the bedtime
+    button shuts them" is the fact that makes a row about something, and a page
+    that showed the role without the module would leave a person to guess which
+    pack put it there -- the same reason the House tab chips its own rows
+    (`house_scope`), said from the other end.
+
+    The other end is the point: `_house_reach` is *house-eligible roles only*,
+    because a house screen is a menu of roles the whole house resolves, and this
+    is every slot a room's page lists. A pack's `fridge_contact` is a name for
+    one room's appliance and has no house-wide role to collect into, so it is
+    exactly the slot a house screen may not show and a room's page must.
+
+    The packs counted are the ones the room's slot list is built from
+    (`views._room_module_slots`): a pack installed *into this room*, and one
+    installed at house scope -- the empty room id -- which counts for every room
+    because a house-placed pack's slots are the rooms' to fill. Keeping the two
+    filters one rule is what makes a chip and a row appear together: a slot with
+    a row and no chip would say nothing reaches it, which is the one thing the
+    row's presence already contradicts.
+
+    **The keys are the two clauses the row list is built from**, for that same
+    reason. A behaviour's own slots (`_module_slot_keys`) are what a module acts
+    through, and the manifest's `requires_slots` / `optional_slots` / `slots`
+    declarations (the keys `views` lists the room's rows from) are what it says
+    it can be plugged into -- and a pack that declares an optional device and
+    never names it in a behaviour still reaches it in the only sense the row
+    means: give the room one and the module uses it. Reading one clause and not
+    the other would leave the row a pack put on the page with no chip on it.
+
+    Named by the display name a person installed (`i18n.default.pack`), the same
+    choice `house_scope` argues for: a chip reading `cleaning_vacuum_room` names
+    the pack rather than the module.
+    """
+    where = _by_name(_published(session.root, session.user_root))
+    found: dict[str, set[str]] = {}
+    for name, scoped_room in installed_names_by_room(session):
+        if scoped_room not in (HOUSE, room_id):
+            continue
+        record = session.engine.installed.get(name)
+        if record is None:
+            continue
+        entry = where.get(name)
+        display = name if entry is None else str(entry.strings.get("pack", name))
+        keys: set[str] = set(_module_slot_keys(session, record))
+        if entry is not None:
+            document = entry.manifest.document
+            keys.update(required_keys(name, document))
+            keys.update(optional_keys(name, document))
+        for slot in keys:
+            found.setdefault(slot, set()).add(display)
+    return {slot: tuple(sorted(modules)) for slot, modules in found.items()}
+
+
+def _slot_override(
+    session: LiveSession, pack: str, scope: HouseScope | RoomScope, slot: str
+) -> str | None:
+    """The entity a person has pointed this module's `slot` at, or `None`.
+
+    The *recorded* layer (`LiveSession.setting`), which is what a panel asking
+    "has somebody overridden this" means: a row's control is about the decision a
+    person made, not about the value that happens to be in force, so an override
+    that names the very entity the room binds is still an override with a reset
+    beside it. The engine resolves the whole stack for the value it acts on; this
+    answers the narrower question.
+
+    A value that is not a non-empty string is not an entity and reads as no
+    override. Nothing here writes one, but the state file is a file.
+    """
+    value = session.setting(option_key(pack, slot_entity_key(slot)), scope)
+    return value if isinstance(value, str) and value else None
+
+
+def _slot_name(
+    session: LiveSession, pack: str, scope: HouseScope | RoomScope, slot: str
+) -> str | None:
+    """The name a person has given this module's `slot`, or `None` for its own."""
+    value = session.setting(option_key(pack, slot_label_key(slot)), scope)
+    return value if isinstance(value, str) and value else None
+
+
+def slot_overrides(
+    session: LiveSession, *, pack: str, room_id: str
+) -> Mapping[str, str]:
+    """Every slot one module has pointed somewhere of its own, by slot name.
+
+    The reader that makes a per-module override reach the module. The engine has
+    always honoured these (`engine.engine._slot_override` reads the same key when
+    it evaluates a pack's behaviour), but a **hosted module** is built by a
+    different path: its automation resolves its slots from the room's bindings
+    (`module_host.resolve_slots` against `host.bound_slots`), and that map has
+    only ever carried the house's and the room's. So a person who pointed a
+    module's slot at their own lamp moved the engine and left the module's own
+    automation on the room's device -- the row said one thing and the automation
+    did another, which is the worst shape a control can take.
+
+    Overlaying these on the room's view is the fix, and it belongs here rather
+    than in the integration for the reason every other reader of these settings
+    does: the key, the recorded layer and the scope are this module's facts, and
+    `custom_components` is where they are turned into an automation.
+
+    Only the slots that *are* overridden, so a caller can merge without having to
+    know which names a module reaches, and only non-empty strings -- the same
+    reading `_slot_override` makes, because a hand-edited file must not be able
+    to point a module at nothing.
+    """
+    record = session.engine.installed.get(pack)
+    if record is None:
+        return {}
+    scope = _scope_for(room_id)
+    found: dict[str, str] = {}
+    for slot in _module_slot_keys(session, record):
+        override = _slot_override(session, pack, scope, slot)
+        if override is not None:
+            found[slot] = override
+    return found
+
+
+def slot_parts_of(
+    session: LiveSession, *, pack: str, room_id: str
+) -> Mapping[str, str]:
+    """Every slot one module is on a *part* of, by slot name.
+
+    The reader `host.bound_slots_for` overlays, and the exact counterpart of
+    `slot_overrides`: that one says "this module reaches a device of its own
+    through this slot", and this says "this module reaches one of the role's
+    parts, and which one the room bound is the device".
+
+    A name the house no longer carries for that slot is **dropped rather than
+    reported**: a part removed by a hand-edited state file, or by a version that
+    wrote the record before the removal was refused, leaves the module on the
+    slot itself, which is a device it can act on rather than a slot that never
+    resolves.
+
+    Only the slots the module *is on a part of*, so a caller merges without
+    having to know which names a module reaches -- the same shape `slot_overrides`
+    answers in, and for the same reason: the two are merged into one map.
+    """
+    record = session.engine.installed.get(pack)
+    if record is None:
+        return {}
+    scope = _scope_for(room_id)
+    found: dict[str, str] = {}
+    for slot in _module_slot_keys(session, record):
+        part = _slot_part(session, pack, scope, slot)
+        if part is not None and part in slot_parts.parts_of(session.slot_parts, slot):
+            found[slot] = part
+    return found
+
+
+def _slot_part(
+    session: LiveSession, pack: str, scope: HouseScope | RoomScope, slot: str
+) -> str | None:
+    """Which part of `slot` this module is on, or `None` for the slot itself."""
+    value = session.setting(option_key(pack, slot_part_key(slot)), scope)
+    return value if isinstance(value, str) and value else None
+
+
+def modules_on_part(session: LiveSession, *, parent: str, part: str) -> tuple[str, ...]:
+    """Every module acting through one part of one slot, by the name a person reads.
+
+    The sentence a *removal* is refused with (`host.async_set_slot_parts`): a part
+    two modules are on is one bound device, so taking it away would leave both of
+    them naming a part the slot no longer has -- and the one thing that must never
+    happen is that happening silently. Naming the modules is the difference between
+    "no" and a person knowing which two rows to move first.
+
+    The *display* name (`i18n.default.pack`), the same choice `slots_reached_by`
+    makes and for the same reason: a person reads `Bedtime`, not
+    `bedtime_button_v2`, and a refusal they cannot match to a row is a refusal they
+    cannot act on. A name the catalog no longer publishes falls back to the slug,
+    because the module is still in the house even when its manifest is not.
+
+    Every placement is asked (`installed_names_by_room`), because a part is a
+    *house-level* word and the modules on it may sit anywhere: a bedroom's button
+    and the house's own module both act through a part of the `light_group` role.
+    """
+    where = _by_name(_published(session.root, session.user_root))
+    found: list[str] = []
+    for name, room_id in installed_names_by_room(session):
+        if _slot_part(session, name, _scope_for(room_id), parent) != part:
+            continue
+        entry = where.get(name)
+        found.append(name if entry is None else str(entry.strings.get("pack", name)))
+    return tuple(sorted(found))
+
+
+def rename_slot_part(
+    session: LiveSession, *, parent: str, was: str, name: str
+) -> tuple[tuple[str, str], ...]:
+    """Move every module off part `was` and onto `name`; the modules it moved.
+
+    **A rename has to be a rewrite, and this is why it lives here rather than
+    beside the record.** A part's name *is* the key it binds under
+    (`slot_parts.key_of`), and a module names that key
+    (`slot.<slot>.part`) -- so renaming a part in the record alone would leave
+    every module that was on it naming a part the slot no longer has, which
+    `slot_parts_of` drops, which quietly drops the module back onto the slot's own
+    device. A person who renamed a part to tidy a page would have moved every
+    module on it, silently, and the page would have looked right.
+
+    So the rewrite is the rename: the record is already the caller's to change
+    (`host.async_set_slot_part`), and this moves the settings that named the old
+    one. The moved modules are returned so the caller can build them again --
+    their automations were built from the device the old key resolved to, which is
+    the same device, but the *key* the module resolves through has changed and a
+    module left built against the old name would be the same class of lie.
+
+    The scope is each module's own placement, the same one `_slot_part` reads, so
+    a house-scope module and a room's are moved by the same walk.
+    """
+    moved: list[tuple[str, str]] = []
+    for pack, room_id in installed_names_by_room(session):
+        scope = _scope_for(room_id)
+        if _slot_part(session, pack, scope, parent) != was:
+            continue
+        _set_or_forget(session, option_key(pack, slot_part_key(parent)), scope, name)
+        moved.append((pack, room_id))
+    return tuple(moved)
+
+
+def slot_rules_of(
+    session: LiveSession, *, pack: str, room_id: str
+) -> Mapping[str, slot_rules.SlotRule]:
+    """Every slot of one module that logic -- and not a device -- decides.
+
+    The reader the *watcher* starts from (`custom_components.open_house
+    .slot_rules`), and the exact counterpart of `slot_overrides`: that one says
+    where a module's slots point, and this says which of them are being worked out
+    rather than chosen. One walk of the module's slots, the same keys `set_slot_rule`
+    validated against, so a rule the watcher is asked to run is a rule the module
+    can act through -- and a slot the module does not reach can never carry one.
+
+    Only the slots that *have* a rule, so a caller can iterate without having to
+    ask about each one, and read tolerantly (`slot_rules.recorded_rule`) -- the
+    watcher has to be able to run a rule that a newer version wrote, and the one
+    thing it must not do is leave a rule in force with nobody listening to it.
+    """
+    record = session.engine.installed.get(pack)
+    if record is None:
+        return {}
+    scope = _scope_for(room_id)
+    found: dict[str, slot_rules.SlotRule] = {}
+    for slot in _module_slot_keys(session, record):
+        rule = _slot_rule(session, pack, scope, slot)
+        if rule is not None:
+            found[slot] = rule
+    return found
+
+
+def _slot_rule(
+    session: LiveSession, pack: str, scope: HouseScope | RoomScope, slot: str
+) -> slot_rules.SlotRule | None:
+    """The logic a person has put on this module's `slot`, or `None` for a device.
+
+    The recorded layer and read tolerantly (`slot_rules.recorded_rule`), for the
+    reason `_slot_override` reads the recorded layer: a card reports the decision
+    a person made, and a rule that does not read -- one an older version wrote, or
+    a run that died between two of its three writes -- is still a decision that is
+    visibly in force on the running house, so reporting "no rule" would be the one
+    answer a person could not act on.
+    """
+    facts = {}
+    for key in SLOT_RULE_FACTS:
+        facts[key] = session.setting(option_key(pack, slot_rule_key(slot, key)), scope)
+    return slot_rules.recorded_rule(
+        facts[SLOT_RULE_KIND],
+        facts[SLOT_RULE_VALUE],
+        facts[SLOT_RULE_WHEN],
+        facts[SLOT_RULE_DEVICE],
+    )
+
+
+def _module_slots(
+    session: LiveSession, record: InstalledPack, room_id: str
+) -> tuple[Mapping[str, object], ...]:
+    """The devices one module reaches, and what a person has made of each.
+
+    One row per slot, so the module's card can show every device it acts through
+    beside the entity it is pointed at and the name it calls it. Three answers
+    travel per row and the panel needs all three to draw the control honestly:
+
+    * `entity_id` is what the module acts on *now* -- the person's override when
+      there is one, and otherwise the entity the engine would resolve at this
+      module's scope (`engine.binding.resolve_slot`): the room's binding for a
+      room slot, the house's own for a house slot, with the house's global binding
+      standing behind a room that bound none. Stated rather than left for the
+      panel to resolve, because the resolution *is* the engine's rule and a second
+      answer to it in TypeScript would be free to disagree about which entity a
+      module touches.
+    * `default_entity_id` is the other half of that pair, what the house binds --
+      so a reset control can say what it will fall back to without the panel
+      reading the binding layer.
+    * `label` is what the module calls the slot: the person's name when they gave
+      one, and otherwise the slot's own name, which is the one name this half
+      knows (`_binding` says why an invented prettier one would be dishonest).
+      `declared_label` carries that own name beside it, so the panel can show
+      "the room calls this `light_group`" under a renamed row.
+
+    `overridden` and `named` are stated rather than derived by comparing strings,
+    for the reason `priority_set` is: whether a person has decided something is a
+    fact about the recorded layer, and comparing two values would call an override
+    that happens to name the bound entity "not overridden" and hide the reset that
+    clears it.
+
+    A fourth answer travels when a person has put **logic** on the row instead of
+    picking a device (`ha_adapter.slot_rules`): `rule_kind` names the kind, and
+    `rule_summary` is the sentence the card draws under the device. Stated for the
+    same reason as the two above and more strongly -- three of the four kinds
+    produce an entity id, so *what decides the slot* leaves no trace anywhere in
+    `entity_id` at all, and a row that showed only the device would be showing a
+    device the person never chose and cannot see the reason for.
+
+    A fifth travels when the slot has been **split into parts**
+    (`ha_adapter.slot_parts`): `part` is the one this module is on (empty for the
+    slot itself), `part_label` names it for a person, and `parts` is every part
+    the slot has -- because the control the row draws is a choice among them, and
+    a control that had to fetch its own options would be a second reading of a
+    record this half already read.
+    """
+    scope = _scope_for(room_id)
+    house = session.engine.house
+    rows: list[Mapping[str, object]] = []
+    for slot in _module_slot_keys(session, record):
+        part = _slot_part(session, record.name, scope, slot)
+        default_entity = _module_default_entity(session, slot, room_id, part=part)
+        override = _slot_override(session, record.name, scope, slot)
+        named = _slot_name(session, record.name, scope, slot)
+        rule = _slot_rule(session, record.name, scope, slot)
+        entity_id = override if override is not None else default_entity
+        view = None if entity_id is None else _view(session, entity_id)
+        rows.append(
+            {
+                "slot": slot,
+                "label": named if named is not None else slot,
+                "declared_label": slot,
+                "entity_id": entity_id,
+                "default_entity_id": default_entity,
+                "overridden": override is not None,
+                "named": named is not None,
+                # Which part of a split slot this module is on, and the parts it
+                # *could* be on. Both travel because the row draws a control: a
+                # person who has split `light_group` in two is owed the choice on
+                # every module that acts through it, and a module already on a
+                # part says so under its own device. `part_label` is the part's
+                # name as a person reads it, and both are `None`/empty for a slot
+                # that has not been split -- which is most of them, and is why
+                # these are stated rather than left for the panel to work out.
+                "part": part,
+                "part_label": None if part is None else humanize(part),
+                "parts": tuple(
+                    {"name": name, "label": humanize(name)}
+                    for name in slot_parts.parts_of(session.slot_parts, slot)
+                ),
+                # **A rule is stated, not inferred from the device.** Three of the
+                # four kinds decide *which* device and so leave nothing about
+                # themselves in the entity; only the recorded kind says a rule is
+                # here at all, and only the recorded `when` says what a script is
+                # waiting for. `picks_device` travels with them because it is what
+                # tells the row whether the device above is still used (a
+                # condition) or has been displaced (everything else).
+                "rule_kind": None if rule is None else rule.kind,
+                "rule_summary": None if rule is None else slot_rules.summary(rule),
+                "rule_picks_device": None
+                if rule is None
+                else slot_rules.picks_the_device(rule),
+                # The device a *condition* gates, and `None` for the other three,
+                # because for those the rule decides the entity and there is no
+                # second device to show. Its own field rather than read out of
+                # `entity_id`, which is what the module acts on *now* -- a
+                # condition whose condition is false has an `entity_id` of the
+                # room's device and a `rule_device` of the one it will go back to.
+                "rule_device": None
+                if rule is None or not slot_rules.device_of(rule)
+                else slot_rules.device_of(rule),
+                "required": _required(session.vocabulary.slots.get(slot)),
+                "separate": QUALIFIER in slot,
+                "house_scope": slot in house.house_scope_slots,
+                "bound": entity_id is not None,
+                "friendly_name": None if view is None else _friendly_name(view),
+                "domain": (
+                    None if entity_id is None else (entity_id.partition(".")[0] or None)
+                ),
+                "state": None if view is None else view.state,
+                "status": _status(view),
+            }
+        )
+    return tuple(rows)
+
+
+def _module_default_entity(
+    session: LiveSession, slot: str, room_id: str, *, part: str | None = None
+) -> str | None:
+    """The entity the engine would resolve `slot` to for a module in `room_id`.
+
+    `resolve_slot` is the authority and this asks it, at the scope the module is
+    placed in, so the row's default and the engine's answer cannot drift. A house
+    placement resolves at house scope, which is where a house slot's collected
+    readings would come from -- but a module in the house whose pack reaches a
+    room-only slot has no such answer at all, and `resolve_slot` refuses it; that
+    refusal is a fact about the module and not a failure of this projection, so it
+    is read as "nothing is bound here" and the row shows an empty default.
+
+    The first entity of a multi-entity answer, because a per-module override names
+    one device: "the house's lights" collected from six rooms is six bindings and
+    one lamp to point this module at, and the rest stay where they are.
+
+    `part` asks for the device of one part of a split slot rather than the slot's
+    own (`ha_adapter.slot_parts`): a part is a binding key of its own under the
+    parent's name, so the resolution happens at `light_group__a` -- the same call,
+    the same layer, the house's and then the room's -- and a module on a part
+    reads the device the room bound for that part, which is the whole point of
+    splitting (two modules on one part provably act on one entity).
+    """
+    key = slot if part is None else slot_parts.key_of(slot, part)
+    try:
+        binding = resolve_slot(session.engine.house, _scope_for(room_id), key)
+    except UnknownSlotError:
+        return None
+    return binding.entities[0] if binding.entities else None
 
 
 def _sync_module_flag(session: LiveSession, record: InstalledPack) -> None:
@@ -656,7 +1537,7 @@ def installed_modules(
     belongs to no single room is still listed, with the empty room id, because
     hiding it would be the one thing the tab exists to prevent.
     """
-    published = _by_name(_published(session.root))
+    published = _by_name(_published(session.root, session.user_root))
     installed = session.engine.installed
     return tuple(
         _installed_module(
@@ -667,6 +1548,28 @@ def installed_modules(
         )
         for name in installed.names
         if (record := installed.get(name)) is not None
+    )
+
+
+def installed_names_by_room(session: LiveSession) -> tuple[tuple[str, str], ...]:
+    """Every installed pack's name, and the room it belongs to.
+
+    The two facts `installed_modules` carries, without the panel's row around
+    them. It is a reading of its own because the room page's slot list wants
+    exactly these two -- which packs a room holds, so it can union the slots they
+    declare -- and building every module's row to read a name and a room is work
+    nobody asked for: `_declared_required` re-stamps all 27 manifests once per
+    module, and the room page asks three times per room, which is thirteen
+    seconds on the dev house before anything is drawn. A person waiting that long
+    for the Rooms tab concludes the panel is broken, and they are not wrong.
+
+    The room is `_module_room`'s answer, the same one `installed_modules`
+    reports, so the two cannot say a pack is in different rooms.
+    """
+    return tuple(
+        (name, _module_room(session, record))
+        for name in session.engine.installed.names
+        if (record := session.engine.installed.get(name)) is not None
     )
 
 
@@ -795,6 +1698,11 @@ def _house_slot(
     `accepts_domains` is empty here for the reason `_slot_status` states: the
     vocabulary deliberately carries no domains, and the layer that has the
     catalog fills them in (`views.house_scope`).
+
+    `parts` is the split of this role, each part a binding of its own
+    (`ha_adapter.slot_parts`) -- the same list a room's row carries, and for the
+    same reason: a role the house resolves may be split, and the screen that binds
+    the role is where a person says which device each part is.
     """
     entity_id = session.house_bindings.get(slot)
     view = None if entity_id is None else _view(session, entity_id)
@@ -813,7 +1721,47 @@ def _house_slot(
             room.name for room in session.rooms if room.bindings.get(slot) is not None
         ),
         "modules": tuple(sorted(modules)),
+        "parts": _part_rows(session, slot, session.house_bindings),
     }
+
+
+def _part_rows(
+    session: LiveSession, slot: str, bindings: Mapping[str, str]
+) -> tuple[Mapping[str, object], ...]:
+    """Every part `slot` has been split into, each with the device bound to it.
+
+    A part is a slot of its own for every purpose that reads one
+    (`ha_adapter.slot_parts` says why), so a row per part is what lets a person
+    give it a device -- and the device is looked up under the part's *own* key,
+    `light_group__a`, in whichever layer's bindings the caller passed: the house's
+    for a global role, the room's for a room's.
+
+    The keys are the ones a slot row carries, so the panel draws a part with the
+    same control it draws the slot with, and `name` beside `slot` is the part's
+    own name -- what a person reads, and what a module's "which part" control
+    offers.
+    """
+    rows: list[Mapping[str, object]] = []
+    for name in slot_parts.parts_of(session.slot_parts, slot):
+        key = slot_parts.key_of(slot, name)
+        entity_id = bindings.get(key)
+        view = None if entity_id is None else _view(session, entity_id)
+        rows.append(
+            {
+                "slot": key,
+                "name": name,
+                "label": humanize(name),
+                "entity_id": entity_id,
+                "registry_id": None,
+                "friendly_name": None if view is None else _friendly_name(view),
+                "domain": (
+                    None if entity_id is None else entity_id.partition(".")[0] or None
+                ),
+                "state": None if view is None else view.state,
+                "status": "unbound" if entity_id is None else _status(view),
+            }
+        )
+    return tuple(rows)
 
 
 def offers(session: LiveSession, *, room_id: str) -> tuple[Mapping[str, object], ...]:
@@ -844,21 +1792,29 @@ def offers(session: LiveSession, *, room_id: str) -> tuple[Mapping[str, object],
     return _offers_for(session, room_id)
 
 
-def _offers_for(session: LiveSession, room_id: str) -> tuple[Mapping[str, object], ...]:
-    """`offers` for a placement, which may be the house (`HOUSE`).
+def bound_slots(session: LiveSession, room_id: str) -> frozenset[str]:
+    """The slots a placement can answer, which may be the house (`HOUSE`).
 
-    The house's verdict is read against every room's bindings gathered, which is
-    the union `resolve_slot` makes for a house-scoped role -- a pack the house
-    can be given is one whose required slots *any* room fills.
+    The house's answer is every room's bindings gathered rather than a room's
+    own, which is the union `resolve_slot` makes for a house-scoped role -- a
+    module the house can be given is one whose required slots *any* room fills.
+
+    Public because a second question is asked against it: whether a module this
+    house *kept* can run where it is being put, which is the same question as
+    whether a catalog pack can and has to be answered the same way.
     """
     if room_id == HOUSE:
-        bound = frozenset(slot for room in session.rooms for slot in room.bindings)
-    else:
-        bound = frozenset(session.require_room(room_id).bindings)
+        return frozenset(slot for room in session.rooms for slot in room.bindings)
+    return frozenset(session.require_room(room_id).bindings)
+
+
+def _offers_for(session: LiveSession, room_id: str) -> tuple[Mapping[str, object], ...]:
+    """`offers` for a placement, which may be the house (`HOUSE`)."""
+    bound = bound_slots(session, room_id)
     installed = session.engine.installed
     return tuple(
         _offer(session, entry, bound=bound, installed=installed)
-        for entry in _published(session.root)
+        for entry in _published(session.root, session.user_root)
     )
 
 
@@ -917,9 +1873,13 @@ def _installed_module(
     pack with no behaviours at all -- a template -- is never "enabled", because
     there is nothing of it to run.
     """
-    where = _by_name(_published(session.root)) if published is None else published
+    where = (
+        _by_name(_published(session.root, session.user_root))
+        if published is None
+        else published
+    )
     strings = where[record.name].strings if record.name in where else {}
-    missing = _unbound_required(session, record.name, room_id)
+    missing = _unbound_required(session, record.name, room_id, published=where)
     option_schema, option_values = _module_options(session, record, room_id)
     return {
         "pack": record.name,
@@ -934,6 +1894,20 @@ def _installed_module(
         # house-scoped atom is in the room and acts on the house.
         "house": room_id == HOUSE,
         "enabled": _enabled(session, record, room_id),
+        # The module holding this one off, if any, and the behaviour of it that
+        # declared the suppression. Both are the engine's derived answer
+        # (`Engine.suppressions`), not a second copy kept here: the panel draws a
+        # red panel over the card naming the holder, and a panel that recomputed
+        # "who is holding this off" would be a second answer to a question the
+        # engine already answers -- free to disagree with what actually ran.
+        #
+        # It rides beside `enabled` rather than replacing it, because the two
+        # facts are different and both are needed: `enabled` is where the person
+        # left the module's own switch, and a suppressed module is one whose
+        # switch is on and whose atoms are nevertheless not running. Collapsing
+        # them would make the switch appear off and "turn it on" a no-op.
+        "suppressed_by": _suppressed_by(session, record.name),
+        "suppressed_behaviour": _suppressing_behaviour(session, record.name),
         # The wiring verdict travels with the module because the panel renders
         # it and computes none (`panel/README.md`): the Enable switch is drawn
         # disabled with these names beside it, and the reasoning that produced
@@ -999,9 +1973,28 @@ def _installed_module(
                 "scope": str(_chosen_scope(session, unit)),
                 "declared_scope": str(_declared_scope(session, unit)),
                 "widenable": session.engine.reaches_house(unit),
+                # The rank arbitration decides this atom's competition by, the
+                # rank the pack itself declared, and whether a person has moved
+                # it. All three travel because the panel draws a number control
+                # beside a "reset" that only exists when there is something to
+                # reset, and the three are one resolution apart: `_chosen_priority`
+                # reads the resolver the engine decides by, `_declared_priority`
+                # reads the unit, and `priority_set` is the resolver's own answer
+                # about which layer decided -- so the panel never compares the two
+                # numbers to guess whether somebody chose.
+                "priority": _chosen_priority(session, unit),
+                "default_priority": _declared_priority(session, unit),
+                "priority_set": session.setting(priority_key(unit), HouseScope())
+                is not None,
             }
             for unit in record.behaviours
         ),
+        # The devices this module acts through, each with the entity it is pointed
+        # at and the name it calls it -- the per-module, per-slot override
+        # (`set_slot`). It rides on the module rather than on the room because it
+        # *is* the module's: two modules in one room reach one slot and act on two
+        # different devices, and a room-shaped answer could only state one of them.
+        "slots": _module_slots(session, record, room_id),
     }
 
 
@@ -1382,6 +2375,29 @@ def _module_scope(session: LiveSession, record: InstalledPack) -> str:
     return str(BehaviourScope.ROOM)
 
 
+def _suppressed_by(session: LiveSession, pack: str) -> str | None:
+    """The pack holding `pack` off, or `None`.
+
+    Asked of the engine rather than derived here, for the reason `_reach` is: the
+    engine is what actually decided not to run the pack's atoms, and a second
+    reading of "who is suppressing whom" in this module could disagree with the
+    gate that produced the `skipped: suppressed` records a person is looking at.
+    """
+    return session.engine.suppressed_by(pack)
+
+
+def _suppressing_behaviour(session: LiveSession, pack: str) -> str | None:
+    """The declared behaviour whose `suppresses` clause holds `pack` off.
+
+    Carried beside the holder's name because it is the *atom* a person would go
+    and switch: a pack with a dozen behaviours is not switched off as a whole,
+    and the panel naming the one that did it is the difference between "go and
+    look at the motion lighting module" and "turn this one behaviour off".
+    """
+    found = session.engine.suppressions().get(pack)
+    return None if found is None else found[1]
+
+
 def _chosen_scope(session: LiveSession, unit: str) -> BehaviourScope:
     """The scope a unit is evaluated in, which is its declared one until chosen.
 
@@ -1401,6 +2417,47 @@ def _chosen_scope(session: LiveSession, unit: str) -> BehaviourScope:
     if chosen != str(BehaviourScope.HOUSE):
         return BehaviourScope.ROOM
     return BehaviourScope.HOUSE if engine.reaches_house(unit) else BehaviourScope.ROOM
+
+
+def _declared_priority(session: LiveSession, unit: str) -> int:
+    """The rank the pack itself declared for `unit`, or `0` if it is unknown.
+
+    The unit's own `priority`, which is the manifest's clause or -- when the
+    manifest stated none -- the rank `catalog/pack-policy.yaml` publishes. The two
+    are one value by the time a unit exists (`engine/behaviours/declared.py`), so
+    this is both the "as authored" reading and the default the panel shows beside
+    a control, and there is no second number to keep in step.
+
+    `0` for a unit the engine does not register is the same fallback the engine's
+    own resolution takes, and the honest one here too: a rank nobody declared is
+    a rank at the published default, which is zero.
+    """
+    found = session.engine.behaviours.get(unit)
+    return 0 if found is None else found.priority
+
+
+def _chosen_priority(session: LiveSession, unit: str) -> int:
+    """The rank the engine would arbitrate `unit`'s proposals by.
+
+    Resolved through the same call and the same scope the engine uses
+    (`Engine._priority`: `resolve_or` at `HouseScope`, the unit's own rank as the
+    fallback), so the number the panel shows beside a module is the number the
+    next tick ranks by and not a second opinion about it.
+
+    A setting that resolves to something that is not an integer is *not* this
+    function's to report as a failure: the engine's own resolution raises for it
+    on the tick that reads it, naming the key and the layer, and a read used to
+    draw a control should not be the thing that hides a module's card behind an
+    error. The declared rank is what such a card shows, and the tick reports the
+    real fault.
+    """
+    declared = _declared_priority(session, unit)
+    try:
+        return session.engine.settings.resolve_or(
+            priority_key(unit), HouseScope(), declared
+        ).integer()
+    except InvalidSettingError:
+        return declared
 
 
 def _declared_scope(session: LiveSession, unit: str) -> BehaviourScope:
@@ -1483,7 +2540,12 @@ def _flag(session: LiveSession, unit: str, room_id: str) -> bool:
     )
 
 
-def _declared_required(session: LiveSession, name: str) -> tuple[str, ...]:
+def _declared_required(
+    session: LiveSession,
+    name: str,
+    *,
+    published: Mapping[str, _Published] | None = None,
+) -> tuple[str, ...]:
     """The slots `name` requires a room to bind, as the keys it binds under.
 
     Re-read from the index the panel installs *from* rather than remembered on
@@ -1506,14 +2568,32 @@ def _declared_required(session: LiveSession, name: str) -> tuple[str, ...]:
     is a *declaration*, and a declaration nobody can read is not one this module
     gets to invent. The visible symptom of a pruned registry is already that the
     pack's behaviours never run.
+
+    **`published` is the catalog, for a caller that has already read it.** Reading
+    it is a `stat` per manifest -- every one of them, on the event loop, to find
+    out whether any file moved -- and the caller that asks this question once per
+    module has the answer in hand already (`_installed_module`). Passing it is
+    what keeps a screen from re-stamping the whole registry once per row it
+    draws; a caller with nothing to pass gets the reading it would have made.
     """
-    entry = _by_name(_published(session.root)).get(name)
+    where = (
+        _by_name(_published(session.root, session.user_root))
+        if published is None
+        else published
+    )
+    entry = where.get(name)
     if entry is None:
         return ()
     return required_keys(name, entry.manifest.document)
 
 
-def _unbound_required(session: LiveSession, name: str, room_id: str) -> tuple[str, ...]:
+def _unbound_required(
+    session: LiveSession,
+    name: str,
+    room_id: str,
+    *,
+    published: Mapping[str, _Published] | None = None,
+) -> tuple[str, ...]:
     """The slots `name` requires that `room_id` binds nothing to.
 
     Room scope for a room-scoped slot and house scope for a house-scoped one,
@@ -1528,7 +2608,19 @@ def _unbound_required(session: LiveSession, name: str, room_id: str) -> tuple[st
     module put in the house is enableable exactly when the house has the devices
     it needs.
     """
-    required = _declared_required(session, name)
+    required = _declared_required(session, name, published=published)
+    if not required:
+        return ()
+    # A required slot a person has pointed the module at counts as wired, and it
+    # has to be asked *before* the binding is: the module acts through the entity
+    # the override names (`engine.binding.resolve_slot`), so a room that binds
+    # nothing for the slot while the module is aimed at a device of its own is a
+    # module that can act. Without this the switch would refuse to enable a module
+    # the override had just made able.
+    scope = _scope_for(room_id)
+    required = tuple(
+        slot for slot in required if _slot_override(session, name, scope, slot) is None
+    )
     if not required:
         return ()
     if room_id == HOUSE:
@@ -1585,7 +2677,7 @@ class _Published:
     strings: Mapping[str, str]
 
 
-def preload(root: Path) -> None:
+def preload(root: Path, user_root: Path | None = None) -> None:
     """Read `root`'s catalog once, so that no later reader has to.
 
     Every reader below is cached on `(path, stamp)` (`_stamp`), so the *second*
@@ -1597,14 +2689,22 @@ def preload(root: Path) -> None:
     function because it is the only place the index and the manifests it names
     are both read, and every other reader here is a projection of its result.
 
+    **`user_root` is warmed through the same call, and it has to be.** A module
+    a person authored is read by the same `_published` a request reaches, and
+    warming only the checkout's half would leave the first panel load after a
+    save to open the authored file on the loop -- which is the warning this
+    warm-up exists to prevent, arriving exactly when a person has just used the
+    feature. Passing it here is what makes the authored catalog as warm as the
+    committed one; the directory stamp is why it stays warm afterwards.
+
     Blocking, by definition. The caller is `host._load`, which is already an
     executor job for the same reason -- the catalog is read there too, and the
     two are the same kind of work.
     """
-    _published(root)
+    _published(root, user_root)
 
 
-def _published(root: Path) -> tuple[_Published, ...]:
+def _published(root: Path, user_root: Path | None = None) -> tuple[_Published, ...]:
     """Every pack `registry/index.json` publishes under `root`, in name order.
 
     Name order rather than the index's own, because the panel shows this list
@@ -1616,9 +2716,20 @@ def _published(root: Path) -> tuple[_Published, ...]:
     not load is skipped: the catalog is committed data and this is not the place
     to report a malformed entry, but a listing that failed whole would take every
     other pack down with it.
+
+    **`user_root` is the second catalog, and it is the same catalog.** A pack a
+    person authored in the Dev tab lives under Home Assistant's own config rather
+    than in the checkout, and it belongs in this list for the one reason that
+    list exists: the panel has to be able to offer it. Its rows carry the `local`
+    tier, which is what `registry/tiers.yaml` calls a pack sideloaded from the
+    user's own `/config` -- a name the tiers table already had and that nothing
+    implemented until here. A name published by both is the checkout's: the same
+    tie `installed_modules` breaks, broken the same way, so the studio and the
+    Store cannot disagree about which `foo` is `foo`.
     """
     document = _index(root)
     found: list[_Published] = []
+    seen: set[str] = set()
     for entry in document:
         relative = entry.get("path")
         if not isinstance(relative, str):
@@ -1627,6 +2738,7 @@ def _published(root: Path) -> tuple[_Published, ...]:
         if manifest is None:
             continue
         name = manifest.name
+        seen.add(name)
         found.append(
             _Published(
                 name=name,
@@ -1638,7 +2750,65 @@ def _published(root: Path) -> tuple[_Published, ...]:
                 strings=pack_manifest.strings(manifest),
             )
         )
+    if user_root is not None:
+        for manifest in _user_manifests(user_root):
+            if manifest.name in seen:
+                continue
+            found.append(
+                _Published(
+                    name=manifest.name,
+                    version=str(manifest.document.get("version", "")),
+                    tier=USER_TIER,
+                    manifest=manifest,
+                    strings=pack_manifest.strings(manifest),
+                )
+            )
     return tuple(sorted(found, key=lambda entry: entry.name))
+
+
+#: The tier a pack a person authored reads as. `registry/tiers.yaml` already
+#: names this tier and this meaning for it -- "sideloaded from the user's own
+#: /config directory" -- and this is the code that finally produces one.
+USER_TIER = "local"
+
+
+def _user_manifests(user_root: Path) -> tuple[pack_manifest.Manifest, ...]:
+    """Every manifest directly inside `user_root`, in name order."""
+    return _manifests_at(user_root, _stamp(user_root))
+
+
+@lru_cache(maxsize=_CACHE)
+def _manifests_at(
+    user_root: Path, stamp: tuple[int, int]
+) -> tuple[pack_manifest.Manifest, ...]:
+    """`user_root` scanned for `*.yaml` at `stamp`.
+
+    **Cached on the directory's stamp, not just its path**, for the reason the
+    readers above are cached on a file's: `installed_modules` and `offers` run on
+    Home Assistant's event loop, and a scan that ran on every call would be a
+    blocking call reported on every panel load. A directory's stamp moves when a
+    file is added or removed, which is exactly when this answer changes, and not
+    when one is rewritten in place -- the file readers are stamped separately, so
+    an edited pack is re-read even though the scan is not.
+
+    A pack saved by the Dev tab is one file with everything in it, so a flat scan
+    is the whole of what there is to find. A directory that is not there is no
+    rows rather than a failure: a house that has never authored a module has no
+    authored modules, and that is a true and unremarkable thing.
+    """
+    if stamp == (0, 0):
+        return ()
+    found: list[pack_manifest.Manifest] = []
+    try:
+        candidates = sorted(user_root.glob("*.yaml"))
+    except OSError:
+        return ()
+    for path in candidates:
+        manifest = _manifest_at(path)
+        if manifest is None:
+            continue
+        found.append(manifest)
+    return tuple(found)
 
 
 def _index(root: Path) -> tuple[Mapping[str, object], ...]:

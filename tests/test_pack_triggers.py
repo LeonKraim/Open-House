@@ -239,6 +239,13 @@ def test_the_declared_interpreter_keeps_no_trigger_among_its_facts() -> None:
         # event the engine has no stream to read, so a `trigger` field is still
         # what the physical-button half would need and is still absent.
         "for_option",
+        # `suppresses` is the fourth of that family and is not a trigger either:
+        # it names the *modules* a behaviour holds off while it is on, which is a
+        # fact about what it does to the rest of the house and says nothing about
+        # *when* it is evaluated. A press is still an event the engine has no
+        # stream to read, so a `trigger` field is still what the physical-button
+        # half would need and is still absent.
+        "suppresses",
         # `options` is the pack's declarations rather than a trigger: it is what
         # the panel's form is drawn from, and every behaviour of a pack carries
         # the whole array because the clause belongs to the pack. A field naming

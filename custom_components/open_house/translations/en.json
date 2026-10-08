@@ -92,5 +92,18 @@
       "title": "The motion sensor for {room} is not reporting",
       "description": "{entity_id}, the motion sensor the room {room} reads, is unavailable. Open House treats the room as unknown rather than empty, so lighting that depends on occupancy will not run -- and, importantly, will not switch off either. Check that the device is powered and connected."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Node-RED",
+        "description": "Open House pushes a flow here for every input you answer with one. Leave it empty if you do not use Node-RED.",
+        "data": {
+          "node_red_url": "Address Open House reaches Node-RED at (from Home Assistant)",
+          "node_red_editor_url": "Address your browser opens Node-RED at (leave empty when it is the same)",
+          "node_red_token": "Access token (only if Node-RED asks for one)"
+        }
+      }
+    }
   }
 }

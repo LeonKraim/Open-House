@@ -20,12 +20,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
+from ha_adapter.module_records import ModuleRecord
 from ha_adapter.transport import HaState
 
 from .const import MODES, PROFILES
 
-__all__ = ["OpenHouseRuntime", "RoomRuntime"]
+__all__ = ["HostedModule", "OpenHouseRuntime", "RoomRuntime"]
 
 #: The `motion_sensor` slot is the one slot whose reading becomes an entity
 #: state rather than a binding the engine acts on, and the slot name comes from
@@ -94,11 +96,55 @@ class RoomRuntime:
 
 
 @dataclass(slots=True)
+class HostedModule:
+    """One hosted module's live half: the record, and the values it published.
+
+    The record is the declaration -- what the module is, which automation runs
+    it, what it publishes -- and it does not change while the house is up. The
+    values are the *readings*: what each output was last set to, written by
+    `open_house.publish_output` from inside the running automation.
+
+    **A value that has never been published is absent, not zero.** An output's
+    entity reads `unknown` until the module has run the step that publishes it,
+    which is the honest answer for a module that has not fired yet, and a
+    different one from a module that fired and published `0`.
+    """
+
+    record: ModuleRecord
+    values: dict[str, Any] = field(default_factory=dict)
+    _listeners: list[Callable[[str], None]] = field(
+        default_factory=list[Callable[[str], None]], init=False
+    )
+
+    def publish(self, key: str, value: Any) -> None:
+        """Record a published value and tell every listener which output moved.
+
+        The key is passed to the listeners rather than each one re-reading the
+        whole map, because a listener is one output's entity and only its own key
+        is a reason for it to redraw. A value published for an output the module
+        does not declare is recorded anyway: the state machine is the truth about
+        what arrived, and dropping it silently would make a publisher's mistake
+        invisible in the one place it could be seen.
+        """
+        self.values[key] = value
+        for callback in tuple(self._listeners):
+            callback(key)
+
+    def listen(self, callback: Callable[[str], None]) -> None:
+        """Register a callback to run when one of this module's outputs moves."""
+        self._listeners.append(callback)
+
+
+@dataclass(slots=True)
 class OpenHouseRuntime:
     """Every room of one config entry, keyed by the subentry that describes it."""
 
     entry_id: str
     rooms: Mapping[str, RoomRuntime]
+    #: The modules this entry hosts, by slug, loaded from the house's records at
+    #: setup. A module imported while the house is up is added here by
+    #: `modules._attach` before the platform that shows its outputs is told.
+    modules: dict[str, HostedModule] = field(default_factory=dict)
 
     def room(self, subentry_id: str) -> RoomRuntime | None:
         """One room by the id of the subentry that made it."""

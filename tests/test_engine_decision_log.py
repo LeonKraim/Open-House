@@ -36,10 +36,10 @@ from engine.decision_log import (
 
 _AT = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
-#: The eight dispositions, spelled out rather than derived from the enum: a test
+#: The nine dispositions, spelled out rather than derived from the enum: a test
 #: that read `Outcome` to check `Outcome` would pass if a member were renamed and
 #: every stored record changed meaning with it.
-_EIGHT = {
+_NINE = {
     "acted",
     "declined",
     "lost arbitration",
@@ -47,6 +47,9 @@ _EIGHT = {
     "rate-limited",
     "skipped: unbound slot",
     "skipped: disabled",
+    # The third skip, and the one a person reads differently from the other two:
+    # "another module is holding this one off" is not "you switched it off".
+    "skipped: suppressed",
     "refused: unsafe",
 }
 
@@ -90,16 +93,16 @@ def _record(**overrides: Any) -> DecisionRecord:
 # --------------------------------------------------------------------------
 
 
-def test_the_outcome_set_is_closed_at_eight() -> None:
-    """Exactly these eight spellings, no more and no fewer.
+def test_the_outcome_set_is_closed_at_nine() -> None:
+    """Exactly these nine spellings, no more and no fewer.
 
     A falsifying implementation that added an outcome would introduce a state the
     phase's oracle has no case for -- and because a record is only read, not
     validated, the extra value would pass silently. One that renamed a member
     would change what an already-written record means.
     """
-    assert {str(member) for member in Outcome} == _EIGHT
-    assert len(Outcome) == 8
+    assert {str(member) for member in Outcome} == _NINE
+    assert len(Outcome) == 9
 
 
 def test_a_disposition_outside_the_set_cannot_be_recorded() -> None:
@@ -125,7 +128,7 @@ def test_an_unknown_disposition_names_the_closed_set() -> None:
     with pytest.raises(InvalidOutcomeError) as raised:
         _record(outcome=Outcome.SKIPPED_DISABLED.value + " forever")
     message = str(raised.value)
-    assert all(spelling in message for spelling in _EIGHT)
+    assert all(spelling in message for spelling in _NINE)
 
 
 def test_a_skip_ahead_of_any_rule_carries_no_rule() -> None:

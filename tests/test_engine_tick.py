@@ -34,7 +34,13 @@ from typing import TYPE_CHECKING
 import pytest
 
 from engine.adapter import ChangeContext, ChangeOrigin, domain_of
-from engine.behaviours import BehaviourScope, default_behaviours, enable_key
+from engine.behaviours import (
+    BehaviourScope,
+    default_behaviours,
+    enable_key,
+    module_enable_key,
+)
+from engine.behaviours.declared import declared_units
 from engine.binding import House, SlotRead
 from engine.config import RATE_LIMIT_BOUND_KEY, ResolvedSetting
 from engine.decision_log import (
@@ -316,6 +322,50 @@ def _drive_refused_unsafe(vocabulary: Vocabulary) -> Sequence[DecisionRecord]:
 
 _Drives = Callable[[Vocabulary], Sequence[DecisionRecord]]
 
+
+def _pack_units(
+    *, pack: str, name: str, suppresses: Sequence[str] = ()
+) -> tuple[Behaviour, ...]:
+    """The units one tiny manifest declares, built by the real builder.
+
+    Both drivers below go through `declared_units` rather than through a
+    hand-written double, because the fact under test is a *clause* -- it arrives
+    in a document and has to survive the projection into the engine's fact set --
+    and a double with the attribute set by hand would exercise the gate while
+    proving nothing about the manifest that is supposed to reach it.
+    """
+    row: dict[str, object] = {
+        "name": name,
+        "action": "service",
+        "services": [],
+        "slots": ["light_group"],
+    }
+    if suppresses:
+        row["suppresses"] = list(suppresses)
+    return declared_units(
+        pack, {"behaviours": [row]}, default_priority=0, service_states={}
+    )
+
+
+def _drive_skipped_suppressed(vocabulary: Vocabulary) -> Sequence[DecisionRecord]:
+    """One pack holding another off: the target's atoms never reach their rule."""
+    holder = _pack_units(pack="holder", name="hold", suppresses=["target"])
+    target = _pack_units(pack="target", name="shine")
+    engine, _, _ = _build(
+        vocabulary,
+        behaviours=(*holder, *target),
+        settings={
+            enable_key("holder.hold"): True,
+            enable_key("target.shine"): True,
+            module_enable_key("holder"): True,
+            module_enable_key("target"): True,
+        },
+    )
+    return engine.tick()
+
+
+_Drives = Callable[[Vocabulary], Sequence[DecisionRecord]]
+
 _DRIVES: Mapping[Outcome, _Drives] = {
     Outcome.ACTED: _drive_acted,
     Outcome.DECLINED: _drive_declined,
@@ -324,6 +374,7 @@ _DRIVES: Mapping[Outcome, _Drives] = {
     Outcome.RATE_LIMITED: _drive_rate_limited,
     Outcome.SKIPPED_UNBOUND_SLOT: _drive_skipped_unbound,
     Outcome.SKIPPED_DISABLED: _drive_skipped_disabled,
+    Outcome.SKIPPED_SUPPRESSED: _drive_skipped_suppressed,
     Outcome.REFUSED_UNSAFE: _drive_refused_unsafe,
 }
 
@@ -332,10 +383,10 @@ _DRIVES: Mapping[Outcome, _Drives] = {
 def test_every_outcome_is_producible_by_some_evaluation(
     vocabulary: Vocabulary, outcome: Outcome
 ) -> None:
-    """Each of the eight outcomes appears in some record some evaluation leaves.
+    """Each of the nine outcomes appears in some record some evaluation leaves.
 
     A falsifying implementation that dropped a stage -- or that reported a
-    suppressed command under another stage's name -- would make one of the eight
+    suppressed command under another stage's name -- would make one of the nine
     unreachable, and the log would be unable to explain the situation that stage
     exists for. Declaring a closed enum is the vacuous way to satisfy it; the way
     this test demands is to produce it.
@@ -345,10 +396,10 @@ def test_every_outcome_is_producible_by_some_evaluation(
     assert outcome in produced, sorted(str(member) for member in produced)
 
 
-def test_the_outcome_set_is_closed_at_the_eight_named_values() -> None:
-    """The vocabulary the log can express is exactly these eight, by name.
+def test_the_outcome_set_is_closed_at_the_nine_named_values() -> None:
+    """The vocabulary the log can express is exactly these nine, by name.
 
-    A falsifying implementation that renamed a member -- or that grew a ninth for
+    A falsifying implementation that renamed a member -- or that grew a tenth for
     a stage it added -- would leave a scenario asserting on the old name matching
     nothing, and a bare cardinality check would not notice a rename at all. The
     names are the strings the decision log writes into a record
@@ -363,6 +414,7 @@ def test_the_outcome_set_is_closed_at_the_eight_named_values() -> None:
         "rate-limited",
         "skipped: unbound slot",
         "skipped: disabled",
+        "skipped: suppressed",
         "refused: unsafe",
     }
 

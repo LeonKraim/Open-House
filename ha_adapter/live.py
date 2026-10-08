@@ -46,12 +46,12 @@ two names for one room.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import cast
 
 from engine.behaviours import enable_key
-from engine.binding import RoomScope
+from engine.binding import HouseScope, RoomScope
 from engine.decision_log import DecisionRecord
 from engine.engine import Clock, Engine
 from engine.install import InstalledSet
@@ -68,6 +68,8 @@ from .composition import (
     mode_name,
 )
 from .declared_units import with_declared_slots
+from .slot_parts import grow as with_slot_parts
+from .slot_parts import key_of as part_key
 from .transport import HaTransport
 
 __all__ = [
@@ -152,6 +154,36 @@ class LiveSession:
     #: restored beside `house_settings` and absent from a house that never set
     #: one.
     house_bindings: Mapping[str, str] = field(default_factory=dict)
+    #: The slots a person has split, by the slot each part belongs to.
+    #:
+    #: `{"light_group": ("a", "b")}` -- the record `ha_adapter.slot_parts` owns.
+    #: It is house-level like `house_bindings` and for a neighbouring reason: the
+    #: parts of a slot are a fact about the *role*, not about the room that
+    #: happens to bind them, and two rooms that both split their lights are
+    #: splitting the same vocabulary word. So it is saved and restored beside
+    #: `house_bindings` and absent from a house that has split nothing, which is
+    #: every house until somebody asks for a second device on one role.
+    #:
+    #: It reaches the engine as vocabulary growth (`composition.build_live_house`)
+    #: and not as a resolution rule of its own: a part is a slot of its own under
+    #: the parent's name, so the binding layer, the engine and the panel's slot
+    #: list read it without knowing that parts exist.
+    slot_parts: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    #: Room-scope settings a person has set, by room id and resolver key.
+    #:
+    #: The room layer of the resolver, which `build_live_house` fills from the
+    #: rooms' own switches and which this carries the rest of: a pack's option a
+    #: person tuned in one room, and the enable flag of a module placed there.
+    #:
+    #: It has to live here because nothing else can hold it. A room is a config
+    #: *subentry* and stores its bindings and nothing else, and the engine's
+    #: override layer -- where these wrote before this field existed -- is
+    #: in-memory by definition (`engine/config.py`: "the override layer is the one
+    #: that changes during a run, because it is temporary"), so every rebuild
+    #: dropped it. A rebuild happens on every profile activation, so a person who
+    #: turned a module on in the kitchen and then switched a profile on had it
+    #: turned off again in silence, and a Home Assistant restart did the same.
+    room_settings: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
     #: The packs this house holds.
     installed: InstalledSet = field(default_factory=InstalledSet)
     #: The room each installed pack was *put in*, by pack name.
@@ -166,6 +198,18 @@ class LiveSession:
     #: no room, `_enabled` answered `False` for the empty id, and the module a
     #: person had just placed could never be switched on.
     module_rooms: Mapping[str, str] = field(default_factory=dict)
+    #: The directory a person's own packs are read from and written to, when the
+    #: host has one.
+    #:
+    #: The checkout is read-only -- it is the integration's own source tree, and
+    #: a module a person authors belongs beside their house rather than inside a
+    #: program they will update. So authoring has a second root, and this is it:
+    #: `<config>/open_house/packs`, handed in by the Home Assistant host, whose
+    #: `config` directory is the only writable place in a live instance. It is
+    #: `None` offline, where the tests build a session against a fixture tree and
+    #: there is nothing of the host's to write into; nothing downstream assumes
+    #: otherwise, because every reader treats `None` as "no authored packs".
+    user_root: Path | None = None
     #: The adapter, kept across rebuilds so an entity Home Assistant currently
     #: reports as unavailable keeps the last state it was known to hold.
     adapter: HAAdapter | None = None
@@ -187,9 +231,12 @@ class LiveSession:
         clock: Clock | None = None,
         house_settings: Mapping[str, object] | None = None,
         house_bindings: Mapping[str, str] | None = None,
+        slot_parts: Mapping[str, tuple[str, ...]] | None = None,
+        room_settings: Mapping[str, Mapping[str, object]] | None = None,
         installed: InstalledSet | None = None,
         profiles: ProfileSet | None = None,
         module_rooms: Mapping[str, str] | None = None,
+        user_root: Path | None = None,
         adapter: HAAdapter | None = None,
     ) -> LiveSession:
         """A session over `rooms`, with its first engine built.
@@ -218,8 +265,16 @@ class LiveSession:
             else profiles,
             house_settings=dict(house_settings or {}),
             house_bindings=dict(house_bindings or {}),
+            slot_parts={
+                parent: tuple(names) for parent, names in (slot_parts or {}).items()
+            },
+            room_settings={
+                room_id: dict(values)
+                for room_id, values in (room_settings or {}).items()
+            },
             installed=InstalledSet() if installed is None else installed,
             module_rooms=dict(module_rooms or {}),
+            user_root=user_root,
             adapter=adapter,
         )
         session.rebuild()
@@ -270,6 +325,20 @@ class LiveSession:
         """Evaluate every behaviour once and actuate what survives."""
         return self.engine.tick()
 
+    @property
+    def revision(self) -> int:
+        """How many times the profiles have moved under whoever was reading them.
+
+        The session's, because the profiles are the session's and this is what a
+        page is asked to send back with its next write: a page renders the house
+        from one revision and a *switch* replaces the house underneath it, so a
+        write that names the revision before the switch is a write about a house
+        nobody is looking at any more -- see
+        `custom_components/open_house/websocket_api.py`, which is where it is
+        checked, and `engine/profiles.py` for what counts as a move.
+        """
+        return self.profiles.revision
+
     # -- Edits --------------------------------------------------------------
 
     def rebuild(self) -> None:
@@ -289,17 +358,33 @@ class LiveSession:
             clock=self.clock,
             house_settings=self.house_settings,
             house_bindings=self.house_bindings,
+            slot_parts=self.slot_parts,
+            room_settings=self.room_settings,
             installed=self.installed,
             module_rooms=self.module_rooms,
             profiles=self.profiles,
             adapter=self.adapter,
+            user_root=self.user_root,
         )
         self.adapter = house.adapter
         self._engine = house.engine
 
     def set_rooms(self, rooms: Sequence[LiveRoom]) -> None:
-        """Replace the rooms and rebuild. The house document *is* the rooms."""
+        """Replace the rooms and rebuild. The house document *is* the rooms.
+
+        A room the new list does not hold loses its recorded settings with it.
+        Keeping them would leave a map growing a tombstone per room ever removed
+        -- including for a room re-added later under a name somebody else had,
+        which would come back tuned to a stranger's choices.
+        """
         self.rooms = tuple(rooms)
+        listed = {room.id for room in self.rooms}
+        if any(room_id not in listed for room_id in self.room_settings):
+            self.room_settings = {
+                room_id: dict(values)
+                for room_id, values in self.room_settings.items()
+                if room_id in listed
+            }
         self.rebuild()
 
     def set_room_auto_lighting(self, room_id: str, *, on: bool) -> None:
@@ -310,11 +395,31 @@ class LiveSession:
         finds nothing to do for that room rather than turning its light off now.
         An override is engine state, not wiring, so this does not rebuild -- it
         is the same call the room's switch entity already makes.
+
+        The room's own document is updated beside the override, and it has to be:
+        the room's `auto_lighting` is what a *rebuild* reads to fill the room
+        layer, so a switch that wrote only the override was a switch whose state
+        the next rebuild -- and the next restart -- silently reverted. Any
+        remembered enable flag for the lighting behaviours is dropped at the same
+        time, for the reason `set_auto_lighting` gives: the switch is the master
+        for those two behaviours, and a remembered value laid over it would make
+        the off position do nothing.
         """
         self.require_room(room_id)
+        self.rooms = tuple(
+            _with_auto_lighting(room, on) if room.id == room_id else room
+            for room in self.rooms
+        )
+        self._forget_lighting_flags(room_id)
         scope = RoomScope(room_id)
         for behaviour in AUTO_LIGHTING_BEHAVIOURS:
-            self.engine.settings.set_override(enable_key(behaviour), scope, on)
+            key = enable_key(behaviour)
+            # The running engine's room layer is set to the switch's own answer,
+            # which is what a rebuild would produce (`composition._room_layer`),
+            # so the layer under the override does not hold a value the room's
+            # switch has since contradicted.
+            self.engine.settings.set_room_setting(key, room_id, on)
+            self.engine.settings.set_override(key, scope, on)
 
     def set_house_mode(self, label: str) -> None:
         """Activate the house mode a label names, projecting the label once."""
@@ -385,8 +490,14 @@ class LiveSession:
         arrives under the key it binds with (`key_of`), which is the name the
         room's page lists and the name this check is asked about.
         """
-        extended = with_declared_slots(self.root, self.installed, self.vocabulary)
-        return frozenset(extended.slots)
+        extended = with_declared_slots(
+            self.root, self.installed, self.vocabulary, user_root=self.user_root
+        )
+        # And the parts, so a room may be given a device for one. The same growth
+        # the rebuild applies, in the same order: a part of a pack's own device is
+        # a part of a key the *declaration* brought, so the parts are read over
+        # the extended vocabulary rather than beside it.
+        return frozenset(with_slot_parts(extended, self.slot_parts).slots)
 
     def unbind(self, room_id: str, slot: str) -> LiveRoom | None:
         """Leave `slot` in `room_id` unbound, or the house's own binding for `HOUSE`."""
@@ -399,6 +510,72 @@ class LiveSession:
             tuple(updated if other.id == room_id else other for other in self.rooms)
         )
         return updated
+
+    def rebind_slot_part(self, parent: str, was: str, name: str) -> tuple[str, ...]:
+        """Move every binding that named one part onto the part's new name.
+
+        **The half of a rename that a person would not think to ask for, and the
+        half that makes the other half safe.** A part's name *is* the key it binds
+        under (`ha_adapter.slot_parts`), so renaming a part renames a key -- and
+        every binding that named it is now naming a word the vocabulary is about
+        to stop carrying. Left alone, the next rebuild would refuse the whole house
+        (`engine.binding` raises `UnknownSlotError` for a binding the vocabulary
+        does not define), which is a rename that takes the house down rather than
+        one that tidies a name.
+
+        So the rooms' bindings and the house's are rewritten here, **before** the
+        record changes and before the one rebuild the caller then does: the
+        session's fields are read by `rebuild`, not held by it, which is what makes
+        an atomic swap possible at all -- a `set_rooms` between the two halves
+        would rebuild against a record that disagrees with the rooms.
+
+        Returns the rooms whose bindings moved, so the caller can write each of
+        them back into its own subentry. The house's own binding is carried in
+        `house_bindings`, which the caller saves with the rest of the session
+        state, so it needs no name here.
+        """
+        old = part_key(parent, was)
+        new = part_key(parent, name)
+        moved: list[str] = []
+        rooms: list[LiveRoom] = []
+        for room in self.rooms:
+            entity_id = room.bindings.get(old)
+            if entity_id is None:
+                rooms.append(room)
+                continue
+            bindings = {
+                key: value for key, value in room.bindings.items() if key != old
+            }
+            bindings[new] = entity_id
+            rooms.append(replace(room, bindings=bindings))
+            moved.append(room.id)
+        self.rooms = tuple(rooms)
+        if old in self.house_bindings:
+            house = {
+                key: value for key, value in self.house_bindings.items() if key != old
+            }
+            house[new] = self.house_bindings[old]
+            self.house_bindings = house
+        return tuple(moved)
+
+    def set_slot_parts(self, record: Mapping[str, tuple[str, ...]]) -> None:
+        """Replace the parts record and rebuild.
+
+        A rebuild and not an override, because a part is a *vocabulary word* and
+        not a setting: `engine/binding.py` refuses a binding for a name the
+        vocabulary does not carry, and the vocabulary is built by a rebuild. So
+        adding a part is the one edit here that can change what the house is able
+        to hold, which is exactly why it is this one call and not a write to a
+        setting layer somewhere else.
+
+        The caller has already validated the record (`ha_adapter.slot_parts`), so
+        there is nothing to refuse here: an unvalidated record would make this a
+        second place the rules live, and the rules have one home.
+        """
+        self.slot_parts = {
+            parent: tuple(names) for parent, names in record.items() if names
+        }
+        self.rebuild()
 
     def set_installed(self, installed: InstalledSet) -> None:
         """Replace the installed packs and rebuild."""
@@ -445,6 +622,161 @@ class LiveSession:
         self.house_settings = dict(settings)
         self.rebuild()
 
+    def room_settings_for(self, room_id: str) -> Mapping[str, object]:
+        """The room layer's recorded values for `room_id`, or the empty mapping.
+
+        The room's *own* settings, not the ones it inherits: a caller asking
+        whether a module was switched on in the kitchen wants the kitchen's
+        answer, and a value that is not here is one the built-in default or the
+        pack's own default answers for.
+        """
+        return dict(self.room_settings.get(room_id, {}))
+
+    def set_room_settings(self, room_id: str, settings: Mapping[str, object]) -> None:
+        """Replace one room's recorded layer values and rebuild.
+
+        The room is replaced whole rather than merged key by key, so a caller
+        that removes a key can express that: `set_room_settings(room, {})` is
+        how a room is returned to its defaults. A room id the house does not
+        hold is refused -- silently recording settings for a room that is not
+        here would be a value no reader could ever reach.
+        """
+        self.require_room(room_id)
+        recorded = {room: dict(values) for room, values in self.room_settings.items()}
+        if settings:
+            recorded[room_id] = dict(settings)
+        else:
+            recorded.pop(room_id, None)
+        self.room_settings = recorded
+        self.rebuild()
+
+    def set_room_setting(self, room_id: str, key: str, value: object) -> None:
+        """Record one value in a room's layer, leaving its other values alone.
+
+        The single-key form of `set_room_settings`, for the callers whose whole
+        intent is one switch: a module turned on in a room, a pack's option
+        tuned there.
+        """
+        self.require_room(room_id)
+        current = self.room_settings_for(room_id)
+        current[key] = value
+        self.set_room_settings(room_id, current)
+
+    def forget_room_settings(self, room_id: str) -> None:
+        """Drop a room's recorded settings, for a room that has been removed."""
+        if room_id not in self.room_settings:
+            return
+        recorded = {room: dict(values) for room, values in self.room_settings.items()}
+        recorded.pop(room_id, None)
+        self.room_settings = recorded
+        self.rebuild()
+
+    def setting(self, key: str, scope: HouseScope | RoomScope) -> object | None:
+        """The value recorded for `key` at `scope`, or `None` when none is.
+
+        The recorded layer and not the resolver, because this answers the
+        question a *switch* asks -- "has somebody said something about this, or
+        is this the default?" -- and the resolver's answer folds in the built-in
+        defaults, the profiles and whatever override is standing at this instant.
+        A caller that wants what the engine would decide by resolves it there.
+        """
+        if isinstance(scope, HouseScope):
+            return self.house_settings.get(key)
+        return self.room_settings.get(scope.room_id, {}).get(key)
+
+    def remember_setting(
+        self, key: str, scope: HouseScope | RoomScope, value: object
+    ) -> None:
+        """Record a setting in its persistent layer *and* apply it to the engine.
+
+        **Both, or neither works**, and that is the whole reason this exists as
+        one call rather than two at each site. As a value in the session's own
+        settings it survives a restart and a rebuild, because those are exactly
+        what `to_state` carries and `build_live_house` reads back; as an override
+        on the running engine it takes effect now. A site that wrote only the
+        first would leave the switch looking inert until the next rebuild, and a
+        site that wrote only the second would forget the change at the next one
+        -- and a rebuild is what every profile activation performs, so the second
+        half is the one that was missing whenever a person set a module up in a
+        room and then switched a profile on.
+
+        The *layer* a value belongs in follows its scope, and this is the one
+        place that mapping is written down: the house scope's values are the
+        house's settings (`Layer.HOUSE`, what the House tab edits) and a room
+        scope's are that room's (`Layer.ROOM`, which nothing outside this field
+        can hold -- see `room_settings`). A room scope naming a room the house
+        does not hold is refused rather than recorded, so a settings map cannot
+        fill up with values for rooms that are not here.
+
+        Nothing is rebuilt, and *three* writes keep that honest. The engine's
+        persistent layer is written too (`ConfigResolver.set_house_setting` /
+        `set_room_setting`), because those layers are copies taken when the
+        engine was built: a session that recorded a setting without telling the
+        running resolver would leave the engine deciding by the value it was
+        built with, so a person's switch would appear to do nothing until
+        something else happened to rebuild. The override goes on top of it
+        because a person's deliberate choice has to outrank the profile layer,
+        which sits above both persistent layers and which a rebuild would
+        otherwise let reinstate. And the session's own settings are the record a
+        restart reads.
+
+        The three agree by construction, which is what makes a rebuild a no-op
+        for this setting instead of an amnesia.
+        """
+        if isinstance(scope, HouseScope):
+            self.house_settings = {**self.house_settings, key: value}
+            self.engine.settings.set_house_setting(key, value)
+        else:
+            self.require_room(scope.room_id)
+            recorded = {
+                room: dict(values) for room, values in self.room_settings.items()
+            }
+            room = dict(recorded.get(scope.room_id, {}))
+            room[key] = value
+            recorded[scope.room_id] = room
+            self.room_settings = recorded
+            self.engine.settings.set_room_setting(key, scope.room_id, value)
+        self.engine.settings.set_override(key, scope, value)
+
+    def forget_setting(self, key: str, scope: HouseScope | RoomScope) -> None:
+        """Drop a recorded setting and clear its override -- the other half.
+
+        The pair to `remember_setting`, and it removes rather than writing a
+        default: "off" is the absence of a decision, not a second decision that
+        happens to agree with the one below it, so a person who switches a module
+        off leaves nothing behind that would stand in the way of a profile or a
+        pack default wanting it on. Clearing an override that is not set is not a
+        failure (`ConfigResolver.clear_override`), so this is safe to call for a
+        setting that only one of the three layers ever held.
+
+        The engine's persistent layer is cleared beside the record, and that half
+        is not optional: those layers are snapshots taken when the engine was
+        built, so clearing only the override would leave the snapshot's value
+        answering -- a module that stayed on after being switched off, for
+        exactly as long as nothing else rebuilt.
+        """
+        if isinstance(scope, HouseScope):
+            self.house_settings = {
+                name: held for name, held in self.house_settings.items() if name != key
+            }
+            self.engine.settings.clear_house_setting(key)
+        else:
+            recorded = {
+                room: dict(values) for room, values in self.room_settings.items()
+            }
+            room = dict(recorded.get(scope.room_id, {}))
+            room.pop(key, None)
+            if room:
+                recorded[scope.room_id] = room
+            else:
+                # A room with nothing left said about it is a room with no entry,
+                # rather than one holding an empty mapping: the two read the same
+                # to every reader here, and the smaller document is the honest one.
+                recorded.pop(scope.room_id, None)
+            self.room_settings = recorded
+            self.engine.settings.clear_room_setting(key, scope.room_id)
+        self.engine.settings.clear_override(key, scope)
+
     def set_auto_lighting(self, *, on: bool) -> None:
         """Set every room's lighting permission, as a house-wide switch would.
 
@@ -452,9 +784,41 @@ class LiveSession:
         rebuilt room carries the flag into the engine's *room settings* at
         construction -- the same path a freshly activated setup takes, so a
         house-wide switch and a fresh setup cannot disagree about what "on" means.
+
+        Any remembered enable flag for the lighting behaviours goes with it. A
+        recorded value is laid *over* the room's own switch at construction
+        (`composition.build_live_house`), because an edit has to win over a
+        default -- but the room's switch is not a default: it is the room's
+        permission for those behaviours, and a remembered `True` left behind
+        would make turning the permission off a switch that visibly does nothing.
+        The switch is the master for exactly these two behaviours, so setting it
+        clears their remembered flags rather than recording a second opinion
+        beside them.
         """
         self.rooms = tuple(_with_auto_lighting(room, on) for room in self.rooms)
+        self._forget_lighting_flags()
         self.rebuild()
+
+    def _forget_lighting_flags(self, room_id: str | None = None) -> None:
+        """Drop remembered enable flags for the lighting behaviours.
+
+        Every room's, or one room's when `room_id` is named -- the two callers
+        are the house-wide switch and one room's own.
+        """
+        keys = {enable_key(behaviour) for behaviour in AUTO_LIGHTING_BEHAVIOURS}
+        recorded = {
+            room: {
+                name: value
+                for name, value in values.items()
+                if name not in keys and (room_id is None or room == room_id)
+            }
+            if room_id is None or room == room_id
+            else dict(values)
+            for room, values in self.room_settings.items()
+        }
+        pruned = {room: values for room, values in recorded.items() if values}
+        if pruned != dict(self.room_settings):
+            self.room_settings = pruned
 
     # -- State --------------------------------------------------------------
 
@@ -473,6 +837,9 @@ class LiveSession:
             "modes": list(self.modes),
             "rooms": [_room_document(room) for room in self.rooms],
             "house_settings": dict(self.house_settings),
+            "room_settings": {
+                room_id: dict(values) for room_id, values in self.room_settings.items()
+            },
             "installed": self.installed.to_document(),
             "module_rooms": dict(self.module_rooms),
             "profiles": self.profiles.to_document(),
@@ -518,6 +885,9 @@ class LiveSession:
             location=location,
             clock=clock,
             house_settings=_mapping(state.get("house_settings"), "house_settings"),
+            # Absent from a document written before the field existed, and the
+            # empty mapping is the honest reading: no room has been tuned.
+            room_settings=_room_settings(state.get("room_settings")),
             installed=InstalledSet.from_document(
                 _mapping(state.get("installed"), "installed")
             ),
@@ -615,6 +985,30 @@ def _mapping(value: object, field_name: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise LiveSessionError(f"a session state needs {field_name!r} to be an object")
     return value
+
+
+def _room_settings(value: object) -> Mapping[str, Mapping[str, object]]:
+    """`room_settings`: room ids to that room's layer values.
+
+    Absent is the empty mapping and not a failure: a document written before the
+    ROOM layer was recorded is still a house whose rooms are simply untuned, and
+    the built-in defaults stand in for every room. A room whose entry is not an
+    object is a document this build cannot read, so it is refused by name rather
+    than dropped -- silently discarding it would turn a room somebody tuned into
+    a room that looks untuned, which is a change nobody asked for.
+
+    The values are copied into plain dicts so a later write to the live resolver
+    cannot reach back into the document it was read from.
+    """
+    rooms = _mapping(value, "room_settings")
+    settings: dict[str, Mapping[str, object]] = {}
+    for room_id, values in rooms.items():
+        if not isinstance(values, Mapping):
+            raise LiveSessionError(
+                f"a session state needs room_settings[{room_id!r}] to be an object"
+            )
+        settings[str(room_id)] = dict(values)
+    return settings
 
 
 def _strings_mapping(value: object) -> Mapping[str, str]:

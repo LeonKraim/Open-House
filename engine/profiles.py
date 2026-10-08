@@ -7,7 +7,7 @@ the phase names are already the resolver's order, and this module is what fills
 the two that were reserved: the house-global profile entries and the room
 profile's, both above the room layer and below a temporary override.
 
-Two facts about the shape, and each is why the code is not a dictionary:
+Three facts about the shape, and each is why the code is not a dictionary:
 
 - **Axes make profiles simultaneous.** A room profile declares the axis it
   governs -- lighting, climate, media -- and a room holds at most one profile per
@@ -19,6 +19,17 @@ Two facts about the shape, and each is why the code is not a dictionary:
   one is `select` for each room it names rather than a delta applied at house
   scope. A house profile may also carry a house-scope delta of its own, and that
   is the one part of it that is not a room selection.
+- **A profile can be taken from a house rather than written for it.** `capture`
+  reads the house -- what every room is on, what every part of it is set to, the
+  packs installed into it, the modules hosted in it and the configuration each
+  of those is on -- and names it; putting a house back on one is
+  `live_profiles.activate_house`, which writes each part back where a person's
+  own edit of that part would have been written. The difference from a delta is
+  where the settings land: a delta resolves *above* the house's own settings and
+  stays in force until it is taken off, while a taken profile's settings are
+  written *as* the house's own, so the next thing anybody sets is what the house
+  is set to. A delta is an instruction; a taken profile is a house you can go
+  back to.
 
 Activation is the second half. A rule names a room, an axis, the profile it wants
 and how it is decided -- a person, a schedule, a house mode, a trigger -- and
@@ -105,6 +116,17 @@ class Profile:
     enabled_behaviours: tuple[str, ...]
     modes: tuple[str, ...]
     selections: Mapping[str, Mapping[str, str]]
+    #: Whether this profile was *taken* from a house rather than written by hand,
+    #: which is the difference between settings applied *below* future edits and
+    #: a delta applied *above* them. See `setup`.
+    snapshot: bool = False
+    #: A taken profile's house: the packs installed into it, its rooms, every
+    #: module it hosted with the configuration that module was on, and the
+    #: settings of the house and of each room. Read by `_restored` and by nothing
+    #: else: this is not a delta, and its shape is the house's own documents
+    #: (`LiveSession.to_state`, `ha_adapter/module_records.py`) rather than
+    #: anything restated here.
+    setup: Mapping[str, object] = field(default_factory=dict)
 
     @classmethod
     def from_document(
@@ -122,6 +144,13 @@ class Profile:
             enabled_behaviours=_names(document.get("enabled_behaviours")),
             modes=_names(document.get("modes")),
             selections=_selections(document.get("selections")),
+            # Presence, not truthiness: a profile taken from a house that had
+            # nothing configured is a snapshot of nothing, and applying it is how
+            # the house goes back to having nothing configured. An empty mapping
+            # is the answer, so `bool()` would read the one snapshot that matters
+            # most as no snapshot at all.
+            snapshot="setup" in document,
+            setup=_mapping(document.get("setup")),
         )
 
     def to_document(self) -> dict[str, object]:
@@ -146,6 +175,11 @@ class Profile:
             document["selections"] = {
                 room: dict(axes) for room, axes in self.selections.items()
             }
+        # And a taken profile carries what it took, empty or not, for the same
+        # reason one field up: the schema reads the presence of this as what
+        # makes the profile a snapshot.
+        if self.snapshot:
+            document["setup"] = dict(self.setup)
         return document
 
 
@@ -170,6 +204,29 @@ class ProfileSet:
             self._profiles[profile.name] = profile
         self._selections: dict[str, dict[str, str]] = {}
         self._house_profile: str | None = None
+        self._revision = 0
+
+    @property
+    def revision(self) -> int:
+        """How many times this set has moved under whoever was reading it.
+
+        A number and not a flag, because the reader is a *page*: it renders from
+        a set, sends back the number it rendered from, and a page that sends a
+        number this set has passed is a page describing a house that is no longer
+        there. Only the moves that change what a page is showing count -- the
+        profile a house is on and the profiles it holds -- and not the ones a
+        page makes itself (`select` is a room being moved on an axis, which is
+        what the page just asked for).
+
+        See `ha_adapter/live_profiles.py` for the writes that use it, and
+        `custom_components/open_house/websocket_api.py` for the door a stale page
+        is refused at.
+        """
+        return self._revision
+
+    def _moved(self) -> None:
+        """Note a change a reader could have been rendered from. See `revision`."""
+        self._revision += 1
 
     def add(self, document: Mapping[str, object]) -> Profile:
         """Validate and add one profile, refusing a name already held."""
@@ -179,7 +236,122 @@ class ProfileSet:
         if profile.name in self._profiles:
             raise UnknownProfileError(profile.name, "is declared twice")
         self._profiles[profile.name] = profile
+        self._moved()
         return profile
+
+    def capture(
+        self,
+        *,
+        name: str,
+        description: str,
+        selections: Mapping[str, Mapping[str, str]],
+        setup: Mapping[str, object],
+    ) -> Profile:
+        """Take a profile *from* a house: the whole house, named.
+
+        The other way a profile comes to exist. Everything it is made of is read
+        from the caller -- a set of profiles knows its selections and knows
+        nothing about a house's modules or settings, which are the session's and
+        the integration's -- and this is what turns those into the document `add`
+        validates, so the one place that decides what a profile document is stays
+        the one place.
+
+        `setup` is passed through as it arrives rather than projected here: it is
+        the house's own documents (`LiveSession.to_state` and the hosted-module
+        records), and a copy reshaped in this module would be a second definition
+        of what a house is that drifts from the first the moment either changed.
+
+        The selections are the *bundle* the profile carries and not this set's
+        live ones: taking a profile is naming a house as it is, and putting the
+        house on it is `activate_house_profile` like any other house profile.
+        Nothing about the house changes here.
+
+        Refusals are `add`'s: a name already held is a name already held, and a
+        name the schema will not take is refused rather than written into a file
+        some other reader would have to guess at.
+        """
+        document: dict[str, object] = {
+            "name": name,
+            "kind": str(ProfileKind.HOUSE),
+            "description": description,
+            "selections": {room: dict(axes) for room, axes in selections.items()},
+            "setup": dict(setup),
+        }
+        return self.add(document)
+
+    def retake(
+        self,
+        name: str,
+        *,
+        selections: Mapping[str, Mapping[str, str]],
+        setup: Mapping[str, object],
+    ) -> Profile:
+        """Take the profile called `name` again, off the house as it is now.
+
+        The third way a profile's contents move, after `add` and `capture`, and
+        the one a house on a *taken* profile needs: the profile a house is on is
+        the house it named, so an edit made while it is on makes the two
+        disagree, and this is the edit being learned rather than the profile
+        being re-taken by hand.
+
+        It is not `remove` followed by `capture`, which is the same content and
+        the wrong move twice over: removing a profile takes every room selection
+        that named it off -- the house would come out of learning an edit with its
+        rooms on nothing -- and it releases the house profile in force, so the
+        edit being learned would have been learned by a profile that is no longer
+        on. The name, the kind, the description and everything else the document
+        carries stay as they were; only the two halves the caller supplies move.
+
+        Refusals are `add`'s, and they are the reason this goes through
+        `from_document` rather than into the held mapping: what the house is now
+        becomes a document like any other, and the schema decides whether it may
+        be one.
+        """
+        held = self.profile(name)
+        taken = Profile.from_document(
+            {
+                **held.to_document(),
+                "selections": {room: dict(axes) for room, axes in selections.items()},
+                "setup": dict(setup),
+            },
+            schema=self._schema,
+            index=len(self._profiles),
+        )
+        self._profiles[name] = taken
+        return taken
+
+    def rename(self, name: str, to: str) -> Profile:
+        """Rename a held profile, keeping every selection that named it.
+
+        A rename is the profile moving under a new name and not a new profile
+        beside the old one, so the three things that refer to a name move with
+        it: the key it is held under, every room selection that names it, and the
+        house profile in force. A `remove` followed by an `add` would be the
+        other reading -- and would quietly take every room off it on the way.
+
+        The new name goes through `Profile.from_document` like any other, so the
+        schema decides what a name may be rather than a rule stated here; a name
+        already held is refused, because a rename onto it would be a removal of
+        somebody else's profile by accident.
+        """
+        profile = self.profile(name)
+        if to in self._profiles:
+            raise UnknownProfileError(to, "is declared twice")
+        renamed = Profile.from_document(
+            {**profile.to_document(), "name": to},
+            schema=self._schema,
+            index=len(self._profiles),
+        )
+        del self._profiles[name]
+        self._profiles[to] = renamed
+        for axes in self._selections.values():
+            for axis, chosen in axes.items():
+                if chosen == name:
+                    axes[axis] = to
+        if self._house_profile == name:
+            self._house_profile = to
+        self._moved()
+        return renamed
 
     # -- Reads --------------------------------------------------------------
 
@@ -254,10 +426,54 @@ class ProfileSet:
             for axis, chosen in axes.items():
                 self.select(room_id, axis, chosen)
         self._house_profile = name
+        self._moved()
 
     def deactivate_house_profile(self) -> None:
         """Note that no house profile is in force. The selections it set stay."""
         self._house_profile = None
+        self._moved()
+
+    def remove(self, name: str) -> None:
+        """Drop a profile, and take everything that named it off with it.
+
+        A selection names a profile, so removing the profile without removing the
+        selection would leave a room pointing at a name the set no longer holds
+        -- which is the state `effective_rooms` would then read a `KeyError` out
+        of rather than an answer. So the selections go first, by the same door a
+        caller would use (`clear`), and the house profile is released if it was
+        the one removed.
+        """
+        self.profile(name)  # raises, naming the profile, when it is not held
+        del self._profiles[name]
+        for room_id in list(self._selections):
+            for axis in list(self._selections[room_id]):
+                if self._selections[room_id][axis] == name:
+                    self.clear(room_id, axis)
+        if self._house_profile == name:
+            self._house_profile = None
+        self._moved()
+
+    def export_document(self, name: str | None = None) -> dict[str, object]:
+        """One profile as a document, or every profile as a set of them.
+
+        `name` is what makes the two halves of the feature -- "this profile" and
+        "all profiles" -- one operation with two answers rather than two
+        operations that could disagree about what a profile document is.
+
+        The set form carries the *profiles only* and not `to_document`'s
+        selections: a profile is portable -- it names settings, not this house's
+        hardware -- and a selection is a fact about the rooms this house has. A
+        document that carried `selections` would be a file that half-applies in a
+        house whose rooms are named differently, which is worse than one that
+        plainly carries the profiles.
+        """
+        if name is not None:
+            return self.profile(name).to_document()
+        return {
+            "profiles": [
+                self._profiles[held].to_document() for held in sorted(self._profiles)
+            ]
+        }
 
     # -- The layers a resolver reads ---------------------------------------
 

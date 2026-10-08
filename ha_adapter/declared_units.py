@@ -53,7 +53,11 @@ REGISTRY = "registry"
 
 
 def installed_units(
-    root: Path, installed: InstalledSet | None, vocabulary: Vocabulary
+    root: Path,
+    installed: InstalledSet | None,
+    vocabulary: Vocabulary,
+    *,
+    user_root: Path | None = None,
 ) -> tuple[DeclaredBehaviour, ...]:
     """The declared units every installed pack contributes, in pack-name order.
 
@@ -65,6 +69,16 @@ def installed_units(
     `None` is the empty set, because `build_live_house` is called with no
     installed argument on the path that has no session state yet, and "no packs"
     and "not asked" are the same answer here.
+
+    **`user_root` is the second catalog, and without it a module a person wrote
+    is listed and evaluated by nothing.** A pack authored in the Dev tab is a
+    file under Home Assistant's own config, published by no index
+    (`ha_adapter.live_modules._published` reads it beside the checkout's, which
+    is what makes it installable at all); resolving only the published set here
+    would install it, list its behaviours, and hand the engine no unit for any
+    of them -- so the module's card would draw its atoms with an empty
+    description and none of its settings, which is exactly the shape of "a
+    module that was installed and runs nothing".
     """
     if installed is None or not installed.names:
         return ()
@@ -72,7 +86,7 @@ def installed_units(
     default_priority = vocabulary.pack_policy.default_priority
     service_states = load_service_states(root)
     found: list[DeclaredBehaviour] = []
-    for name, document in _manifests(root, wanted):
+    for name, document in _manifests(root, wanted, user_root=user_root):
         found.extend(
             declared_units(
                 name,
@@ -85,7 +99,11 @@ def installed_units(
 
 
 def with_declared_slots(
-    root: Path, installed: InstalledSet | None, vocabulary: Vocabulary
+    root: Path,
+    installed: InstalledSet | None,
+    vocabulary: Vocabulary,
+    *,
+    user_root: Path | None = None,
 ) -> Vocabulary:
     """`vocabulary` plus every device the installed packs declare of their own.
 
@@ -108,15 +126,23 @@ def with_declared_slots(
 
     `None` or an empty set returns `vocabulary` unchanged, so the path that builds
     a house before any session state exists costs nothing.
+
+    `user_root` is read here for the reason `installed_units` reads it: a pack a
+    person authored declares its own devices exactly as a published pack does,
+    and a gate that knew only the published set would refuse the binding that
+    makes the authored pack's requirement fillable.
     """
     if installed is None or not installed.names:
         return vocabulary
-    manifests = sorted(_manifests(root, set(installed.names)), key=lambda pair: pair[0])
+    manifests = sorted(
+        _manifests(root, set(installed.names), user_root=user_root),
+        key=lambda pair: pair[0],
+    )
     return grow_vocabulary(vocabulary, manifests)
 
 
 def _manifests(
-    root: Path, wanted: set[str]
+    root: Path, wanted: set[str], *, user_root: Path | None = None
 ) -> Iterable[tuple[str, Mapping[str, object]]]:
     """Each wanted pack's name and manifest document, skipping what will not load.
 
@@ -124,17 +150,48 @@ def _manifests(
     `engine.manifest.load_manifest`, which is the loader the installer and the
     registry checks use -- a second YAML reader here would be a second reading of
     what a manifest is, free to disagree with the one that validated it.
+
+    **The published set first, then `user_root` for what the index does not
+    name.** The tie is broken exactly the way `live_modules._published` breaks
+    it, down to *when* a name counts as taken: a name both the checkout and a
+    person publish is the checkout's, so the studio, the Store and the engine
+    all read one `foo` as `foo`. That reader marks a name seen once its manifest
+    has *loaded*, so a published entry whose file has gone stale falls through to
+    the local one rather than vanishing -- and this follows it rather than
+    marking first and loading after, because the point of the rule is that the
+    panel and the engine agree: a name the panel offers has to be a name the
+    engine can resolve, and the panel offers the local pack in exactly that case.
     """
+    seen: set[str] = set()
     try:
         index = load_index(root / REGISTRY)
     except RegistryError:
+        index = None
+    if index is not None:
+        for entry in index.entries:
+            pointer = entry.pointer
+            if pointer.name not in wanted or pointer.name in seen:
+                continue
+            try:
+                manifest = pack_manifest.load_manifest(root / pointer.path)
+            except (OSError, pack_manifest.MalformedManifestError):
+                continue
+            seen.add(pointer.name)
+            yield pointer.name, manifest.document
+    if user_root is None:
         return
-    for entry in index.entries:
-        pointer = entry.pointer
-        if pointer.name not in wanted:
-            continue
+    remaining = wanted - seen
+    if not remaining:
+        return
+    try:
+        candidates = sorted(user_root.glob("*.yaml"))
+    except OSError:
+        return
+    for path in candidates:
         try:
-            manifest = pack_manifest.load_manifest(root / pointer.path)
+            manifest = pack_manifest.load_manifest(path)
         except (OSError, pack_manifest.MalformedManifestError):
             continue
-        yield pointer.name, manifest.document
+        if manifest.name in remaining:
+            remaining.discard(manifest.name)
+            yield manifest.name, manifest.document

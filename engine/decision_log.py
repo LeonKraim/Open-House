@@ -64,10 +64,17 @@ class Outcome(StrEnum):
 
     The first five are what happened *to* an evaluation: it acted, it declined,
     or it was suppressed by arbitration, by an override, or by a rate limit. The
-    last three record an evaluation that never reached a decision -- a skip ahead
+    last four record an evaluation that never reached a decision -- a skip ahead
     of any rule, or a refusal by the safety gate. They are one enum rather than
     several because a record carries exactly one of them and a closed set is what
     makes "no outcome nothing emits" checkable.
+
+    `SKIPPED_SUPPRESSED` is a skip like the other two and not a suppression like
+    the first five: a module another module has switched off never reaches its
+    own gate, so its atoms leave a record saying so rather than one saying
+    "disabled" -- the person reading the log asked why the lights did not come on,
+    and the answer "another module is holding this one off" is a different answer
+    from "you switched it off".
     """
 
     ACTED = "acted"
@@ -77,6 +84,7 @@ class Outcome(StrEnum):
     RATE_LIMITED = "rate-limited"
     SKIPPED_UNBOUND_SLOT = "skipped: unbound slot"
     SKIPPED_DISABLED = "skipped: disabled"
+    SKIPPED_SUPPRESSED = "skipped: suppressed"
     REFUSED_UNSAFE = "refused: unsafe"
 
 
@@ -223,6 +231,27 @@ class OverrideNote:
 
 
 @dataclass(frozen=True, slots=True)
+class ModuleSuppression:
+    """A module another module is holding off, and the one holding it off.
+
+    One module switching another off is a *temporary* act by construction: the
+    suppressor declares the packs it overrides (`pack-manifest`'s `suppresses`),
+    the engine derives the suppression from which modules are currently on, and
+    nothing is written down -- so the target's own switch is exactly where its
+    person left it, and the moment the suppressor goes off the target is back.
+    That is the whole difference between this and switching the target off, and
+    it is why the input carries *who*: a record that said only "suppressed" would
+    leave a person hunting for the switch that did it.
+    """
+
+    #: The pack being held off.
+    module: str
+    #: The pack doing the holding, and the behaviour of it that declared this.
+    by: str
+    behaviour: str
+
+
+@dataclass(frozen=True, slots=True)
 class HazardReading:
     """One alarming device a safety evaluation found, and which alert it raises.
 
@@ -261,10 +290,11 @@ class Repair:
 #: branch decided and the value it read, a mode reading carries the gate, a mode
 #: request carries the mode a behaviour asked the house to enter, a presence
 #: reading carries the emptying and the rooms behind it, an override note carries
-#: the suppression or the release, a hazard reading carries the alarm a safety
-#: evaluation answered, and a repair carries the sensor that could not be read. A
-#: record that names them answers "why this value", "why now" and "why not"
-#: without the stack that produced any of the three.
+#: the suppression or the release, a module suppression carries the pack holding
+#: another one off, a hazard reading carries the alarm a safety evaluation
+#: answered, and a repair carries the sensor that could not be read. A record that
+#: names them answers "why this value", "why now" and "why not" without the stack
+#: that produced any of the three.
 Input = (
     SlotRead
     | ResolvedSetting
@@ -273,6 +303,7 @@ Input = (
     | ModeRequest
     | HousePresence
     | OverrideNote
+    | ModuleSuppression
     | HazardReading
     | Repair
 )
@@ -439,6 +470,13 @@ def _input_document(entry: Input) -> dict[str, object]:
         }
     if isinstance(entry, HazardReading):
         return {"kind": "hazard", "entity_id": entry.entity_id, "hazard": entry.kind}
+    if isinstance(entry, ModuleSuppression):
+        return {
+            "kind": "module_suppression",
+            "module": entry.module,
+            "by": entry.by,
+            "behaviour": entry.behaviour,
+        }
     if isinstance(entry, Repair):
         return {
             "kind": "repair",

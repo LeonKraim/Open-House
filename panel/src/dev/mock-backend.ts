@@ -13,23 +13,28 @@
 
 import type {
   ActivityStreamEvent,
+  BindingStatus,
   BindingSuggestion,
   Capabilities,
   DecisionLogEntry,
   HealthIssue,
+  HostedModule,
   HouseOverview,
   HouseScope,
-  ImportPreview,
   InstalledModule,
   ModuleInstallReply,
   ModuleOffer,
+  ModuleOfferRow,
+  ModuleSlot,
+  ModuleSlotRuleKind,
   ProfileRef,
   RoomDetail,
   RoomSummary,
+  SlotRuleFacts,
   StoreEntry,
 } from "../api/models.ts";
 import type { JsonSchema } from "../components/schema-spec.ts";
-import { COMMANDS } from "../api/protocol.ts";
+import { COMMANDS, REFUSALS } from "../api/protocol.ts";
 import type { HaConnection, HassLike, UnsubscribeFunc } from "../api/connection.ts";
 
 const CAPABILITIES: Capabilities = {
@@ -71,32 +76,150 @@ const ROOMS: RoomSummary[] = [
   },
 ];
 
-const PROFILES: ProfileRef[] = [
-  {
+/**
+ * The mock's profiles, as the documents the server trades in.
+ *
+ * Documents rather than rows, because export and import are the point: a mock
+ * that held only the panel's `ProfileRef` could not answer `profiles/export`
+ * with anything the importer would read back. The panel rows are derived from
+ * these on every read (`profileRef`), so the two can never disagree.
+ */
+const PROFILE_DOCUMENTS: Record<string, Record<string, unknown>> = {
+  evening: {
     name: "evening",
-    label: "Evening",
+    kind: "room",
+    axis: "lighting",
     description: "Warm, dimmed lighting for the evening.",
-    kind: "room",
-    axis: "lighting",
-    active: true,
   },
-  {
+  dim: {
     name: "dim",
-    label: "Dim",
-    description: "Low brightness for bedtime.",
     kind: "room",
     axis: "lighting",
-    active: true,
+    description: "Low brightness for bedtime.",
   },
-  {
+  vacation: {
     name: "vacation",
-    label: "Vacation",
-    description: "Presence simulation while nobody is home.",
     kind: "house",
-    axis: null,
-    active: false,
+    description: "Presence simulation while nobody is home.",
+    selections: {},
   },
-];
+};
+
+/** Which room profiles the mock house is on. */
+const ACTIVE_PROFILE_NAMES = new Set(["evening", "dim"]);
+
+/** The house profile in force, if one is. */
+let houseProfile: string | null = null;
+
+/**
+ * How many times the mock house's profiles have moved.
+ *
+ * The mock's half of the server's `LiveSession.revision`: sent on every page
+ * that a person renders controls from, and echoed back by the writes those
+ * controls make. A switch moves it, and a write carrying the revision from
+ * before the switch is refused with `stale_page` -- which is what lets the dev
+ * harness exercise the disabled-page notice without a second Home Assistant.
+ */
+let profilesRevision = 0;
+
+/**
+ * Refuse a write that was decided against a house which has since moved.
+ *
+ * The mock's stand-in for the server's `_stale` guard, and it is deliberately
+ * the same rule: a write *with* a revision must match, and one with no revision
+ * at all is let through, because "I am not rendering a page" is a real caller.
+ */
+function guardStale(payload: Record<string, unknown>): void {
+  const sent = payload.revision;
+  if (typeof sent !== "number" || sent === profilesRevision) return;
+  throw {
+    code: REFUSALS.stalePage,
+    message:
+      "This page was read before the house's profiles moved, so its answers " +
+      "belong to a profile that is no longer in force.",
+  };
+}
+
+/** Every profile as the panel's row, newest state included. */
+/** The rooms a store row's picker offers, as the server sends them. */
+function roomsOf(rooms: RoomSummary[]): { id: string; name: string }[] {
+  return rooms.map((room) => ({ id: room.id, name: room.name }));
+}
+
+function profileRows(): ProfileRef[] {
+  return Object.values(PROFILE_DOCUMENTS)
+    .map(profileRef)
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function profileRef(document: Record<string, unknown>): ProfileRef {
+  const name = String(document.name);
+  const words = name.split("_");
+  return {
+    name,
+    label: words
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" "),
+    description: String(document.description ?? ""),
+    kind: document.kind === "house" ? "house" : "room",
+    axis: document.axis === undefined ? null : String(document.axis),
+    active: houseProfile === name || ACTIVE_PROFILE_NAMES.has(name),
+  };
+}
+
+/** The profile documents a file holds, in either of the two accepted forms. */
+function profileDocuments(document: unknown): Record<string, unknown>[] {
+  if (typeof document !== "object" || document === null) {
+    throw new Error("the document is not an object");
+  }
+  const held = (document as Record<string, unknown>).profiles;
+  if (held === undefined) return [document as Record<string, unknown>];
+  if (!Array.isArray(held)) {
+    throw new Error("the document's 'profiles' is not a list");
+  }
+  return held as Record<string, unknown>[];
+}
+
+/**
+ * One slot a fixture's pack reaches, before any device is resolved.
+ *
+ * The fixture states the slot's identity and what the pack declares about it --
+ * that it is required, and that is all -- and leaves the device facts empty.
+ * Which device the slot points at is the room's binding or the house's, and it
+ * is resolved on every read (`moduleSlots`), so a fixture cannot claim a
+ * fallback the room's own page does not have.
+ */
+function slotRow(slot: string, flags: { required?: boolean } = {}): ModuleSlot {
+  return {
+    slot,
+    label: slot,
+    declared_label: slot,
+    entity_id: null,
+    default_entity_id: null,
+    overridden: false,
+    named: false,
+    required: flags.required ?? false,
+    separate: slot.includes("__"),
+    // A fixture's slots are the pack's own devices rather than house roles, and
+    // the catalog's domains are the server's half: a fixture that invented one
+    // would be claiming a type nothing declared.
+    accepts_domains: [],
+    house_scope: false,
+    bound: false,
+    friendly_name: null,
+    domain: null,
+    state: null,
+    status: "unbound",
+    // A fixture starts on no part of a split slot and on a slot nobody has split:
+    // `moduleSlots` and the parts session below are where either is set.
+    part: null,
+    part_label: null,
+    parts: [],
+    // A fixture starts with no logic on any slot; `moduleSlots` overlays whatever
+    // was set this session.
+    ...noRule(),
+  };
+}
 
 const MODULES: InstalledModule[] = [
   {
@@ -107,6 +230,10 @@ const MODULES: InstalledModule[] = [
     house: false,
     scope: "room",
     enabled: true,
+    // Nothing holds the holder off, so this one is the suppressor rather than
+    // the suppressed; `withReach` derives both fields on every read.
+    suppressed_by: null,
+    suppressed_behaviour: null,
     satisfiable: true,
     missing_slots: [],
     // The settings this module owns. The bedtime button's are its reach boxes:
@@ -159,6 +286,11 @@ const MODULES: InstalledModule[] = [
         scope: "house",
         declared_scope: "house",
         widenable: true,
+        // `packs/official/bedtime.yaml`: the lights rank above the sleep-mode
+        // switch, so a rival pack's lighting atom loses to this one's.
+        priority: 50,
+        default_priority: 50,
+        priority_set: false,
       },
       {
         id: "sleep_mode",
@@ -169,7 +301,17 @@ const MODULES: InstalledModule[] = [
         scope: "house",
         declared_scope: "house",
         widenable: true,
+        priority: 10,
+        default_priority: 10,
+        priority_set: false,
       },
+    ],
+    // `packs/official/bedtime.yaml`: `requires_slots: [light_group]`,
+    // `optional_slots: [climate_zone, lock]`.
+    slots: [
+      slotRow("light_group", { required: true }),
+      slotRow("climate_zone"),
+      slotRow("lock"),
     ],
   },
   {
@@ -180,6 +322,10 @@ const MODULES: InstalledModule[] = [
     house: false,
     scope: "room",
     enabled: true,
+    // The fixture declares no suppression over this pack, so nothing holds it
+    // off; `withReach` derives both fields on every read anyway.
+    suppressed_by: null,
+    suppressed_behaviour: null,
     satisfiable: true,
     missing_slots: [],
     option_keys: [
@@ -251,7 +397,19 @@ const MODULES: InstalledModule[] = [
         scope: "room",
         declared_scope: "room",
         widenable: true,
+        // The pack declares none, so the catalog's default applies
+        // (`catalog/pack-policy.yaml`: `default_priority: 0`).
+        priority: 0,
+        default_priority: 0,
+        priority_set: false,
       },
+    ],
+    // The motion atom's roles: the reading it watches, the light level it is
+    // gated on, and the light it switches.
+    slots: [
+      slotRow("motion_sensor", { required: true }),
+      slotRow("ambient_light_sensor"),
+      slotRow("light_group"),
     ],
   },
 ];
@@ -350,6 +508,9 @@ const HOUSE_SCOPE: HouseScope = {
       status: "ok",
       rooms: ["Kitchen", "Bedroom"],
       modules: ["Motion lighting", "Bedtime button"],
+      // A split role, so the house tab's part controls are on screen in
+      // `npm run dev`: two halves bound to two devices, both of them lights.
+      parts: partRows("light_group", ["light"], ""),
     },
     {
       slot: "door_contact",
@@ -364,6 +525,7 @@ const HOUSE_SCOPE: HouseScope = {
       status: "unbound",
       rooms: ["Kitchen"],
       modules: ["Bedtime button"],
+      parts: [],
     },
   ],
   modules: [
@@ -376,6 +538,8 @@ const HOUSE_SCOPE: HouseScope = {
       house: true,
       scope: "house",
       enabled: false,
+      suppressed_by: null,
+      suppressed_behaviour: null,
       satisfiable: false,
       missing_slots: ["humidity_sensor"],
       option_keys: [
@@ -419,7 +583,18 @@ const HOUSE_SCOPE: HouseScope = {
           scope: "house",
           declared_scope: "house",
           widenable: true,
+          // The same act `bathroom_fan` performs, and the same rank.
+          priority: 20,
+          default_priority: 20,
+          priority_set: false,
         },
+      ],
+      // The reading that gates the whole module, and the fan it runs -- and
+      // `humidity_sensor` is what the fixture leaves unbound, which is why the
+      // module is drawn unsatisfiable.
+      slots: [
+        slotRow("humidity_sensor", { required: true }),
+        slotRow("fan"),
       ],
     },
   ],
@@ -449,6 +624,10 @@ const HOUSE_SCOPE: HouseScope = {
     "module.house_fan.humidity_threshold": 65,
     "module.house_fan.cooldown_minutes": 600,
   },
+  // Placeholder: `houseScopeView` is what every caller reads, and it answers the
+  // live revision rather than this one. The field is here because the fixture is
+  // typed as the whole page.
+  revision: 0,
 };
 
 /**
@@ -493,6 +672,49 @@ function atomRooms(pack: string, behaviour: string): Set<string> {
   return (ATOM_ROOMS[`${pack}/${behaviour}`] ??= new Set<string>());
 }
 
+/**
+ * The temporary override the fixture declares: bedtime holds motion lighting off.
+ *
+ * The mock's copy of `pack-manifest`'s `suppresses` clause, and seeded with one
+ * entry rather than left empty because a page nobody can see the feature on is a
+ * page nobody can review: the Modules tab in `npm run dev` draws the red panel
+ * over the motion-lighting card, and switching the bedtime module off makes it
+ * disappear -- which is the whole semantics, demonstrated rather than described.
+ *
+ * Derived on read (`suppressorOf`) and never stored, exactly as the engine
+ * derives it: nothing is written against the target, so the target's own switch
+ * reads back where the fixture left it and the release is a consequence of the
+ * holder going off rather than a second write.
+ */
+const SUPPRESSES: Record<string, { pack: string; behaviour: string }> = {
+  bedtime_button: { pack: "motion_lighting", behaviour: "bedtime_button.lights_off" },
+};
+
+/** The module holding `pack` off right now, or `null`. */
+function suppressorOf(pack: string): { pack: string; behaviour: string } | null {
+  for (const [holder, target] of Object.entries(SUPPRESSES)) {
+    if (target.pack !== pack) continue;
+    const module = installed.find((row) => row.pack === holder);
+    if (module === undefined || !module.enabled) continue;
+    const atom = module.behaviours.find((row) => row.id === target.behaviour);
+    if (atom?.enabled === true) return target;
+  }
+  return null;
+}
+
+/**
+ * The ranks a person in this session has chosen, `<pack>/<behaviour>` -> number.
+ *
+ * Only the *chosen* ranks are held here; the declared one stays on the fixture
+ * row as `default_priority`, which is what "reset" returns to and what the
+ * server reports as `priority` until somebody edits it. An absence is therefore
+ * meaningful -- it is exactly the server's `priority_set: false` -- so a map
+ * seeded with the declared ranks would erase the distinction the control reads.
+ * `withReach` overlays this on every read, which is what makes a typed rank
+ * survive the reload the panel always makes afterwards.
+ */
+const PRIORITY_OVERRIDES: Record<string, number> = {};
+
 for (const module of [...MODULES, ...HOUSE_SCOPE.modules]) {
   for (const behaviour of module.behaviours) {
     const rooms = atomRooms(module.pack, behaviour.id);
@@ -521,12 +743,24 @@ function withReach(module: InstalledModule): InstalledModule {
   const packOn = module.behaviours.some(
     (behaviour) => atomRooms(module.pack, behaviour.id).size > 0,
   );
+  const holder = suppressorOf(module.pack);
   return {
     ...module,
+    suppressed_by: holder?.pack ?? null,
+    suppressed_behaviour: holder?.behaviour ?? null,
+    // Which device each slot is pointed at is a read, not a fixture: the
+    // fallback is the room's or the house's binding and the override is
+    // whatever this session wrote, so a row cannot go stale behind a write.
+    slots: moduleSlots(module),
     behaviours: module.behaviours.map((behaviour) => {
       const rooms = atomRooms(module.pack, behaviour.id);
+      const chosen = PRIORITY_OVERRIDES[`${module.pack}/${behaviour.id}`];
       return {
         ...behaviour,
+        // The rank now, and whether a person is the one who set it -- read from
+        // one place, so the number and the Reset button can never disagree.
+        priority: chosen ?? behaviour.default_priority,
+        priority_set: chosen !== undefined,
         active_rooms:
           behaviour.scope === "house"
             ? []
@@ -609,6 +843,7 @@ function houseScopeView(): HouseScope {
     }),
     modules: installed.map(withReach),
     options: houseOptions,
+    revision: profilesRevision,
   };
 }
 
@@ -769,7 +1004,185 @@ const STORE: StoreEntry[] = [
 ];
 
 /**
- * Settings written for a room, over the packs' defaults.
+ * The modules this mock house made, as the Store tab's local half shows them.
+ *
+ * Two deliberately opposite rows: one that reaches through a slot and so would
+ * work in anybody's house, and one that names this house's own device and so
+ * would only install somewhere that holds the same one. The chip a person reads
+ * before sending a file is the whole reason both are here.
+ *
+ * Mutable, because Define, Deploy, Remove and Import all answer with the store
+ * they left behind -- the same contract the server has, and what makes the
+ * buttons on this screen look like they did something in `npm run dev`.
+ */
+const STORED_MODULES: ModuleOfferRow[] = [
+  {
+    slug: "evening_lighting",
+    title: "Evening lighting",
+    description: "Warm the lights down as the room's light level falls.",
+    author: "Ada",
+    version: "1.0.0",
+    licence: "mit",
+    blueprint: "blueprints/automation/homeassistant/motion_light.yaml",
+    pinned: false,
+    flows: [],
+    scripts: [],
+    slots: ["ambient_light_sensor", "ceiling_light"],
+    missing_slots: ["ceiling_light"],
+    deployed: [
+      {
+        slug: "evening_lighting_kitchen",
+        room_id: "kitchen",
+        room_name: "Kitchen",
+        running: true,
+      },
+      {
+        slug: "evening_lighting_bedroom",
+        room_id: "bedroom",
+        room_name: "Bedroom",
+        running: false,
+      },
+    ],
+  },
+  {
+    slug: "porch_lamp",
+    title: "Porch lamp",
+    description: "The porch lamp on, half an hour before sunset.",
+    author: "Ada",
+    version: "0.2.0",
+    licence: "no_licence",
+    blueprint: "",
+    pinned: true,
+    flows: [],
+    scripts: [],
+    slots: [],
+    missing_slots: [],
+    deployed: [],
+  },
+];
+
+/**
+ * The modules this house *hosts*: a definition with answers, running somewhere.
+ *
+ * A different list from `STORED_MODULES`, which is what the house offers, and
+ * from `MODULES`, which is what packs installed. One module can appear in all
+ * three -- that is the point of the two acts: defining it offers it, adding it
+ * to a room hosts a copy, and the copy is what a room's page draws.
+ *
+ * Mutable, because unhosting one has to leave the list it answered with.
+ */
+const HOSTED_MODULES: HostedModule[] = [
+  {
+    slug: "evening_lighting_kitchen",
+    title: "Evening lighting (Kitchen)",
+    blueprint: "blueprints/automation/homeassistant/motion_light.yaml",
+    definition: "evening_lighting",
+    room_id: "kitchen",
+    room_name: "Kitchen",
+    // One slot answered and one not, which is the pair of states the card has
+    // to draw differently: the module runs, and it is waiting for a device.
+    slots: [
+      { name: "ambient_light_sensor", bound: "sensor.kitchen_lux" },
+      { name: "ceiling_light", bound: "" },
+    ],
+    automation_id: "automation.evening_lighting_kitchen",
+    // Two configurations on the kitchen module, because that is what the
+    // switcher is for and a mock with one of everything shows nothing: the
+    // other module has the ordinary answer, a module with a single
+    // configuration it cannot drop.
+    config: "Default",
+    configs: ["Default", "Evening"],
+    derived: {},
+    flows: {},
+    // No script on either module in the mock: the cast is offered on every
+    // settings row and a mock that shipped one would be showing a state the
+    // fixture cannot keep true -- nothing here calls anything.
+    scripts: {},
+    inputs: [{ name: "threshold", value: 40 }],
+    settings: [
+      {
+        name: "threshold",
+        title: "Lux threshold",
+        description: "The reading at which the lights come on.",
+        default: 40,
+        has_default: true,
+        multiple: false,
+        bound: true,
+        value: 40,
+        satisfied: true,
+        in_trigger: false,
+        selector: "number",
+        options: [],
+      },
+    ],
+    outputs: [
+      {
+        key: "scene",
+        kind: "string",
+        expression: "{{ states('light.kitchen') }}",
+        entity_id: "sensor.open_house_evening_lighting_kitchen_scene",
+        value: "on",
+      },
+    ],
+  },
+  {
+    slug: "porch_lamp",
+    title: "Porch lamp",
+    blueprint: "",
+    definition: "porch_lamp",
+    room_id: "",
+    room_name: "the whole house",
+    slots: [],
+    automation_id: "automation.porch_lamp",
+    config: "Default",
+    configs: ["Default"],
+    derived: {},
+    flows: {},
+    scripts: {},
+    inputs: [],
+    settings: [],
+    outputs: [
+      {
+        key: "on",
+        kind: "boolean",
+        expression: "{{ is_state('switch.porch', 'on') }}",
+        entity_id: "sensor.open_house_porch_lamp_on",
+        value: true,
+      },
+    ],
+  },
+];
+
+/**
+ * What each configuration of each module was last holding.
+ *
+ * The mock has no records and no automations, so this is the whole of what makes
+ * a switch *look* like a switch in `npm run dev`: without it, clicking another
+ * configuration would move the select and leave the values the old one was
+ * showing, which is the one thing a switch cannot do.
+ *
+ * Keyed by slug, then by configuration name, because that is what the two
+ * commands below address them by.
+ */
+const CONFIG_VALUES: Record<string, Record<string, Record<string, unknown>>> = {};
+
+/** Remember what a module is holding, under the configuration holding it. */
+function holdConfiguration(module: HostedModule): void {
+  (CONFIG_VALUES[module.slug] ??= {})[module.config] = Object.fromEntries(
+    module.settings.map((setting) => [setting.name, setting.value]),
+  );
+}
+
+/** Put back what a configuration was holding, for the rows it has something for. */
+function showConfiguration(module: HostedModule): void {
+  const held = CONFIG_VALUES[module.slug]?.[module.config];
+  if (!held) return;
+  for (const setting of module.settings) {
+    if (setting.name in held) setting.value = held[setting.name];
+  }
+}
+
+/** Settings written for a room, over the packs' defaults.
  *
  * A room's form has to remember a save the way the engine does, or the write
  * looks like it went nowhere: `roomDetail` derives `options` from each pack's
@@ -777,6 +1190,313 @@ const STORE: StoreEntry[] = [
  * `roomGet` would answer with the default again.
  */
 const ROOM_OPTIONS: Record<string, Record<string, unknown>> = {};
+
+/**
+ * The bindings a room page is built from, and the same rows a module's slot
+ * falls back to.
+ *
+ * One place, because a module's slot row says what the room binds beside its
+ * own choice: a second copy of this table would let a card claim a fallback the
+ * room's page does not have. `id` decides the one device the room is bound to
+ * (`light.bedroom` in the bedroom and nothing elsewhere) and the two readings
+ * every room shares.
+ */
+function roomBindingFixtures(id: string): BindingStatus[] {
+  return [
+    {
+      slot: "ceiling_light",
+      label: "Ceiling light",
+      required: true,
+      accepts_domains: ["light"],
+      entity_id: id === "bedroom" ? "light.bedroom" : null,
+      registry_id: id === "bedroom" ? "reg-light-bedroom" : null,
+      friendly_name: id === "bedroom" ? "Bedroom light" : null,
+      domain: id === "bedroom" ? "light" : null,
+      state: id === "bedroom" ? "off" : null,
+      status: id === "bedroom" ? "ok" : "unbound",
+      last_changed: id === "bedroom" ? new Date().toISOString() : null,
+      ...noRule(),
+      modules: ["Bedtime button"],
+      // The halves the house has split this role into (`SLOT_PARTS`), if any --
+      // the split is the house's, so every room's row draws the same two and only
+      // the devices differ.
+      parts: partRows("ceiling_light", ["light"], id),
+    },
+    {
+      slot: "motion_sensor",
+      label: "Motion sensor",
+      required: true,
+      accepts_domains: ["binary_sensor"],
+      entity_id: "binary_sensor.kitchen_motion",
+      registry_id: "reg-motion-kitchen",
+      friendly_name: "Kitchen motion",
+      domain: "binary_sensor",
+      state: "off",
+      status: "ok",
+      last_changed: new Date().toISOString(),
+      ...noRule(),
+      modules: ["Bedtime button"],
+      parts: partRows("motion_sensor", ["binary_sensor"], id),
+    },
+    {
+      slot: "ambient_light_sensor",
+      label: "Ambient light sensor",
+      required: false,
+      accepts_domains: ["sensor"],
+      entity_id: "sensor.kitchen_lux",
+      registry_id: "reg-lux-kitchen",
+      friendly_name: "Kitchen lux",
+      domain: "sensor",
+      state: "unavailable",
+      status: "unavailable",
+      last_changed: new Date().toISOString(),
+      ...noRule(),
+      modules: ["Bedtime button"],
+      parts: partRows("ambient_light_sensor", ["sensor"], id),
+    },
+  ];
+}
+
+/**
+ * What the mock knows about one entity, as a binding row would state it.
+ *
+ * Read from the binding fixtures rather than invented, so a module's row shows
+ * the same status the room's own table shows for the same device -- including
+ * `unavailable`, which the room's ambient light sensor deliberately is.
+ */
+function entityFacts(
+  entityId: string | null,
+): Pick<ModuleSlot, "friendly_name" | "domain" | "state" | "status"> {
+  if (entityId === null) {
+    return { friendly_name: null, domain: null, state: null, status: "unbound" };
+  }
+  const known = [
+    ...ROOMS.flatMap((room) => roomBindingFixtures(room.id)),
+    ...HOUSE_SCOPE.slots,
+  ].find((row) => row.entity_id === entityId);
+  if (known !== undefined) {
+    return {
+      friendly_name: known.friendly_name,
+      domain: known.domain,
+      state: known.state,
+      status: known.status,
+    };
+  }
+  const candidate = CANDIDATES.find((entry) => entry.entity_id === entityId);
+  return {
+    friendly_name: candidate?.friendly_name ?? entityId,
+    domain: entityId.split(".")[0] ?? null,
+    // The mock holds no live state for an entity no fixture mentions. "on" is
+    // what its other resolved rows say; `null` would read as unknown.
+    state: "on",
+    status: "ok",
+  };
+}
+
+/**
+ * Where one module's slot override lives, keyed the way the server scopes it.
+ *
+ * By placement -- the room id, or `""` for the house -- and then the pack and
+ * the slot, because the server records the override in the placement's own
+ * settings layer: the same pack twice in two rooms is two overrides, and
+ * clearing one leaves the other.
+ */
+function overrideKey(roomId: string, pack: string, slot: string): string {
+  return `${roomId}::${pack}::${slot}`;
+}
+
+/** What a person pointed one module's slot at this session, or nothing. */
+const SLOT_OVERRIDES: Record<
+  string,
+  { entity_id: string | null; label: string | null }
+> = {};
+
+/**
+ * The parts each slot has been split into, this session.
+ *
+ * One record for the whole house, which is where the server keeps it: a part is
+ * a role's half and the split is the *house's*, so every room's page draws the
+ * same halves and only the devices differ. Seeded with two so the controls are on
+ * screen in `npm run dev`, and written by `slotSetParts`.
+ */
+const SLOT_PARTS: Record<string, string[]> = {
+  light_group: ["a", "b"],
+  ceiling_light: ["left", "right"],
+};
+
+/** Which part of a split slot one module is on, by override key. */
+const SLOT_MEMBER: Record<string, string> = {};
+
+/** What each part is bound to, by the part's own key (`light_group__a`). */
+const SLOT_PART_BINDINGS: Record<string, string | null> = {
+  "light_group__a": "light.kitchen_lights",
+  "light_group__b": null,
+  "ceiling_light__left": "light.bedroom_left",
+  "ceiling_light__right": null,
+};
+
+/** The key a part of a slot binds under, which is what a module names. */
+function partKey(slot: string, part: string): string {
+  return `${slot}__${part}`;
+}
+
+/** One slot's parts, as binding rows: the device each half is bound to. */
+function partRows(
+  slot: string,
+  accepts: string[],
+  roomId: string,
+): BindingStatus["parts"] {
+  return (SLOT_PARTS[slot] ?? []).map((name) => {
+    const key = partKey(slot, name);
+    // A room's own ceiling light is the one split a *room's* page shows bound:
+    // the fixture's single-room binding, carried down to its halves.
+    const bound =
+      key === "ceiling_light__left" && roomId !== "bedroom"
+        ? null
+        : (SLOT_PART_BINDINGS[key] ?? null);
+    const entityId = bound;
+    return {
+      slot: key,
+      name,
+      label: name.charAt(0).toUpperCase() + name.slice(1),
+      entity_id: entityId,
+      registry_id: null,
+      friendly_name: entityId === null ? null : `${slot.replace(/_/g, " ")} ${name}`,
+      domain: entityId === null ? null : entityId.split(".")[0]!,
+      state: entityId === null ? null : "off",
+      status: entityId === null ? "unbound" : "ok",
+      last_changed: null,
+      // A part is the same role, so it takes what the role takes.
+      accepts_domains: accepts,
+    };
+  });
+}
+
+/** The four rule facts at rest: a slot row nothing has put logic on. */
+function noRule(): SlotRuleFacts {
+  return {
+    rule_kind: null,
+    rule_summary: null,
+    rule_picks_device: null,
+    rule_device: null,
+  };
+}
+
+/** The logic a person put on one module's slot this session, if any. */
+const SLOT_RULES: Record<
+  string,
+  {
+    kind: ModuleSlotRuleKind;
+    value: unknown;
+    when: string[];
+    device: string;
+  }
+> = {};
+
+/**
+ * The four facts a slot rule reports, in the server's own words.
+ *
+ * The sentence is built here rather than left to the fixture, for the reason the
+ * server builds it: it is what the row *says*, and a screen composing its own
+ * would be a second copy of what a rule means -- free to disagree with the real
+ * one about a script's entities in particular, which is the part a person cannot
+ * infer from the word "script".
+ */
+function slotRuleFacts(
+  rule: { kind: ModuleSlotRuleKind; value: unknown; when: string[]; device: string },
+): SlotRuleFacts {
+  if (rule.kind === "condition") {
+    return {
+      rule_kind: "condition",
+      rule_summary: rule.device
+        ? `decided by a condition: ${rule.device} while it holds`
+        : "decided by a condition: the device above while it holds",
+      rule_picks_device: false,
+      rule_device: rule.device || null,
+    };
+  }
+  if (rule.kind === "script") {
+    const list =
+      rule.when.length === 1 ? rule.when[0]! : `any of ${rule.when.join(", ")}`;
+    return {
+      rule_kind: "script",
+      rule_summary: `decided by a script, when ${list} changes`,
+      rule_picks_device: true,
+      rule_device: null,
+    };
+  }
+  return {
+    rule_kind: rule.kind,
+    rule_summary: `decided by a ${rule.kind}`,
+    rule_picks_device: true,
+    rule_device: null,
+  };
+}
+
+/**
+ * One module's slots, with the device each is pointed at resolved.
+ *
+ * The fixture states which slots the pack reaches; this states what each one
+ * points at. The fallback is read from the same binding fixtures the room page
+ * and the house page are built from -- a room's binding for a room-scoped slot,
+ * the house's for a whole-house role -- so a row cannot say the room binds a
+ * device the room's own page does not. A written override wins over the
+ * fallback, and `null` in it means the fallback again, which is what Reset
+ * writes.
+ */
+function moduleSlots(module: InstalledModule): ModuleSlot[] {
+  return module.slots.map((row) => {
+    const houseScope = HOUSE_SCOPE.slots.some((slot) => slot.slot === row.slot);
+    const fallback = houseScope
+      ? (houseBindings[row.slot] ?? null)
+      : roomBound(module.room_id, row.slot);
+    const key = overrideKey(module.room_id, module.pack, row.slot);
+    const override = SLOT_OVERRIDES[key];
+    const rule = SLOT_RULES[key];
+    // Which half of a split slot this module is on, and what that half resolves
+    // to: a part is a binding of its own, so the module acts on the device bound
+    // for `light_group__a` rather than on the role's own. `null` when the house
+    // does not carry the part, which leaves the module on the slot itself -- the
+    // same drop `live_modules.slot_parts_of` makes.
+    const chosen = SLOT_MEMBER[key];
+    const part =
+      chosen !== undefined && (SLOT_PARTS[row.slot] ?? []).includes(chosen)
+        ? chosen
+        : null;
+    const partFallback =
+      part === null
+        ? fallback
+        : (SLOT_PART_BINDINGS[partKey(row.slot, part)] ??
+          (houseScope ? (houseBindings[row.slot] ?? null) : null));
+    const entityId = override?.entity_id ?? partFallback;
+    return {
+      ...row,
+      label: override?.label ?? row.slot,
+      declared_label: row.slot,
+      entity_id: entityId,
+      default_entity_id: partFallback,
+      overridden: (override?.entity_id ?? null) !== null,
+      named: override?.label !== null && override?.label !== undefined,
+      part,
+      part_label: part === null ? null : part.charAt(0).toUpperCase() + part.slice(1),
+      parts: (SLOT_PARTS[row.slot] ?? []).map((name) => ({
+        name,
+        label: name.charAt(0).toUpperCase() + name.slice(1),
+      })),
+      separate: row.slot.includes("__"),
+      house_scope: houseScope,
+      bound: entityId !== null,
+      ...entityFacts(entityId),
+      ...(rule ? slotRuleFacts(rule) : noRule()),
+    };
+  });
+}
+
+/** The entity a room binds for one slot, or `null` when it binds none. */
+function roomBound(roomId: string, slot: string): string | null {
+  const row = roomBindingFixtures(roomId).find((binding) => binding.slot === slot);
+  return row?.entity_id ?? null;
+}
 
 function roomDetail(id: string): RoomDetail {
   const summary = ROOMS.find((room) => room.id === id) ?? ROOMS[0]!;
@@ -787,47 +1507,11 @@ function roomDetail(id: string): RoomDetail {
     name: summary.name,
     type: summary.type,
     type_label: summary.type_label,
-    bindings: [
-      {
-        slot: "ceiling_light",
-        label: "Ceiling light",
-        required: true,
-        accepts_domains: ["light"],
-        entity_id: id === "bedroom" ? "light.bedroom" : null,
-        registry_id: id === "bedroom" ? "reg-light-bedroom" : null,
-        friendly_name: id === "bedroom" ? "Bedroom light" : null,
-        domain: id === "bedroom" ? "light" : null,
-        state: id === "bedroom" ? "off" : null,
-        status: id === "bedroom" ? "ok" : "unbound",
-        last_changed: id === "bedroom" ? new Date().toISOString() : null,
-      },
-      {
-        slot: "motion_sensor",
-        label: "Motion sensor",
-        required: true,
-        accepts_domains: ["binary_sensor"],
-        entity_id: "binary_sensor.kitchen_motion",
-        registry_id: "reg-motion-kitchen",
-        friendly_name: "Kitchen motion",
-        domain: "binary_sensor",
-        state: "off",
-        status: "ok",
-        last_changed: new Date().toISOString(),
-      },
-      {
-        slot: "ambient_light_sensor",
-        label: "Ambient light sensor",
-        required: false,
-        accepts_domains: ["sensor"],
-        entity_id: "sensor.kitchen_lux",
-        registry_id: "reg-lux-kitchen",
-        friendly_name: "Kitchen lux",
-        domain: "sensor",
-        state: "unavailable",
-        status: "unavailable",
-        last_changed: new Date().toISOString(),
-      },
-    ],
+    bindings: roomBindingFixtures(id),
+    // A fixture house binds nothing globally: the house's own slots are what the
+    // House tab's fixtures answer, and inventing rows here would put a section on
+    // a room's page that the fixture never set up.
+    global_bindings: [],
     options_schema: {
       type: "object",
       title: "Room options",
@@ -844,11 +1528,12 @@ function roomDetail(id: string): RoomDetail {
     modules: packs.map(withReach),
     active_profiles: summary.active_profiles,
     mode: summary.mode,
+    revision: profilesRevision,
     axes: [
       {
         id: "lighting",
         label: "Lighting",
-        profiles: PROFILES.filter((profile) => profile.axis === "lighting"),
+        profiles: profileRows().filter((profile) => profile.axis === "lighting"),
       },
     ],
   };
@@ -900,6 +1585,7 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
     case COMMANDS.roomBind:
     case COMMANDS.roomReplace:
     case COMMANDS.roomUnbind: {
+      guardStale(payload);
       // The house is a placement like a room, and binding a global slot answers
       // with the house's page rather than a room's -- the same branch the live
       // handler makes.
@@ -914,6 +1600,7 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
       return { candidates: CANDIDATES };
     case COMMANDS.roomOptionsGet:
     case COMMANDS.roomOptionsSet:
+      if (type === COMMANDS.roomOptionsSet) guardStale(payload);
       if (payload.room_id === "") {
         if (type === COMMANDS.roomOptionsSet && payload.values !== undefined) {
           houseOptions = { ...houseOptions, ...(payload.values as Record<string, unknown>) };
@@ -964,6 +1651,8 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
         house: roomId === "",
         scope: "room",
         enabled: false,
+        suppressed_by: null,
+        suppressed_behaviour: null,
         satisfiable: offer?.satisfiable ?? true,
         missing_slots: offer?.missing_slots ?? [],
         // The settings the offer's schema declares, so the card that appears
@@ -987,7 +1676,21 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
           scope: "room" as const,
           declared_scope: "room" as const,
           widenable: false,
+          // The offer carries the pack's own rank, or `null` when it declares
+          // none -- which the catalog answers with its default of 0.
+          priority: behaviour.priority ?? 0,
+          default_priority: behaviour.priority ?? 0,
+          priority_set: false,
         })),
+        // The offer's own declaration of what the pack needs and what it may
+        // use, which is the same list the installed module's rows are built
+        // from -- so a freshly installed pack shows its devices at once.
+        slots: [
+          ...(offer?.requires_slots ?? []).map((slot) =>
+            slotRow(slot, { required: true }),
+          ),
+          ...(offer?.optional_slots ?? []).map((slot) => slotRow(slot)),
+        ],
       };
       installed = [...installed, landed];
       return landedReply(landed, roomId);
@@ -1041,61 +1744,383 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
       );
       return withReach(updated ?? MODULES[0]!);
     }
+    case COMMANDS.moduleSetBehaviourPriority: {
+      // One atom's rank. `PRIORITY_OVERRIDES` holds only the *chosen* ranks, so
+      // writing the declared one back is a delete here exactly as it is a
+      // `forget` on the server -- the Reset button is the same command as any
+      // other, and this is the line that makes it leave nothing behind.
+      const key = `${String(payload.pack)}/${String(payload.behaviour)}`;
+      const module = placement(String(payload.room_id), payload.pack);
+      const declared = module?.behaviours.find(
+        (row) => row.id === payload.behaviour,
+      )?.default_priority;
+      const wanted = Number(payload.priority);
+      if (declared !== undefined && wanted === declared) delete PRIORITY_OVERRIDES[key];
+      else PRIORITY_OVERRIDES[key] = wanted;
+      return withReach(module ?? MODULES[0]!);
+    }
+    case COMMANDS.moduleSetSlot: {
+      // One module's own device for one slot, and its own name for it. Kept by
+      // placement, because the server scopes it that way, and read back through
+      // `withReach` -- so the row the panel redraws from is the row a reload
+      // would show, which is the whole point of the override.
+      const roomId = String(payload.room_id);
+      const pack = String(payload.pack);
+      const slot = String(payload.slot);
+      const written = typeof payload.label === "string" ? payload.label.trim() : "";
+      const key = overrideKey(roomId, pack, slot);
+      SLOT_OVERRIDES[key] = {
+        entity_id: typeof payload.entity_id === "string" ? payload.entity_id : null,
+        label: written === "" ? null : written,
+      };
+      // `part` is *not* resolved the way the other two are: an absent or `null`
+      // one means **not touched**, so a reset of the device leaves the module on
+      // the part it is on. An empty string is the whole slot and is what clears
+      // it -- the same distinction the server's schema makes.
+      const part = payload.part;
+      if (typeof part === "string") {
+        if (part === "") delete SLOT_MEMBER[key];
+        else SLOT_MEMBER[key] = part;
+      }
+      return withReach(placement(roomId, pack) ?? MODULES[0]!);
+    }
+    case COMMANDS.slotSetParts: {
+      // Split a slot, rename one half, or rejoin one. Kept in the house's own
+      // record (`SLOT_PARTS`), which is where the server keeps it and why every
+      // room's page draws the same halves.
+      const slot = String(payload.slot);
+      const name = String(payload.name);
+      const action = String(payload.action);
+      const held = SLOT_PARTS[slot] ?? [];
+      if (action === "add") {
+        if (!held.includes(name)) SLOT_PARTS[slot] = [...held, name];
+      } else if (action === "rename") {
+        const newName = String(payload.new_name ?? "");
+        SLOT_PARTS[slot] = held.map((entry) => (entry === name ? newName : entry));
+        // The part binds under a key that carries its name, so the device moves
+        // with the rename rather than being left under a key nobody names.
+        const was = partKey(slot, name);
+        if (was in SLOT_PART_BINDINGS) {
+          SLOT_PART_BINDINGS[partKey(slot, newName)] = SLOT_PART_BINDINGS[was] ?? null;
+          delete SLOT_PART_BINDINGS[was];
+        }
+        // Every module that was on the old name moves with it, because a part's
+        // name *is* the key a module names.
+        for (const key of Object.keys(SLOT_MEMBER)) {
+          if (key.endsWith(`::${slot}`) && SLOT_MEMBER[key] === name) {
+            SLOT_MEMBER[key] = newName;
+          }
+        }
+      } else {
+        SLOT_PARTS[slot] = held.filter((entry) => entry !== name);
+      }
+      return {
+        slot,
+        parts: (SLOT_PARTS[slot] ?? []).map((entry) => ({ name: entry })),
+      };
+    }
+    case COMMANDS.moduleSetSlotRule: {
+      // "Set it to", on a slot row. The same key space the device override uses,
+      // because the two are one decision: a rule takes the device away from the
+      // person (`live_modules.set_slot_rule` forgets it either way), so setting a
+      // rule clears the override and clearing a rule leaves the slot on whatever
+      // the room binds.
+      const roomId = String(payload.room_id);
+      const pack = String(payload.pack);
+      const slot = String(payload.slot);
+      const key = overrideKey(roomId, pack, slot);
+      const kind = String(payload.kind ?? "");
+      if (kind === "") delete SLOT_RULES[key];
+      else {
+        delete SLOT_OVERRIDES[key];
+        SLOT_RULES[key] = {
+          kind: kind as ModuleSlotRuleKind,
+          value: payload.value,
+          when: Array.isArray(payload.when) ? (payload.when as string[]) : [],
+          device: typeof payload.device === "string" ? payload.device : "",
+        };
+      }
+      return withReach(placement(roomId, pack) ?? MODULES[0]!);
+    }
     case COMMANDS.modulesList:
       // Every installed module, the house-placed one included: the Modules tab
       // is the one screen that lists both homes, so a mock that answered only
       // the room ones would leave its "the house" chip unrendered everywhere.
       return { modules: installed.map(withReach) };
     case COMMANDS.profilesList:
-      return { profiles: PROFILES };
+      return { profiles: profileRows() };
     case COMMANDS.profileActivate:
       return roomDetail(String(payload.room_id));
+    case COMMANDS.profileActivateHouse: {
+      const name = String(payload.profile);
+      if (PROFILE_DOCUMENTS[name]?.kind !== "house") {
+        throw new Error(`the profile ${name} is not a house profile`);
+      }
+      houseProfile = name;
+      // The house moved, so every page rendered before this is stale -- which is
+      // the whole point of the revision, and what the disabled-page notice is
+      // for. Bumped here rather than by the callers of this handler, because
+      // this is where the move happens.
+      profilesRevision += 1;
+      return { profiles: profileRows() };
+    }
+    case COMMANDS.profileDeactivateHouse:
+      houseProfile = null;
+      profilesRevision += 1;
+      return { profiles: profileRows() };
+    case COMMANDS.profileExport: {
+      const wanted = payload.profile === undefined ? null : String(payload.profile);
+      if (wanted !== null && PROFILE_DOCUMENTS[wanted] === undefined) {
+        throw new Error(`the profile ${wanted} is not held by this house`);
+      }
+      return {
+        document:
+          wanted === null
+            ? { profiles: Object.values(PROFILE_DOCUMENTS) }
+            : PROFILE_DOCUMENTS[wanted],
+      };
+    }
+    case COMMANDS.profileImport: {
+      const wanted = profileDocuments(payload.document);
+      const replace = payload.replace === true;
+      const conflicts = wanted
+        .map((entry) => String((entry as Record<string, unknown>).name))
+        .filter((name) => PROFILE_DOCUMENTS[name] !== undefined);
+      if (conflicts.length > 0 && !replace) {
+        throw new Error(
+          `this house already holds ${conflicts.join(", ")}; import again with replace`,
+        );
+      }
+      const imported: string[] = [];
+      for (const entry of wanted) {
+        const document = entry as Record<string, unknown>;
+        const name = String(document.name);
+        if (conflicts.includes(name)) continue;
+        PROFILE_DOCUMENTS[name] = document;
+        imported.push(name);
+      }
+      return { imported, replaced: replace ? conflicts : [], profiles: profileRows() };
+    }
     case COMMANDS.storeIndex:
       return { entries: STORE, generated_at: new Date().toISOString(), cached: false };
     case COMMANDS.storeInstall:
       return { installed: MODULES[0] };
+    case COMMANDS.modulesStore: {
+      // The verdict is the placement's, as the server's is: the same module can
+      // be missing a device in one room and not in another, so the rows are
+      // ranked against what the asked-about placement binds rather than sent as
+      // a fixture. A slot with no device is not an answer, which is how a room's
+      // own bindings read -- an entry per slot somebody has filled.
+      const roomId = String(payload.room_id ?? "");
+      const answered = (id: string): string[] =>
+        roomBindingFixtures(id)
+          .filter((row) => row.entity_id !== null)
+          .map((row) => row.slot);
+      const bound = new Set(
+        roomId === "" ? ROOMS.flatMap((room) => answered(room.id)) : answered(roomId),
+      );
+      return {
+        store: STORED_MODULES.map((offer) => ({
+          ...offer,
+          missing_slots: offer.slots.filter((slot) => !bound.has(slot)),
+        })),
+        rooms: roomsOf(ROOMS),
+      };
+    }
+    case COMMANDS.modulesHosted:
+      return { modules: HOSTED_MODULES };
+    case COMMANDS.modulesSettings: {
+      // The settings a card can change are the module's own rows, so a save
+      // writes what it was given back onto the row and answers with the list --
+      // which is what makes the save look like it went somewhere in `npm run
+      // dev`, the same way the store's buttons do.
+      guardStale(payload);
+      const slug = String(payload.module);
+      const bindings = (payload.bindings ?? {}) as Record<string, unknown>;
+      const scripts = (payload.scripts ?? {}) as Record<string, string>;
+      const module = HOSTED_MODULES.find((row) => row.slug === slug);
+      if (module) {
+        for (const setting of module.settings) {
+          if (setting.name in bindings) {
+            setting.value = bindings[setting.name];
+            setting.bound = true;
+          }
+          // A script cast is a *name*, not a value, so it is kept in two places
+          // the way the server keeps it: on the module's own map, and on the row
+          // so the settings form opens on the script it names rather than on the
+          // choice above. An empty id is the cast coming back off, which the
+          // card sends when the menu is moved away from a script.
+          if (setting.name in scripts) {
+            const script = scripts[setting.name] ?? "";
+            if (script) {
+              module.scripts[setting.name] = {
+                script_id: script,
+                url: `/config/script/edit/${script}`,
+              };
+            } else {
+              delete module.scripts[setting.name];
+            }
+            setting.script_id = script;
+            setting.bound_kind = script ? "script" : "literal";
+          }
+        }
+      }
+      return { module: slug, modules: HOSTED_MODULES };
+    }
+    case COMMANDS.modulesConfigSwitch: {
+      guardStale(payload);
+      const module = HOSTED_MODULES.find(
+        (row) => row.slug === String(payload.module),
+      );
+      const name = String(payload.config);
+      if (module && module.configs.includes(name)) {
+        holdConfiguration(module);
+        module.config = name;
+        showConfiguration(module);
+      }
+      return { module: String(payload.module), modules: HOSTED_MODULES };
+    }
+    case COMMANDS.modulesConfigAdd: {
+      const module = HOSTED_MODULES.find(
+        (row) => row.slug === String(payload.module),
+      );
+      const name = String(payload.config);
+      if (module && name !== "" && !module.configs.includes(name)) {
+        // A copy of the running one, so it starts where the module is -- which
+        // for a mock that only tracks values means holding nothing of its own
+        // until something is edited under it.
+        holdConfiguration(module);
+        module.configs.push(name);
+        module.config = name;
+      }
+      return { module: String(payload.module), modules: HOSTED_MODULES };
+    }
+    case COMMANDS.modulesConfigRename: {
+      const module = HOSTED_MODULES.find(
+        (row) => row.slug === String(payload.module),
+      );
+      const name = String(payload.config);
+      const to = String(payload.to);
+      if (
+        module &&
+        module.configs.includes(name) &&
+        to !== "" &&
+        !module.configs.includes(to)
+      ) {
+        module.configs[module.configs.indexOf(name)] = to;
+        if (module.config === name) module.config = to;
+        const held = CONFIG_VALUES[module.slug];
+        const values = held?.[name];
+        if (held && values) {
+          held[to] = values;
+          delete held[name];
+        }
+      }
+      return { module: String(payload.module), modules: HOSTED_MODULES };
+    }
+    case COMMANDS.modulesConfigRemove: {
+      const module = HOSTED_MODULES.find(
+        (row) => row.slug === String(payload.module),
+      );
+      const name = String(payload.config);
+      // The last one is refused rather than thrown: a mock that raised here
+      // would break the screen for the one press the real server answers with a
+      // sentence, and the screen shows the sentence.
+      if (module && module.configs.length > 1 && module.configs.includes(name)) {
+        module.configs.splice(module.configs.indexOf(name), 1);
+        const held = CONFIG_VALUES[module.slug];
+        if (held) delete held[name];
+        const next = module.configs[0];
+        if (module.config === name && next !== undefined) {
+          module.config = next;
+          showConfiguration(module);
+        }
+      }
+      return { module: String(payload.module), modules: HOSTED_MODULES };
+    }
+    case COMMANDS.modulesUnhost: {
+      const slug = String(payload.module);
+      const at = HOSTED_MODULES.findIndex((row) => row.slug === slug);
+      if (at !== -1) HOSTED_MODULES.splice(at, 1);
+      return { module: slug, modules: HOSTED_MODULES };
+    }
+    case COMMANDS.modulesDefine:
+      return { module: String(payload.title ?? "module"), store: STORED_MODULES };
+    case COMMANDS.modulesDeploy: {
+      const slug = String(payload.module);
+      const roomId = String(payload.room_id ?? "");
+      const row = STORED_MODULES.find((offer) => offer.slug === slug);
+      if (row && !row.deployed.some((where) => where.room_id === roomId)) {
+        const name =
+          roomId === ""
+            ? "the whole house"
+            : (ROOMS.find((room) => room.id === roomId)?.name ?? roomId);
+        const installed = roomId === "" ? slug : `${slug}_${roomId}`;
+        row.deployed.push({
+          slug: installed,
+          room_id: roomId,
+          room_name: name,
+          running: true,
+        });
+        // The installation itself, so the room it was added to draws its card:
+        // adding a module that then appeared nowhere would be the one thing
+        // this journey must not do, and it is what the room's page reads.
+        HOSTED_MODULES.push({
+          slug: installed,
+          title: `${row.title} (${name})`,
+          blueprint: row.blueprint,
+          definition: slug,
+          room_id: roomId,
+          room_name: name,
+          // Waiting for everything the definition reaches through: a mock has
+          // no devices to resolve them against, and an unanswered slot is the
+          // state the card is most needed for.
+          slots: row.slots.map((slot) => ({ name: slot, bound: "" })),
+          automation_id: "",
+          config: "Default",
+          configs: ["Default"],
+          derived: {},
+          flows: {},
+          scripts: {},
+          inputs: [],
+          settings: [],
+          outputs: [],
+        });
+      }
+      return { module: slug, modules: MODULES, store: STORED_MODULES };
+    }
+    case COMMANDS.modulesRemove: {
+      const slug = String(payload.module);
+      const at = STORED_MODULES.findIndex((offer) => offer.slug === slug);
+      const installed = at === -1 ? 0 : STORED_MODULES[at]!.deployed.length;
+      if (at !== -1) STORED_MODULES.splice(at, 1);
+      return { removed: slug, installed, store: STORED_MODULES };
+    }
+    case COMMANDS.modulesExport:
+      return {
+        document: {
+          open_house_module: 1,
+          definition: STORED_MODULES.find(
+            (offer) => offer.slug === String(payload.module),
+          ) ?? { slug: String(payload.module) },
+        },
+      };
+    case COMMANDS.modulesImport: {
+      const document = payload.document as { definition?: ModuleOfferRow } | undefined;
+      const arrived = document?.definition;
+      if (!arrived?.slug) {
+        throw new Error("this is not a module");
+      }
+      const at = STORED_MODULES.findIndex((offer) => offer.slug === arrived.slug);
+      const replaced = at !== -1;
+      if (replaced) STORED_MODULES.splice(at, 1, { ...arrived, deployed: [] });
+      else STORED_MODULES.push({ ...arrived, deployed: [] });
+      return { imported: arrived.slug, replaced, store: STORED_MODULES };
+    }
     case COMMANDS.activityList:
       return { entries: ACTIVITY };
     case COMMANDS.healthList:
       return { issues: HEALTH };
-    case COMMANDS.exportDocument:
-      return {
-        format_version: "1.1.0",
-        house: "Ada's house",
-        exported_at: new Date().toISOString(),
-        rooms: ROOMS.map((room) => ({
-          id: room.id,
-          name: room.name,
-          type: room.type,
-          bindings: {},
-        })),
-      };
-    case COMMANDS.importPreview:
-      return {
-        format_version: "1.1.0",
-        compatible: true,
-        diff: [
-          {
-            kind: "change",
-            scope: "room",
-            path: "rooms.kitchen.bindings.ceiling_light",
-            before: null,
-            after: "light.kitchen_ceiling",
-          },
-        ],
-        relink: [
-          {
-            room_id: "kitchen",
-            slot: "ceiling_light",
-            registry_id: "reg-kitchen-ceiling",
-            entity_id: null,
-            candidates: CANDIDATES,
-          },
-        ],
-        notes: ["One binding needs re-linking."],
-      } satisfies ImportPreview;
-    case COMMANDS.importApply:
-      return { applied: true, snapshot_id: "snap-1", diff: [] };
     case COMMANDS.dashboardGenerate:
       return { created: true, url_path: "open-house-kitchen" };
     default:

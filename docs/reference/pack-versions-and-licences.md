@@ -18,6 +18,7 @@ the one it replaces, and the arrow points **backwards**:
 | `schemas/pack-manifest/1.1.0.json` | `1.0.0` |
 | `schemas/pack-manifest/1.2.0.json` | `1.1.0` |
 | `schemas/pack-manifest/1.3.0.json` | `1.2.0` |
+| `schemas/pack-manifest/1.4.0.json` | `1.3.0` |
 
 Pointing the arrow backwards is worth stating, because the forward-pointing form
 is the one everyone writes first. With a `superseded_by` field, publishing a
@@ -47,7 +48,7 @@ Three clauses hold the chain together. All three are implemented in
 
 | Artifact | Version | `supersedes` |
 | --- | --- | --- |
-| [schemas/pack-manifest/1.3.0.json](../../schemas/pack-manifest/1.3.0.json) | 1.3.0 | `1.2.0` |
+| [schemas/pack-manifest/1.4.0.json](../../schemas/pack-manifest/1.4.0.json) | 1.4.0 | `1.3.0` |
 | [schemas/engine-api/1.0.0.json](../../schemas/engine-api/1.0.0.json) | 1.0.0 | `null` |
 
 `schemas/pack-manifest/1.2.0.json` closed `kind` to five kinds — `module`,
@@ -70,6 +71,22 @@ each declaration carrying the `intent` that says what it is for and the
 `schemas/pack-manifest/1.2.0.json`, `schemas/pack-manifest/1.1.0.json` and
 `schemas/pack-manifest/1.0.0.json`, are retained and unedited, which is the whole
 of what the chain above is for.
+
+`schemas/pack-manifest/1.4.0.json` supersedes `1.3.0` and adds one clause:
+`suppresses`, an optional list of pack names on a behaviour. A behaviour naming a
+pack holds that pack's module off for as long as the behaviour is on, and it is
+the first clause in the format that reaches outside the declaring pack. What it
+reaches is exactly the target's module switch and nothing about the target's
+configuration, which is what makes the suppression temporary by construction —
+the engine derives it from which modules are currently on rather than writing
+anything down, so it is undone the moment either switch moves. The clause names
+whole packs rather than behaviours, settings or slots for the same reason: a finer
+grain would be one pack editing another pack's configuration, and no uninstall
+could put that back. A pack naming itself is refused (`self_suppression`), because
+a pack that holds itself off can never run; a pack naming one that is not
+installed holds nothing off rather than failing, because a manifest does not know
+which house it will land in. It is optional, so every `1.3.0` pack is a `1.4.0`
+pack.
 
 ## The API version policy
 

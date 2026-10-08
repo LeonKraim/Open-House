@@ -60,10 +60,10 @@ from homeassistant.util import dt as dt_util
 
 from engine.adapter import domain_of
 from engine.declared_slots import optional_keys, required_keys
+from ha_adapter import slot_parts, slot_rules
 from ha_adapter.composition import mode_name
 from ha_adapter.live import HOUSE
 from ha_adapter.setup_flow import (
-    Candidate,
     load_room_types,
     load_slot_domains,
     rank_candidates,
@@ -142,6 +142,7 @@ def capabilities(
     version: str,
     engine_api: str,
     needs_setup: bool,
+    node_red_url: str = "",
 ) -> Mapping[str, object]:
     """Who is looking, and what they may do.
 
@@ -149,6 +150,20 @@ def capabilities(
     from the *connection* -- which user authenticated and whether they are an
     admin -- and a projection that reached into `hass` for them would answer for
     the wrong person on a multi-user instance.
+
+    `node_red_url` travels with them because the panel embeds Node-RED's own
+    editor at it and has no way to know it otherwise: Node-RED is reached at an
+    address the instance's own admin configured, and the panel is served from
+    Home Assistant, which may be a different host entirely. Empty means none is
+    set, and the row that offers the cast says where to set one.
+
+    **It is the address a browser opens, and not the one flows are pushed to.**
+    Those are two addresses for one editor on any stack where the two programs
+    are separate containers -- `nodered:1880` resolves between them and nowhere
+    else -- and the whole reason a second option exists is that only one of the
+    two can be linked to. The caller passes `node_red.editor_url`, which prefers
+    the second and falls back to the first, so a single-address install
+    configures one field and both links work.
     """
     return {
         "admin": admin,
@@ -156,6 +171,7 @@ def capabilities(
         "version": version,
         "engine_api": engine_api,
         "needs_setup": needs_setup,
+        "node_red_url": node_red_url,
     }
 
 
@@ -305,6 +321,13 @@ def room_detail(
         "type": room.type,
         "type_label": label(room.type),
         "bindings": list(binding_statuses(hass, host, room)),
+        # The house's own global slots this room's modules act through, which is
+        # the list the room's page draws a "Whole house" section from. They are
+        # separately listed rather than merged into `bindings` because they are
+        # bound somewhere else: a global slot is written to the house and answers
+        # in every room, and a page that drew it as the room's own binding would
+        # make "this room" and "every room" the same control.
+        "global_bindings": list(global_bindings(host, room_id)),
         "options_schema": schema,
         "options": dict(values),
         # The modules this room's page draws a card for, and the rule is
@@ -322,14 +345,25 @@ def room_detail(
         # switchable and removable -- and a pack placed elsewhere is listed when
         # the room binds the roles it acts through. The card says where such a
         # module lives, so the page never claims a module is in a room it is not.
-        "modules": [
-            module
-            for module in live_modules.installed_modules(host.session)
-            if module["room_id"] == room_id or _reaches_room(host, module, room_id)
-        ],
+        "modules": list(
+            _with_slot_domains(
+                host,
+                [
+                    module
+                    for module in live_modules.installed_modules(host.session)
+                    if module["room_id"] == room_id
+                    or _reaches_room(host, module, room_id)
+                ],
+            )
+        ),
         "active_profiles": selection,
         "mode": _room_mode(host.runtime_room(room_id)),
         "axes": _axes(host, selection),
+        # The revision this page was drawn from, for the page to send back with
+        # everything it writes: a house profile switch replaces the house under a
+        # page that is still open, and the number is how the page finds out --
+        # see `websocket_api._stale`.
+        "revision": host.session.revision,
     }
 
 
@@ -375,21 +409,45 @@ def _room_module_slots(
     Keys, not written names: a declaration written `separate: true` binds under a
     pack-qualified key (`engine/declared_slots.py`), and a list of written names
     would offer the page a slot no binding can fill.
+
+    **A hosted module counts as a module of the room.** An imported blueprint
+    whose input was answered with a slot reaches through that slot exactly as a
+    pack's behaviour reaches through one, and the person still has to give the
+    room a device for it -- so its slots are unioned in from the host's own
+    records, which is the only other place a module can come from. Without this
+    the room would offer nothing to point at the module's slot, and the module
+    would wait for a device the screen gave no way to bind.
     """
-    from ha_adapter import live_modules
+    from ha_adapter import live_modules, module_host
 
     slots: set[str] = set()
     required: set[str] = set()
-    for module in live_modules.installed_modules(host.session):
-        if module["room_id"] not in ("", room_id):
+    for name, room in live_modules.installed_names_by_room(host.session):
+        if room not in ("", room_id):
             continue
-        name = str(module["pack"])
         document = host.catalog.manifests.get(name)
         if document is None:
             continue
         slots.update(required_keys(name, document))
         slots.update(optional_keys(name, document))
         required.update(required_keys(name, document))
+    for hosted in (getattr(host.runtime, "modules", None) or {}).values():
+        record = getattr(hosted, "record", None)
+        if record is None or record.room_id != room_id:
+            continue
+        # Not `required`: a module waiting on a slot is waiting, not owed. The
+        # pack's `required: true` is a promise about the room's shape and this is
+        # one module's unmet input, and marking it required would put a warning
+        # about a missing device on a room whose module was imported a minute ago
+        # and never bound on purpose.
+        slots.update(
+            module_host.slots_reached(
+                {
+                    name: module_host.InputBinding(**row)
+                    for name, row in record.bindings.items()
+                }
+            )
+        )
     return frozenset(slots), frozenset(required)
 
 
@@ -429,14 +487,33 @@ def binding_statuses(
     is gone is the catalog's mark on a slot no installed module needs -- it is
     not on the page at all, and a room cannot be short of a device nothing asked
     it for.
+
+    **A part of a split slot is drawn under its slot, not beside it.** The parts
+    are still one role with one name (`ha_adapter.slot_parts`), so a row per
+    `light_group__a` next to `light_group` would read as two roles that happen to
+    share a prefix; instead the slot's row carries `parts`, each with the device
+    this room bound for it. A part key the list happens to hold -- a module acting
+    through one reaches it as `light_group__a` and `_room_module_slots` says so --
+    is folded into its parent rather than dropped, and the parent is drawn even
+    when nothing else put it on the list: a person who bound a part of a role has
+    to be able to see and unbind it.
     """
     catalog = host.catalog
     entities = er.async_get(hass)
+    record = host.session.slot_parts
     _, module_required = _room_module_slots(host, room.id)
+    rules = _slot_rules(host, room.id)
+    reach = _room_reach(host, room.id)
+    configurable = _configurable_slots(host, room)
+    slots = {slot for slot in configurable if slot_parts.split(record, slot) is None}
+    for slot in configurable:
+        named = slot_parts.split(record, slot)
+        if named is not None:
+            slots.add(named[0])
     result: list[Mapping[str, object]] = []
-    for slot in _configurable_slots(host, room):
+    for slot in sorted(slots):
         entity_id = room.bindings.get(slot)
-        accepted = tuple(catalog.slot_domains.get(slot, ()))
+        accepted = _slot_domains(host, slot)
         status: Mapping[str, object] = {
             "slot": slot,
             "label": label(slot),
@@ -450,6 +527,9 @@ def binding_statuses(
             "state": None,
             "status": "unbound",
             "last_changed": None,
+            "modules": reach.get(slot, ()),
+            "parts": list(_part_statuses(hass, host, room, slot, accepted, entities)),
+            **_rule_status(rules.get(slot)),
         }
         if entity_id is not None:
             status = {
@@ -459,6 +539,176 @@ def binding_statuses(
             }
         result.append(status)
     return tuple(result)
+
+
+def _slot_domains(host: OpenHouseHost, slot: str) -> tuple[str, ...]:
+    """What a slot accepts, following a *part* back to the slot it was split from.
+
+    The catalog is where a slot's domains come from, and it has no entry for a key
+    a person invented -- so a part answered by its own key would accept *anything*,
+    which is the one answer that is wrong: a half of the lights is still lights. A
+    part is the same role as its parent (`ha_adapter.slot_parts`), and this is the
+    one place that follows the name back so every reader agrees.
+
+    The record decides, not the shape of the string (`slot_parts.split`): a pack's
+    own device binds under a key with the same joiner in it and is a slot of its
+    own, with its own catalog entry.
+    """
+    named = slot_parts.split(host.session.slot_parts, slot)
+    parent = slot if named is None else named[0]
+    return tuple(host.catalog.slot_domains.get(parent, ()))
+
+
+def _part_statuses(
+    hass: HomeAssistant,
+    host: OpenHouseHost,
+    room: RoomRef,
+    slot: str,
+    accepted: tuple[str, ...],
+    entities: er.EntityRegistry,
+) -> tuple[Mapping[str, object], ...]:
+    """Every part this slot has been split into, each with the room's device for it.
+
+    A part's device is a binding of its own, looked up under the part's key
+    (`light_group__a`), which is what makes two modules sharing a part provably act
+    on one entity: there is one binding to resolve, not one per module.
+
+    The **domains are the parent's**, passed in rather than looked up: the
+    vocabulary deliberately carries none (`this module's docstring`) and the
+    catalog has no entry for a key a person invented, so a part of `light_group`
+    accepts what `light_group` accepts -- which is the true answer, because a part
+    is the same role.
+
+    `status` is HA's reading of whatever is bound, and `"unbound"` when nothing is,
+    the same closed set the slot's own row uses. A part with no device is
+    deliberately not an error: a person who splits a role and binds one half of it
+    has said something true about a house that is half-built.
+    """
+    rows: list[Mapping[str, object]] = []
+    for name in slot_parts.parts_of(host.session.slot_parts, slot):
+        key = slot_parts.key_of(slot, name)
+        entity_id = room.bindings.get(key)
+        row: Mapping[str, object] = {
+            "slot": key,
+            "name": name,
+            "label": label(name),
+            "entity_id": entity_id,
+            "registry_id": None,
+            "friendly_name": None,
+            "domain": None,
+            "state": None,
+            "status": "unbound",
+            "last_changed": None,
+        }
+        if entity_id is not None:
+            row = {
+                **row,
+                **_bound_status(hass, entities, entity_id, accepted),
+            }
+        rows.append(row)
+    return tuple(rows)
+
+
+def _room_reach(host: OpenHouseHost, room_id: str) -> Mapping[str, tuple[str, ...]]:
+    """Which modules act through each of this room's slots, by slot key.
+
+    Drawn as chips under a slot's name, and it answers the question the row
+    raises: a person reading "Light group" needs "the bedtime button shuts them"
+    beside it, exactly as the House tab's global slots carry theirs.
+
+    **Two sources, because a room's modules are two kinds of thing.** A declared
+    pack reaches through the slots its behaviours name (`live_modules
+    .slots_reached_by`, which owns every key and display-name rule), and an
+    *imported* module reaches through the slots its inputs were answered with
+    (`module_host.slots_reached` on its own bindings, the same join
+    `_room_module_slots` makes). A room whose module was imported is the common
+    case, and a chip list that could only name packs would leave that module's
+    slot looking like something nobody acts through.
+
+    Imported modules are taken at the placement `_room_module_slots` takes them
+    at -- the module is *in this room* -- for the reason that function gives: an
+    imported module belongs to one room and one room has to give it devices. A
+    declared pack is taken at `live_modules.slots_reached_by`'s two placements,
+    which is the filter the room's slot *list* already uses, so a chip and a row
+    cannot appear apart.
+    """
+    from ha_adapter import live_modules, module_host
+
+    found: dict[str, set[str]] = {}
+    for slot, names in live_modules.slots_reached_by(
+        host.session, room_id=room_id
+    ).items():
+        found.setdefault(slot, set()).update(names)
+    for hosted in (getattr(host.runtime, "modules", None) or {}).values():
+        record = getattr(hosted, "record", None)
+        if record is None or record.room_id != room_id:
+            continue
+        title = str(record.title or record.slug)
+        for slot in module_host.slots_reached(
+            {
+                name: module_host.InputBinding(**row)
+                for name, row in record.bindings.items()
+            }
+        ):
+            found.setdefault(slot, set()).add(title)
+    return {slot: tuple(sorted(names)) for slot, names in found.items()}
+
+
+def _slot_rules(host: OpenHouseHost, room_id: str) -> Mapping[str, slot_rules.SlotRule]:
+    """The rule each of this room's slots is decided by, by slot key.
+
+    The room's slot *table* draws one row per slot, and a rule is held by a
+    *module* (`live_modules.slot_rules_of`), so the two are joined here rather
+    than in the row loop: the row asks "am I decided by logic" and this answers
+    from whichever installed module of the room holds a rule on that key.
+
+    The packs are taken in name order so a slot two modules both hold a rule on
+    reports the same one on two readings -- the room's table can only say one
+    sentence about a slot, and a sentence that changes between two draws of the
+    same house would be worse than one that names the first module. The first
+    module's card is where the other rule is shown, in full.
+
+    The same set of packs the room's slot list is built from: a module installed
+    into this room, and one installed at house scope (the empty room id), which
+    counts for every room exactly as it does in `_room_module_slots`.
+    """
+    from ha_adapter import live_modules
+
+    found: dict[str, slot_rules.SlotRule] = {}
+    for name, scoped_room in live_modules.installed_names_by_room(host.session):
+        if scoped_room not in ("", room_id):
+            continue
+        for slot, rule in live_modules.slot_rules_of(
+            host.session, pack=name, room_id=room_id
+        ).items():
+            found.setdefault(slot, rule)
+    return found
+
+
+def _rule_status(rule: slot_rules.SlotRule | None) -> Mapping[str, object]:
+    """A slot row's four rule keys, empty when the slot is a plain device.
+
+    The same four `live_modules._module_slots` reports on a module's own row, and
+    for the same reason: the two tables are the same question asked of the same
+    slot, so a slot decided by a template has to read that way whichever page is
+    open. `rule_picks_device` is the one a page branches on -- a template or a
+    script decides *what* the slot is and the device under it is an answer, while
+    a condition decides *whether* and the device under it is the room's.
+    """
+    if rule is None:
+        return {
+            "rule_kind": None,
+            "rule_summary": None,
+            "rule_picks_device": None,
+            "rule_device": None,
+        }
+    device = slot_rules.device_of(rule)
+    return {
+        "rule_kind": rule.kind,
+        "rule_summary": slot_rules.summary(rule),
+        "rule_picks_device": slot_rules.picks_the_device(rule),
+        "rule_device": device or None,
+    }
 
 
 def _bound_status(
@@ -523,10 +773,114 @@ def house_scope(host: OpenHouseHost) -> Mapping[str, object]:
         {
             **row,
             "accepts_domains": list(catalog.slot_domains.get(str(row["slot"]), ())),
+            # A part is the *same* role, so it accepts what the role accepts: the
+            # catalog has no entry for a key a person invented, and a part drawn
+            # as "any device" would offer every entity in the house for a half of
+            # the lights. The parent's domains, not a lookup by the part's key.
+            "parts": _with_part_domains(host, str(row["slot"]), row.get("parts", ())),
         }
         for row in rows
     )
+    # The module rows carry slots too, and the same picker draws them, so they
+    # need the same join: a House tab that named the role's domains and a module
+    # card beside it that did not would be two answers to one question.
+    scope["modules"] = list(
+        _with_slot_domains(
+            host, cast("Sequence[Mapping[str, object]]", scope["modules"])
+        )
+    )
+    # The revision this page was drawn from, for the page to send back with
+    # everything it writes. See `room_detail` and `websocket_api._stale`.
+    scope["revision"] = host.session.revision
     return scope
+
+
+def _with_part_domains(
+    host: OpenHouseHost, parent: str, parts: object
+) -> tuple[Mapping[str, object], ...]:
+    """Each of a slot's parts with the *parent's* accepted domains joined in.
+
+    A part is the same role as the slot it was split from
+    (`ha_adapter.slot_parts`), so it accepts what the role accepts -- `_slot_domains`
+    is where that is worked out, and it is the same answer a room's part rows and
+    the bind picker get, so the three cannot disagree about what a half of the
+    lights takes.
+    """
+    accepted = list(_slot_domains(host, parent))
+    return tuple(
+        {**cast("Mapping[str, object]", part), "accepts_domains": accepted}
+        for part in cast("Sequence[Mapping[str, object]]", parts)
+    )
+
+
+def _with_slot_domains(
+    host: OpenHouseHost, modules: Sequence[Mapping[str, object]]
+) -> tuple[Mapping[str, object], ...]:
+    """Each module's slot rows, with the catalog's accepted domains joined in.
+
+    `live_modules` builds a slot row from the engine's vocabulary, which carries
+    no domains on purpose (`engine/vocabulary.py`). The *picker* needs them: what
+    a slot accepts is what Home Assistant's own entity selector is filtered by
+    (`accepts_domains`), so a row drawn without them would offer every device in
+    the house for a role that only takes lights. The catalog is Home Assistant's
+    half (`host.catalog`), so the join happens here, where a room's bindings and
+    the house's own slots already get theirs, rather than in the adapter that
+    reads the engine.
+    """
+    catalog = host.catalog
+    return tuple(
+        {
+            **module,
+            "slots": tuple(
+                {
+                    **slot,
+                    "accepts_domains": list(
+                        catalog.slot_domains.get(str(slot["slot"]), ())
+                    ),
+                }
+                for slot in cast("Sequence[Mapping[str, object]]", module["slots"])
+            ),
+        }
+        for module in modules
+    )
+
+
+def global_bindings(
+    host: OpenHouseHost, room_id: str
+) -> tuple[Mapping[str, object], ...]:
+    """The house's own slots, as this room's page draws them.
+
+    A room's page is where a person is standing when they think "this room's
+    lights", so it is also where they have to be able to see that the *house* has
+    a global `light_group` that every room falls back to -- and to set it, which
+    is why the row carries the house's binding and not a summary. The rows are
+    `house_scope`'s, both halves: the same role, the same entity and the same live
+    status the House tab draws, so a slot cannot read one way on one screen and
+    another way on the other.
+
+    Narrowed to the slots *this room's* modules act through, because this page is
+    about this room: a global role nothing here reaches is a control with nothing
+    behind it, and the House tab is where the whole-house view already lives.
+
+    `room_entity_id` is what the room bound for the same name itself, when it
+    bound anything, because that is the one place a global binding does not
+    reach: the room's own answer stands in front of it. It is the fact a person
+    needs before wondering why the room's lights did not move when they set the
+    house's.
+    """
+    room = host.require_room(room_id)
+    provided, _ = _room_module_slots(host, room_id)
+    reached = set(provided)
+    rows = cast("Sequence[Mapping[str, object]]", house_scope(host)["slots"])
+    return tuple(
+        {
+            **row,
+            "room_entity_id": room.bindings.get(str(row["slot"])),
+            "overridden": room.bindings.get(str(row["slot"])) is not None,
+        }
+        for row in rows
+        if str(row["slot"]) in reached
+    )
 
 
 def candidates(
@@ -540,34 +894,61 @@ def candidates(
 ) -> tuple[Mapping[str, object], ...]:
     """The devices the server proposes for a slot, best first.
 
-    Only entities Home Assistant files under the room's *area* are proposed,
-    which is the same candidate set the setup flow guesses from: a device that
-    exists but is filed elsewhere is a device the room has not been told about,
-    and proposing it would quietly move a device into a room by binding it.
+    The set is every entity the *house* holds (`entity_ids_house`), for a room's
+    slot as much as for a global one: a room's picker is a starting point, not a
+    fence. The devices a person has put in a room and the devices Home Assistant
+    has *filed* under that room's area are two different things, and only the
+    second is something HA can be asked about -- a room whose area holds nothing
+    (a spare room, a house whose devices are filed per device rather than per
+    entity) offered no device at all for any slot, which reads as the panel
+    having lost devices the person can see in Home Assistant. Narrowing a
+    binding to the room it is made from is also not this function's to enforce:
+    the binding belongs to the room either way, and a person pointing their
+    spare room's lamp at a lamp in the hall is using their own house.
+
+    The room's own devices come *first*, ranked among themselves by the same
+    rule as everything else, so the top of the list is still the guess the setup
+    flow would have made for that room (`rank_candidates`' "one rule, two
+    readers") and the room a person is working in is the group they see first.
 
     `room_id` may be `HOUSE`, for a global slot, which belongs to no room: its
-    candidate set is every entity the house holds (`entity_ids_house`), because
-    "the house's lights" is a role the whole house can fill and narrowing it to
-    one area would be picking a room on the person's behalf.
+    list is the house's and there is no room's own devices to put in front,
+    because "the house's lights" is a role the whole house fills and putting one
+    area first would be picking a room on the person's behalf.
 
     The ordering is `rank_candidates`', the same call the setup flow's guess is
     the winner of, so the picker a person is shown ranks the way the flow would
     have guessed.
     """
-    domains = host.catalog.slot_domains.get(slot, ())
-    entity_ids = (
-        entity_ids_house(hass)
-        if room_id == HOUSE
-        else entity_ids_in_area(hass, host.require_room(room_id).area_id)
-    )
-    ranked: tuple[Candidate, ...] = rank_candidates(
-        slot=slot,
-        domains=domains,
-        entity_ids=entity_ids,
-        names=_friendly_names(hass),
-        query=query,
-        limit=limit,
-    )
+    domains = _slot_domains(host, slot)
+    names = _friendly_names(hass)
+    house_ids = entity_ids_house(hass)
+    if room_id == HOUSE:
+        ranked = rank_candidates(
+            slot=slot,
+            domains=domains,
+            entity_ids=house_ids,
+            names=names,
+            query=query,
+            limit=limit,
+        )
+    else:
+        own = set(entity_ids_in_area(hass, host.require_room(room_id).area_id))
+        ranked = rank_candidates(
+            slot=slot,
+            domains=domains,
+            entity_ids=house_ids,
+            names=names,
+            query=query,
+        )
+        # `sorted` is stable, so each group keeps the ranking it arrived with and
+        # `limit` is applied to the room's devices first, the rest after -- which
+        # is what makes the truncation cut the tail rather than the room.
+        ranked = tuple(
+            sorted(ranked, key=lambda candidate: candidate.entity_id not in own)
+        )
+        if limit is not None:
+            ranked = ranked[:limit]
     entities = er.async_get(hass)
     return tuple(
         {

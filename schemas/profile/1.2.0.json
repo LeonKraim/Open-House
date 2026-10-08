@@ -1,0 +1,73 @@
+{
+  "$id": "https://open-house.invalid/schemas/profile/1.2.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Profile",
+  "schema_version": "1.2.0",
+  "supersedes": "1.1.0",
+  "description": "A named bundle of settings a house or a room can be put into. 1.1.0 made a profile a *delta*: the settings it changes, over the room's or the house's base, and a house profile a bundle of room selections. This version adds the other way a profile comes to exist -- taken *from* a house rather than written by hand. A house profile may carry `setup`: the house as it was at the moment the profile was taken. It holds the packs installed into it, its rooms and what each of them answers with, every module hosted in it with the configuration that module is on, the house's own settings and each room's. It is not a delta and is not read as one. A delta sits above the settings in the resolution order, so a key a profile names is a key a person can no longer set; a taken profile's settings are written where a person's own edits are written, so that an edit made afterwards is an edit and the next person to look at the house sees what they just set. `additionalProperties` is false because a field no version defines is a field some other reader may believe it has; the `allOf` below carries the per-kind conditionals a flat object cannot express.",
+  "type": "object",
+  "required": ["name", "kind", "description"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+    "kind": {
+      "type": "string",
+      "enum": ["room", "house"],
+      "description": "A `room` profile is selected in a room and applies its deltas there; a `house` profile bundles the room selections the whole house takes at once, and is the only kind that can be taken from a house."
+    },
+    "axis": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "The dimension a room profile governs -- lighting, climate, media. Two active profiles in one room must differ in axis, which is what makes simultaneity a property of the data rather than a rule a caller remembers. Required for `room` and forbidden for `house`."
+    },
+    "description": {"type": "string", "minLength": 1},
+    "deltas": {
+      "type": "object",
+      "description": "The settings this profile changes, as config keys to values. A room profile's deltas apply in the room it is selected in; a house profile's apply at house scope. A delta is over the room's (or house's) base, so a key absent here takes the base's value. Applying a profile's deltas leaves it in force: the key it names reads as the profile says until the profile is taken off, which is what a *hand-written* profile is for. A profile taken from a house carries `setup` instead.",
+      "additionalProperties": true
+    },
+    "enabled_behaviours": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "description": "Behaviour ids this profile enables, resolved through the same enable key the engine gates a unit on."
+    },
+    "modes": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "description": "Mode names this profile activates."
+    },
+    "selections": {
+      "type": "object",
+      "description": "A house profile's room selections: room id to axis to the room profile selected on that axis. Selecting a house profile sets exactly these. A taken profile carries the selections the house was on, and they apply the way a written profile's do -- a selection is a fact about which profile a room is on, not a setting, and the layer it resolves at is the same either way.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+      }
+    },
+    "setup": {
+      "type": "object",
+      "description": "A *taken* house profile's house: everything the house was configured to be at the moment the profile was taken. Its presence is what makes a house profile a snapshot, and applying it writes each part back where a person's own edit of that part would have been written. Absent parts are not an omission to be filled in from the current house -- a house that had no modules hosted had none, and restoring is putting the house back rather than merging into it. `additionalProperties` is true because these are the house's own documents, whose shapes the things that own them define (`LiveSession.to_state`, `ha_adapter/module_records.py`) and this schema does not restate: a copy restated here would be a second definition of a house, drifting from the first the moment either changed.",
+      "additionalProperties": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {"required": ["kind"], "properties": {"kind": {"const": "room"}}},
+      "then": {
+        "required": ["axis"],
+        "not": {
+          "anyOf": [{"required": ["selections"]}, {"required": ["setup"]}]
+        },
+        "description": "A room profile is one axis's delta, and it cannot also bundle other rooms' selections or carry the whole house."
+      }
+    },
+    {
+      "if": {"required": ["kind"], "properties": {"kind": {"const": "house"}}},
+      "then": {
+        "required": ["selections"],
+        "not": {"required": ["axis"]},
+        "description": "A house profile is a bundle of room selections and is not itself selected in a room, so it carries no axis."
+      }
+    }
+  ]
+}

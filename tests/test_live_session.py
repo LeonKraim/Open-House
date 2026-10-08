@@ -13,7 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from engine.binding import House
+from engine.behaviours import enable_key
+from engine.binding import House, RoomScope
+from engine.config import Layer, UnresolvedSettingError
 from engine.install import InstalledSet
 from engine.profiles import ProfileSet, load_profile_schema
 from engine.solar import Location
@@ -160,6 +162,86 @@ def test_state_carries_the_packs_and_the_profiles() -> None:
     assert document["version"] == SESSION_STATE_VERSION
     assert document["installed"] == InstalledSet().to_document()
     assert document["profiles"]["profiles"] == []
+
+
+def test_a_rooms_settings_survive_a_rebuild_and_a_restart() -> None:
+    """The half of the write that is not an override, read the way a restart reads it.
+
+    A rebuild is what every profile activation performs and a restart is a new
+    process, and both read the room layer from `room_settings` rather than from
+    the in-memory override -- so this asserts through a rebuild, then through a
+    document, and neither may lose the value.
+    """
+    session = _session()
+    key = enable_key("motion_lighting")
+    scope = RoomScope("hall")
+    session.remember_setting(key, scope, False)
+
+    assert session.setting(key, scope) is False
+    assert session.engine.settings.resolve(key, scope).value is False
+
+    session.rebuild()
+    assert session.engine.settings.resolve(key, scope).value is False
+
+    restarted = LiveSession.from_state(
+        session.to_state(), transport=_transport(), root=ROOT, location=LOCATION
+    )
+    assert restarted.engine.settings.resolve(key, scope).value is False
+
+
+def test_forgetting_a_setting_removes_it_from_both_layers() -> None:
+    """The pair's other half: "off" is an absence, and both layers show it.
+
+    The key is one no layer supplies, which is what makes the assertion exact:
+    after the write the ROOM layer answers, and after the forget there is no
+    answer at all. A key with a built-in default would resolve to that default
+    either way, which is a weaker fact about the same code.
+    """
+    session = _session()
+    key = "behaviour.nothing_declares_this.enabled"
+    scope = RoomScope("hall")
+    session.remember_setting(key, scope, False)
+    # Resolved it is the override that answers, which is the live half; rebuilt,
+    # the override is gone and the recorded ROOM value is what still answers --
+    # which is the half that survives a restart.
+    assert session.engine.settings.resolve(key, scope).layer is Layer.OVERRIDE
+    session.rebuild()
+    assert session.engine.settings.resolve(key, scope).layer is Layer.ROOM
+
+    session.forget_setting(key, scope)
+
+    assert session.setting(key, scope) is None
+    assert session.room_settings_for("hall") == {}
+    with pytest.raises(UnresolvedSettingError):
+        session.engine.settings.resolve(key, scope)
+
+
+def test_turning_a_rooms_switch_off_clears_a_remembered_lighting_flag() -> None:
+    """The switch is the master for the lighting behaviours, so it wins.
+
+    A remembered flag is laid *over* the room's own switch at construction, so a
+    stale `True` left behind would make the off position visibly do nothing.
+    """
+    session = _session()
+    key = enable_key("motion_lighting")
+    session.remember_setting(key, RoomScope("hall"), True)
+
+    session.set_room_auto_lighting("hall", on=False)
+
+    assert session.setting(key, RoomScope("hall")) is None
+    session.rebuild()
+    assert session.engine.settings.resolve(key, RoomScope("hall")).value is False
+
+
+def test_a_removed_room_takes_its_settings_with_it() -> None:
+    session = _session(rooms=(_room("hall"), _room("kitchen")))
+    session.remember_setting(
+        "behaviour.nothing_declares_this.enabled", RoomScope("hall"), True
+    )
+
+    session.set_rooms((_room("kitchen"),))
+
+    assert session.room_settings_for("hall") == {}
 
 
 def test_a_state_from_another_version_is_refused_by_name() -> None:

@@ -19,10 +19,14 @@
  *   * An already-installed pack says so rather than offering a second install.
  */
 
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { OpenHouseElement } from "../base.ts";
 import { SchemaForm } from "../components/schema-form.ts";
-import type { ModuleOffer, ModuleConflict } from "../api/models.ts";
+import type {
+  ModuleOffer,
+  ModuleOfferRow,
+  ModuleConflict,
+} from "../api/models.ts";
 
 export class AddModuleDialog extends OpenHouseElement {
   static override properties = {
@@ -35,6 +39,7 @@ export class AddModuleDialog extends OpenHouseElement {
     // person is not on.
     heading: { type: String },
     offers: { state: true },
+    stored: { state: true },
     isLoading: { state: true },
     error: { state: true },
     busyPack: { state: true },
@@ -48,6 +53,16 @@ export class AddModuleDialog extends OpenHouseElement {
   declare heading: string;
 
   private offers: ModuleOffer[] = [];
+  /**
+   * The modules this house kept, from its own store.
+   *
+   * A different kind of offer from a catalog pack, and offered here rather than
+   * in the Store tab for exactly that reason: the store is where a module is
+   * *kept*, and this dialog is where it is *placed*. A store module is already
+   * installed -- there is nothing to buy and no version to compare -- so its row
+   * carries its slots and one button, and the button adds it here.
+   */
+  private stored: ModuleOfferRow[] = [];
   private isLoading = false;
   private error: ReturnType<OpenHouseElement["toError"]> | null = null;
   private busyPack: string | null = null;
@@ -70,12 +85,47 @@ export class AddModuleDialog extends OpenHouseElement {
     this.isLoading = true;
     this.error = null;
     this.requestUpdate();
+    const client = this.requireClient();
+    // The two are asked separately, and the store's failure is swallowed: a
+    // house that cannot answer for its own modules still has a catalog to offer
+    // packs from, and a dialog that opened empty for that reason would hide
+    // every pack behind a fault in the half nobody asked about.
+    const [offers, store] = await Promise.allSettled([
+      client.availableModules(this.roomId),
+      client.modulesStore(this.roomId),
+    ]);
+    if (offers.status === "fulfilled") this.offers = offers.value;
+    else this.error = this.toError(offers.reason);
+    this.stored = store.status === "fulfilled" ? store.value.store : [];
+    this.isLoading = false;
+    this.requestUpdate();
+  }
+
+  /**
+   * Put one of this house's own modules into the room this dialog is over.
+   *
+   * The answers are the definition's -- a stored module installs as what it is,
+   * which is the whole of what defining it once bought -- so nothing is sent but
+   * the placement. A room that cannot answer one of its slots gets the module
+   * anyway and it waits; the room's page is where the device is then bound.
+   */
+  private async addStored(offer: ModuleOfferRow): Promise<void> {
+    this.busyPack = `store:${offer.slug}`;
+    this.error = null;
     try {
-      this.offers = await this.requireClient().availableModules(this.roomId);
+      await this.requireClient().modulesDeploy(offer.slug, this.roomId);
+      this.dispatchEvent(
+        new CustomEvent("module-installed", {
+          detail: { pack: offer.slug },
+          bubbles: true,
+        }),
+      );
+      this.open = false;
+      this.dispatchEvent(new CustomEvent("add-module-closed", { bubbles: true }));
     } catch (error) {
       this.error = this.toError(error);
     } finally {
-      this.isLoading = false;
+      this.busyPack = null;
       this.requestUpdate();
     }
   }
@@ -178,6 +228,7 @@ export class AddModuleDialog extends OpenHouseElement {
           this.filter = (event.target as HTMLInputElement).value;
         }}
       />
+      ${this.renderStored()}
       ${this.isLoading
         ? this.loading(`Looking for modules ${whereThe} can satisfy...`)
         : visible.length === 0
@@ -191,6 +242,81 @@ export class AddModuleDialog extends OpenHouseElement {
               ${visible.map((offer) => this.renderOffer(offer))}
             </div>`}
     </open-house-dialog>`;
+  }
+
+  /**
+   * The modules this house kept, ahead of the catalog.
+   *
+   * First because they are the person's own: a module saved out of an automation
+   * in the Dev tab is the one they came here to place, and the catalog is what
+   * they browse when they have nothing of their own. The two lists are drawn
+   * differently and say so, because a pack is a thing a room *satisfies* and a
+   * stored module is a thing this house already has.
+   */
+  private renderStored(): TemplateResult | typeof nothing {
+    if (this.stored.length === 0) return nothing;
+    const whereThe = this.isHouse ? "the house" : "this room";
+    return html`<section style="margin-top:12px">
+      <h3>Your modules</h3>
+      <p class="help">
+        Saved in your store. Adding one to ${whereThe} makes a copy of it here,
+        with its own automation and its own outputs -- the module itself stays
+        where it is, ready to add somewhere else too.
+      </p>
+      <div class="stack">
+        ${this.stored.map((offer) => this.renderStoredRow(offer))}
+      </div>
+    </section>`;
+  }
+
+  private renderStoredRow(offer: ModuleOfferRow): TemplateResult {
+    const busy = this.busyPack === `store:${offer.slug}`;
+    const here = offer.deployed.some((where) => where.room_id === this.roomId);
+    const missing = offer.missing_slots;
+    return html`<div class="card" data-module=${offer.slug}>
+      <div class="row spread wrap">
+        <div class="grow">
+          <h3>${offer.title}</h3>
+          <p class="muted small">
+            <code>${offer.slug}</code>
+            &middot; v${offer.version} &middot; ${offer.licence}
+          </p>
+        </div>
+        ${here
+          ? html`<span class="chip ok">already here</span>`
+          : html`<button
+              type="button"
+              class="primary"
+              id="add-stored-${offer.slug}"
+              ?disabled=${busy}
+              @click=${() => void this.addStored(offer)}
+            >
+              ${busy
+                ? "Adding..."
+                : this.isHouse
+                  ? "Add to the house"
+                  : "Add to this room"}
+            </button>`}
+      </div>
+      <p>${offer.description}</p>
+      ${offer.slots.length > 0
+        ? html`<div class="row wrap" style="margin-top:6px">
+            ${offer.slots.map(
+              (slot) =>
+                html`<span class="chip ${missing.includes(slot) ? "error" : "ok"}"
+                  >${slot}${missing.includes(slot) ? " (missing)" : ""}</span
+                >`,
+            )}
+          </div>`
+        : nothing}
+      ${missing.length > 0
+        ? html`<div class="banner warn">
+            ${this.isHouse ? "This house" : "This room"} has not been given a
+            device for ${missing.join(", ")} yet. Add it anyway and the module
+            waits -- bind the device on a room's settings page and it runs.
+          </div>`
+        : nothing}
+    </div>`;
   }
 
   private renderOffer(offer: ModuleOffer): TemplateResult {

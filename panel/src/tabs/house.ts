@@ -24,8 +24,23 @@
  */
 
 import { html, nothing, type TemplateResult } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import { OpenHouseElement } from "../base.ts";
+import { REFUSALS } from "../api/protocol.ts";
+// Registered by the import: the notice this page shows once the house has moved
+// under it -- which a profile switch made here does.
+import "../components/page-stale.ts";
 import { HOUSE_REACH, reachControl } from "../components/reach.ts";
+// The card a module out of the house's own store is drawn with, in the house.
+// The same element the Dev tab and a room's page draw, because it is the same
+// thing: a module this house hosts, with its settings and its outputs.
+import "../components/hosted-module.ts";
+import "../components/house-profile.ts";
+import { devicePicker } from "../components/slot-devices.ts";
+// The parts a role has been split into, drawn inside its row. The same block a
+// room's page draws, because the parts are one house-level record whichever page
+// a person splits them from.
+import { slotParts, type SlotPartAction } from "../components/slot-parts.ts";
 import {
   fieldOrder,
   schemaForKeys,
@@ -33,7 +48,7 @@ import {
 } from "../components/schema-spec.ts";
 import type {
   BindingStatusKind,
-  BindingSuggestion,
+  HostedModule,
   HouseScope,
   HouseSlot,
   InstalledModule,
@@ -47,8 +62,16 @@ interface PickerState {
   slot: string;
   /** True when this picker is replacing a binding the house already holds. */
   replace: boolean;
-  candidates: BindingSuggestion[];
-  query: string;
+  /**
+   * The entities the choice is drawn from: every entity the house holds that
+   * the slot accepts, as the server scoped it (`views.candidates`, with the
+   * house as the placement). Handed to Home Assistant's entity selector as
+   * `include_entities`, because the selector has no area filter of its own and
+   * a global slot belongs to no room at all.
+   */
+  includes: string[];
+  /** The domains the slot accepts, from the catalog. */
+  accepts: string[];
   loading: boolean;
 }
 
@@ -78,16 +101,34 @@ export class HouseTab extends OpenHouseElement {
     error: { state: true },
     busy: { state: true },
     drafts: { state: true },
+    partDrafts: { state: true },
     dirty: { state: true },
     addingModule: { state: true },
     picker: { state: true },
     rooms: { state: true },
+    hosted: { state: true },
+    // The house this page was read at, and whether it has since been told that
+    // house has moved. Reactive, because the page stops being live on a click
+    // or a fetch and a plain field would leave the notice undrawn.
+    revision: { state: true },
+    stale: { state: true },
   };
 
   private scope: HouseScope | null = null;
   private isLoading = true;
   private error: ReturnType<OpenHouseElement["toError"]> | null = null;
   private busy: string | null = null;
+  /**
+   * The house's own modules placed in the whole house, which are not packs.
+   *
+   * The other placement a stored module can be added to, and the reason this
+   * list exists here: a module added to the house from the dialog above is
+   * hosted by the house rather than installed from a pack, so `scope.modules`
+   * knows nothing about it -- and without a card it could be added and never
+   * taken out. A room's page draws the ones placed in that room; these are the
+   * ones placed in no room.
+   */
+  private hosted: HostedModule[] = [];
   /**
    * Unsaved settings, per module.
    *
@@ -98,11 +139,34 @@ export class HouseTab extends OpenHouseElement {
    * server takes the map it is given.
    */
   private drafts: Record<string, Record<string, unknown>> = {};
+  /**
+   * The half-typed name of a part, per control of the parts block.
+   *
+   * Held here rather than in the block for the reason a module's settings are held
+   * on this page: the row is rebuilt on every `requestUpdate`, so a name kept in
+   * the block would be a name a person types twice. The keys are the block's own
+   * (`components/slot-parts.ts`), so this page does not have to know how the two
+   * kinds of draft are named.
+   */
+  private partDrafts: Record<string, string> = {};
   private dirty: Record<string, boolean> = {};
   private addingModule = false;
   private picker: PickerState | null = null;
   /** Every room, so a behaviour's reach control can name where it applies. */
   private rooms: RoomSummary[] = [];
+  /**
+   * The house's profile revision this page was read at.
+   *
+   * Sent with every write the page makes, so the server can refuse one that was
+   * decided against a profile which has since been replaced. This is also the
+   * page that *switches* profiles, so the notice below is not only an error
+   * path here: a switch made on this page moves the house out from under it,
+   * and the page says so rather than redrawing itself as though the settings it
+   * was showing had always been the new profile's.
+   */
+  private revision = 0;
+  /** Whether the page has stopped being the live page. Sticky until a reload. */
+  private stale = false;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -124,6 +188,15 @@ export class HouseTab extends OpenHouseElement {
         client.rooms(),
       ]);
       this.rooms = rooms;
+      // Read separately, and its fault swallowed: a house that cannot list its
+      // own modules still has slots, devices and packs, and a page that went
+      // blank for that reason would hide the half of itself that works.
+      this.hosted = await client
+        .modulesHosted()
+        .then((reply) =>
+          reply.modules.filter((module) => module.room_id === ""),
+        )
+        .catch(() => [] as HostedModule[]);
       this.apply(scope);
     } catch (error) {
       this.error = this.toError(error);
@@ -135,13 +208,33 @@ export class HouseTab extends OpenHouseElement {
 
   private apply(scope: HouseScope): void {
     this.scope = scope;
+    // The house this page is now showing, sent back with every write below.
+    this.revision = scope.revision;
     // A reload is the server's answer, so every draft is discarded: keeping an
     // edit through a read that has just told us the stored value would show a
     // form disagreeing with the engine.
     this.drafts = {};
     this.dirty = {};
+    this.partDrafts = {};
     // The picker too: a slot just bound is not one to go on offering devices for.
     this.picker = null;
+  }
+
+  /**
+   * Stop being the live page: the house moved and everything here is old.
+   *
+   * The same act a room's page makes (`room-settings.ts`), and for the same
+   * reason: a `stale_page` refusal means the values on this page were decided
+   * against a profile that no longer applies, and writing them would land them
+   * over the profile that does. The page is not wrong -- it is what the house
+   * looked like -- but nothing on it may be acted on, so it is made inert and
+   * the notice is drawn. Sticky: only a reload puts the page back in agreement
+   * with the house.
+   */
+  private goStale(): void {
+    this.stale = true;
+    this.picker = null;
+    this.requestUpdate();
   }
 
   /** Run a write, then re-read the house. The house is the page being redrawn. */
@@ -153,7 +246,8 @@ export class HouseTab extends OpenHouseElement {
       await operation();
       await this.load();
     } catch (error) {
-      this.error = this.toError(error);
+      if (this.toError(error).code === REFUSALS.stalePage) this.goStale();
+      else this.error = this.toError(error);
     } finally {
       this.busy = null;
       this.requestUpdate();
@@ -174,14 +268,73 @@ export class HouseTab extends OpenHouseElement {
     this.error = null;
     this.requestUpdate();
     try {
-      await this.requireClient().setHouseOptions(values);
+      await this.requireClient().setHouseOptions(values, this.revision);
       await this.load();
     } catch (error) {
-      this.error = this.toError(error);
+      if (this.toError(error).code === REFUSALS.stalePage) this.goStale();
+      else this.error = this.toError(error);
     } finally {
       this.busy = null;
       this.requestUpdate();
     }
+  }
+
+  /**
+   * The row a bind is about, whether it is a global slot or a *part* of one.
+   *
+   * A part is bound under a key of its own (`light_group__a`) and is drawn one
+   * level down, inside its slot's row -- so a picker opened on a part has to look
+   * in both places, or it would find no row and offer no domains for a half of
+   * the lights.
+   */
+  private slotRow(
+    slot: string,
+  ): Pick<HouseSlot, "slot" | "label" | "entity_id" | "accepts_domains"> | undefined {
+    const rows = this.scope?.slots ?? [];
+    const own = rows.find((entry) => entry.slot === slot);
+    if (own) return own;
+    for (const row of rows) {
+      const part = (row.parts ?? []).find((entry) => entry.slot === slot);
+      if (part) return part;
+    }
+    return undefined;
+  }
+
+  /**
+   * Split a global role, rename one half, or rejoin one.
+   *
+   * The same three a room's page offers, over the same *house-level* record: a
+   * part belongs to no room, so the tab that shows the house's own roles is a
+   * natural place to split one. The write goes through the page's ordinary `act`,
+   * so a refusal (a part a module still names) is drawn where every other refusal
+   * on this page is, and a success redraws the row from what the server holds.
+   */
+  private setPart(
+    slot: string,
+    action: SlotPartAction,
+    name: string,
+    newName = "",
+  ): Promise<void> {
+    return this.act(`part:${slot}`, async () => {
+      await this.requireClient().setSlotParts(slot, action, name, newName);
+      // This slot's drafts only: a split, a rename and a rejoin all end with the
+      // control that asked for them closed, and a name left in a field the server
+      // has already taken is a form disagreeing with the record.
+      this.partDrafts = Object.fromEntries(
+        Object.entries(this.partDrafts).filter(([key]) => !key.startsWith(slot)),
+      );
+    });
+  }
+
+  /** Write one part-name draft, and open or close the control it belongs to. */
+  private editPart(key: string, value: string | null): void {
+    if (value === null) {
+      const { [key]: _closed, ...rest } = this.partDrafts;
+      this.partDrafts = rest;
+    } else {
+      this.partDrafts = { ...this.partDrafts, [key]: value };
+    }
+    this.requestUpdate();
   }
 
   /**
@@ -192,40 +345,21 @@ export class HouseTab extends OpenHouseElement {
    * because a global slot is a role no room owns (`views.candidates`).
    */
   private async openPicker(slot: string, replace: boolean): Promise<void> {
-    this.picker = { slot, replace, candidates: [], query: "", loading: true };
+    const accepts = this.slotRow(slot)?.accepts_domains ?? [];
+    this.picker = { slot, replace, accepts, includes: [], loading: true };
     this.requestUpdate();
     try {
-      const candidates = await this.requireClient().candidates(
-        HOUSE_ID,
-        slot,
-      );
+      const candidates = await this.requireClient().candidates(HOUSE_ID, slot);
       if (this.picker && this.picker.slot === slot) {
-        this.picker = { ...this.picker, candidates, loading: false };
+        this.picker = {
+          ...this.picker,
+          includes: candidates.map((candidate) => candidate.entity_id),
+          loading: false,
+        };
       }
     } catch (error) {
       this.error = this.toError(error);
       this.picker = null;
-    } finally {
-      this.requestUpdate();
-    }
-  }
-
-  private async search(query: string): Promise<void> {
-    const picker = this.picker;
-    if (!picker) return;
-    this.picker = { ...picker, query };
-    this.requestUpdate();
-    try {
-      const candidates = await this.requireClient().candidates(
-        HOUSE_ID,
-        picker.slot,
-        query,
-      );
-      if (this.picker && this.picker.slot === picker.slot) {
-        this.picker = { ...this.picker, candidates, query };
-      }
-    } catch (error) {
-      this.error = this.toError(error);
     } finally {
       this.requestUpdate();
     }
@@ -238,13 +372,13 @@ export class HouseTab extends OpenHouseElement {
    * server routes `HOUSE_ID` to the house's own binding, which is what makes a
    * global slot writable at all.
    */
-  private async choose(suggestion: BindingSuggestion): Promise<void> {
+  private async choose(entityId: string): Promise<void> {
     const picker = this.picker;
     if (!picker) return;
     await this.act(`binding:${picker.slot}`, () =>
       picker.replace
-        ? this.requireClient().replace(HOUSE_ID, picker.slot, suggestion.entity_id)
-        : this.requireClient().bind(HOUSE_ID, picker.slot, suggestion.entity_id),
+        ? this.requireClient().replace(HOUSE_ID, picker.slot, entityId, this.revision)
+        : this.requireClient().bind(HOUSE_ID, picker.slot, entityId, this.revision),
     );
   }
 
@@ -257,19 +391,40 @@ export class HouseTab extends OpenHouseElement {
       return html`${this.errorBanner(this.error)}
       ${this.emptyState("No house", "This house could not be read.")}`;
     }
+    // Inert when stale: nothing behind the notice may be reached by pointer or
+    // keyboard, because every write from this page would be refused and a
+    // control that silently does nothing reads as the panel being broken.
     return html`
-      ${this.errorBanner(this.error)} ${this.renderHeader(scope)}
-      ${this.renderSlots(scope)} ${this.renderModules(scope)}
-      <open-house-add-module
-        .client=${this.client}
-        .roomId=${""}
-        .heading=${"Add module to house"}
-        .open=${this.addingModule}
-        @add-module-closed=${() => {
-          this.addingModule = false;
-        }}
-        @module-installed=${() => void this.load()}
-      ></open-house-add-module>
+      <div ?inert=${this.stale} @page-stale=${() => this.goStale()}>
+        ${this.errorBanner(this.error)} ${this.renderHeader(scope)}
+        <!-- The whole house's profile, above everything it changes. It is the one
+             control whose answer is about the whole house at once, so it is drawn
+             before the house's own settings rather than inside any of them -- and
+             it is on the Rooms tab too, where a person looking at their house as a
+             list of rooms will reach for it. -->
+        <open-house-house-profile
+          .client=${this.client}
+          .hass=${this.hass}
+          .admin=${this.admin}
+          @profiles-changed=${() => this.goStale()}
+        ></open-house-house-profile>
+        ${this.renderSlots(scope)} ${this.renderModules(scope)}
+        ${this.renderHosted()}
+        <open-house-add-module
+          .client=${this.client}
+          .roomId=${""}
+          .heading=${"Add module to house"}
+          .open=${this.addingModule}
+          @add-module-closed=${() => {
+            this.addingModule = false;
+          }}
+          @module-installed=${() => void this.load()}
+        ></open-house-add-module>
+      </div>
+      <open-house-page-stale
+        .open=${this.stale}
+        .reason=${`This is the house page.`}
+      ></open-house-page-stale>
     `;
   }
 
@@ -338,7 +493,7 @@ export class HouseTab extends OpenHouseElement {
                 ${scope.slots.map((slot) => this.renderSlot(slot))}
               </tbody>
             </table>
-            ${this.picker ? this.renderPicker(scope) : null}`}
+            ${this.picker ? this.renderPicker() : null}`}
     </div>`;
   }
 
@@ -585,6 +740,7 @@ export class HouseTab extends OpenHouseElement {
                   (name) => html`<span class="chip">${name}</span>`,
                 )}</span
               >`}
+          ${this.renderParts(slot)}
         </div>
       </td>
       <td>
@@ -625,7 +781,11 @@ export class HouseTab extends OpenHouseElement {
                       class="icon"
                       @click=${() =>
                         void this.act(`binding:${slot.slot}`, () =>
-                          this.requireClient().unbind(HOUSE_ID, slot.slot),
+                          this.requireClient().unbind(
+                            HOUSE_ID,
+                            slot.slot,
+                            this.revision,
+                          ),
                         )}
                       >Unbind</button
                     >`
@@ -642,72 +802,70 @@ export class HouseTab extends OpenHouseElement {
   }
 
   /**
+   * The parts this global role has been split into, and how to change them.
+   *
+   * A global slot is split here for the same reason it is bound here: a role the
+   * whole house reads is the house's, and a half of it is the same role. The parts
+   * are a house-level record, so a person who splits "Light group" on this page
+   * and a person who splits the same role from a room's page are writing the one
+   * fact -- the block is the same component on both pages, deliberately.
+   *
+   * Binding a part goes through the *house's* picker (`openPicker`, the same one
+   * the slot itself uses), because a part's device is a house binding under the
+   * part's own key. Nothing on the block writes: a part is added, renamed or
+   * rejoined, and its device bound, by the same controls a room's page draws.
+   */
+  private renderParts(slot: HouseSlot): TemplateResult | typeof nothing {
+    if (!this.admin && slot.parts.length === 0) return nothing;
+    return slotParts({
+      slot: slot.slot,
+      parts: slot.parts,
+      admin: this.admin,
+      busy: this.busy !== null,
+      draft: (key) => this.partDrafts[key],
+      onDraft: (key, value) => this.editPart(key, value),
+      onBind: (part) => void this.openPicker(part.slot, part.entity_id !== null),
+      onAct: (action, name, newName) =>
+        void this.setPart(slot.slot, action, name, newName ?? ""),
+    });
+  }
+
+  /**
    * The device picker, drawn under the table like a room's.
    *
    * `renderSlots` draws it inside the card so it cannot be shown for a slot the
-   * card is not listing -- the two are the same subject.
+   * card is not listing -- the two are the same subject. The control is Home
+   * Assistant's own entity selector, the same one a room's page draws, over the
+   * same list -- every entity the house holds (a room's page leads with that
+   * room's own, and a global slot has no room to lead with). A global slot is a
+   * role like any other; nothing about it is room-shaped.
+   *
+   * The row is found through `slotRow`, not by name, because a picker may have
+   * been opened on one **part** of a split slot (`renderParts`) and that row is
+   * drawn inside its parent's rather than beside it.
    */
-  private renderPicker(scope: HouseScope): TemplateResult {
+  private renderPicker(): TemplateResult {
     const picker = this.picker;
     if (!picker) return html``;
-    const slot = scope.slots.find((entry) => entry.slot === picker.slot);
-    const domains = (slot?.accepts_domains ?? []).join(", ") || "any device";
-    return html`<div class="banner info" role="group" aria-label="Choose a device">
-      <div class="row spread wrap">
-        <strong>
-          ${picker.replace ? "Replace" : "Bind"} the ${slot?.label ?? picker.slot}
-          slot
-        </strong>
-        <button
-          type="button"
-          class="icon"
-          @click=${() => {
-            this.picker = null;
-          }}
-        >
-          Cancel
-        </button>
-      </div>
-      <input
-        type="text"
-        class="grow"
-        placeholder="Search devices"
-        aria-label="Search devices"
-        .value=${picker.query}
-        @input=${(event: Event) =>
-          void this.search((event.target as HTMLInputElement).value)}
-      />
-      <p class="help">
-        Binding the whole house's ${slot?.label ?? picker.slot} &middot; accepts
-        ${domains}
-      </p>
-      ${picker.loading
-        ? html`<p class="muted">Looking for devices...</p>`
-        : picker.candidates.length === 0
-          ? html`<p class="muted">
-              No match. This slot accepts ${domains}.
-            </p>`
-          : html`<div class="stack" style="margin-top:8px">
-              ${picker.candidates.map(
-                (candidate) => html`<div class="row spread">
-                  <div class="stack">
-                    <span>${candidate.friendly_name}</span>
-                    <span class="muted small"
-                      >${candidate.entity_id} &middot; ${candidate.domain}</span
-                    >
-                  </div>
-                  <button
-                    type="button"
-                    class="primary"
-                    ?disabled=${this.busy !== null}
-                    @click=${() => void this.choose(candidate)}
-                  >
-                    Use this
-                  </button>
-                </div>`,
-              )}
-            </div>`}
-    </div>`;
+    const slot = this.slotRow(picker.slot);
+    return devicePicker({
+      heading: `${picker.replace ? "Replace" : "Bind"} the ${
+        slot?.label ?? picker.slot
+      } slot`,
+      accepts: picker.accepts,
+      includes: picker.includes,
+      // No room leads a global slot's list: it belongs to no room, so there is
+      // no room whose own devices would be the honest thing to show first.
+      first: null,
+      value: slot?.entity_id ?? null,
+      loading: picker.loading,
+      disabled: this.busy !== null,
+      hass: this.hass,
+      onCancel: () => {
+        this.picker = null;
+      },
+      onChoose: (entityId) => void this.choose(entityId),
+    });
   }
 
   /**
@@ -801,6 +959,45 @@ export class HouseTab extends OpenHouseElement {
         );
       }
     });
+  }
+
+  /**
+   * The house's own modules, placed in the whole house.
+   *
+   * A separate list from the one above, because they are a separate thing: a
+   * pack is installed into a room and a stored module is *added* to a placement,
+   * and the two live in different records. It is drawn here because here is
+   * where the "Add module to house" button is -- a module added by that button
+   * and then visible nowhere would be one a person could put somewhere and not
+   * take back. Nothing is drawn when there are none.
+   */
+  private renderHosted(): TemplateResult | typeof nothing {
+    if (this.hosted.length === 0) return nothing;
+    return html`<h2 style="margin-top:24px;margin-bottom:8px">Your modules</h2>
+      <p class="help">
+        Modules from your store that you have added to the whole house. Each has
+        its own automation and its own copy of the answers you gave when you
+        defined it, so editing it here changes this one only.
+      </p>
+      <div class="stack">
+      // Keyed by slug: a rebuild moves a module to the end of the house's own
+      // list, and an unkeyed list re-binds the card at that position to whatever
+      // module is there now -- taking the notice a save just wrote with it, and
+      // re-drawing a module nobody touched.
+        ${repeat(
+          this.hosted,
+          (module) => module.slug,
+          (module) => html`<open-house-hosted-module
+            .client=${this.client}
+            .hass=${this.hass}
+            .module=${module}
+            .removable=${this.admin}
+            .revision=${this.revision}
+            .stale=${this.stale}
+            @module-changed=${() => void this.load()}
+          ></open-house-hosted-module>`,
+        )}
+      </div>`;
   }
 
   private openRoom(roomId: string): void {

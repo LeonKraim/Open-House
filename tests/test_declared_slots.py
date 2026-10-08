@@ -28,6 +28,7 @@ browser step's job, and asserting it here would be asserting a string.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -591,7 +592,10 @@ def test_a_module_that_brought_its_device_installs_and_cannot_be_enabled(
     session = _session()
     document = _pinned(tmp_path)
     row = _catalog_row(tmp_path, document)
-    monkeypatch.setattr(live_modules, "_published", lambda root: (row,))
+    # `_published` takes the checkout root and the writable user pack root; the
+    # stub answers both with the same row, because this test's catalog is one
+    # pack and where it was found is not what it is testing.
+    monkeypatch.setattr(live_modules, "_published", lambda root, user_root=None: (row,))
 
     reply = live_modules.install(session, _stage(tmp_path, document), room_id="hall")
     installed = reply["installed"]
@@ -605,3 +609,140 @@ def test_a_module_that_brought_its_device_installs_and_cannot_be_enabled(
         live_modules.set_enabled(
             session, room_id="hall", pack="fridge_guard", enabled=True
         )
+
+
+# -- The second catalog: a pack a person wrote ------------------------------
+#
+# A module authored in the Dev tab is one file under Home Assistant's own config
+# and is published by no index (`ha_adapter/live_modules.py` reads it beside the
+# checkout's, which is what makes it installable at all). The readers here read
+# the *published* set, so without the second catalog an authored module installs,
+# lists its behaviours, and hands the engine no unit for any of them -- which is
+# what "installed, and runs nothing" looks like on screen: each atom drawn with
+# an empty description, and no settings at all.
+
+
+def _checkout(tmp_path: Path, *published: Mapping[str, object]) -> Path:
+    """A checkout with the frozen catalog and only the packs `published` names.
+
+    The real `catalog/` is copied rather than stubbed because the one artifact
+    these readers take from it -- `catalog/services.yaml`, through
+    `load_service_states` -- is what a unit's states are projected from, and a
+    stand-in would be tested instead of it. The index is written here rather
+    than by `_registry` because that fixture publishes `fridge_guard` whatever
+    document it is handed, and these tests turn on *which* packs are published.
+    """
+    root = tmp_path / "checkout"
+    root.mkdir()
+    shutil.copytree(paths.CATALOG, root / "catalog")
+    entries = []
+    for index, document in enumerate(published):
+        relative = f"packs/official/pack-{index}.yaml"
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            yaml.safe_dump(dict(document), sort_keys=False),
+            encoding="utf-8",
+            newline="",
+        )
+        entries.append(
+            {
+                "name": document["name"],
+                "version": str(document.get("version", "1.0.0")),
+                "repo": ".",
+                "commit": "0" * 40,
+                "path": relative,
+                "sha256": "sha256:" + "0" * 64,
+                "tier": "official",
+                "pointer": f"pointers/official/{document['name']}/1.0.0.yaml",
+            }
+        )
+    if entries:
+        write(
+            root,
+            "registry/index.json",
+            json.dumps({"entries": entries}, indent=2),
+        )
+    return root
+
+
+def _user_packs(tmp_path: Path, *documents: Mapping[str, object]) -> Path:
+    """The directory the Dev tab writes to, holding `documents`."""
+    user = tmp_path / "config" / "open_house" / "packs"
+    for document in documents:
+        _stage(user, document)
+    return user
+
+
+def test_a_pack_a_person_wrote_is_read_from_the_users_own_directory(
+    tmp_path: Path,
+) -> None:
+    """The Dev tab's pack joins the vocabulary, published or not.
+
+    This is the half a room's page depends on: `engine/binding.py` refuses a
+    binding to a slot the vocabulary does not carry, so an authored pack
+    declaring a device of its own would offer a slot no write could fill.
+    """
+    root = _checkout(tmp_path, _document(name="published_pack"))
+    user = _user_packs(tmp_path, _document())
+    committed = vocabulary.Vocabulary.load(ROOT)
+
+    # The published set alone does not carry it: `fridge_guard` is in no index.
+    assert (
+        FRIDGE
+        not in adapter_units.with_declared_slots(
+            root, _installed("fridge_guard"), committed
+        ).slots
+    )
+
+    extended = adapter_units.with_declared_slots(
+        root, _installed("fridge_guard"), committed, user_root=user
+    )
+    assert FRIDGE in extended.slots
+    assert extended.slots[FRIDGE].required is True
+
+
+def test_an_authored_pack_reaches_the_engine_as_a_unit(tmp_path: Path) -> None:
+    """The unit is what the module's card and the engine both read.
+
+    `_behaviour_summary` builds an atom's sentence off the engine's unit and
+    answers the empty string when there is none, and `pack_option_keys` reads
+    the unit's options -- so without this both the sentence under a switch and
+    the module's settings are absent from its card. This is the assertion that
+    closes it: the authored pack produces `fridge_guard.warn`.
+    """
+    root = _checkout(tmp_path, _document(name="published_pack"))
+    user = _user_packs(tmp_path, _document())
+    committed = vocabulary.Vocabulary.load(ROOT)
+
+    assert (
+        adapter_units.installed_units(root, _installed("fridge_guard"), committed) == ()
+    )
+
+    units = adapter_units.installed_units(
+        root, _installed("fridge_guard"), committed, user_root=user
+    )
+    assert [unit.id for unit in units] == ["fridge_guard.warn"]
+
+
+def test_a_name_the_index_publishes_is_not_replaced_by_a_local_one(
+    tmp_path: Path,
+) -> None:
+    """The tie is broken the way the catalog breaks it, or the engine disagrees.
+
+    `live_modules._published` reads a name both the checkout and a person
+    publish as the *checkout's*. If the engine's reader preferred the local file,
+    the panel would offer one `fridge_guard` and the engine would evaluate
+    another, and the divergence would surface as a manifest nobody had edited
+    behaving as though they had.
+    """
+    root = _checkout(tmp_path, _document())
+    user = _user_packs(tmp_path, _document(slots=[_declared(name="larder_shelf")]))
+    extended = adapter_units.with_declared_slots(
+        root,
+        _installed("fridge_guard"),
+        vocabulary.Vocabulary.load(ROOT),
+        user_root=user,
+    )
+    assert FRIDGE in extended.slots
+    assert "larder_shelf" not in extended.slots

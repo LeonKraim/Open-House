@@ -78,16 +78,26 @@ mirrors them in TypeScript).
 | `open_house/modules/uninstall` | `{room_id, pack}` | `RoomDetail` |
 | `open_house/modules/set_enabled` | `{room_id, pack, enabled}` | `InstalledModule` |
 | `open_house/modules/list` | `{}` | `{ modules: InstalledModule[] }` |
+| `open_house/modules/set_behaviour_enabled` | `{room_id, pack, behaviour, enabled}` | `InstalledModule` |
+| `open_house/modules/set_behaviour_scope` | `{room_id, pack, behaviour, scope}` | `InstalledModule` |
+| `open_house/modules/set_behaviour_priority` | `{room_id, pack, behaviour, priority}` | `InstalledModule` |
+| `open_house/modules/set_slot` | `{room_id, pack, slot, entity_id, label}` | `InstalledModule` |
+| `open_house/modules/hosted` | `{}` | `{ modules: HostedModule[] }` |
+| `open_house/modules/read` | `{kind, key?, text?, bindings?}` | `{ module, inputs, candidates, hosted, slots, rooms }` |
+| `open_house/modules/host` | `{kind, key?, text?, title, room_id?, bindings?, outputs?, settings?}` | `{ module, modules: HostedModule[] }` |
+| `open_house/modules/settings` | `{module, bindings?, settings?}` | `{ module, modules: HostedModule[] }` |
+| `open_house/house/scope` | `{}` | `HouseScope` |
 | `open_house/profiles/list` | `{}` | `{ profiles: ProfileRef[] }` |
 | `open_house/profiles/activate` | `{room_id, axis, profile}` | `RoomDetail` |
+| `open_house/profiles/activate_house` | `{profile}` | `{ profiles: ProfileRef[] }` |
+| `open_house/profiles/deactivate_house` | `{}` | `{ profiles: ProfileRef[] }` |
+| `open_house/profiles/export` | `{profile?}` | `{ document }` |
+| `open_house/profiles/import` | `{document, replace?}` | `{ imported, replaced, profiles }` |
 | `open_house/store/index` | `{}` | `{ entries, generated_at, cached }` |
 | `open_house/store/install` | `{pack, tier}` | `{ installed }` |
 | `open_house/activity/list` | `{limit?, before?}` | `{ entries: DecisionLogEntry[] }` |
 | `open_house/activity/subscribe` | `{}` | stream of `ActivityStreamEvent` |
 | `open_house/health/list` | `{}` | `{ issues: HealthIssue[] }` |
-| `open_house/import_export/export` | `{}` | `ExportDocument` |
-| `open_house/import_export/preview` | `{document}` | `ImportPreview` |
-| `open_house/import_export/apply` | `{document, snapshot: true}` | `{ applied, snapshot_id, diff }` |
 | `open_house/dashboard/generate` | `{room_id}` | `{ created, url_path }` |
 
 Three rules the panel relies on:
@@ -107,6 +117,28 @@ carrying `satisfiable`, `missing_slots` and `conflicts`, and `options/get`
 returns the high-level options as a JSON Schema. That is deliberate -- the
 engine that decides "can this room satisfy this pack" must be the only
 implementation of it.
+
+**Hosting a blueprint is not translating it.** `modules/*` read any automation
+or blueprint, keep it as a real Home Assistant automation, and add Open House's
+own placement, outputs and settings around it. A module sits in a room
+(`room_id`, empty meaning the whole house), and one of the answers the import
+screen offers for an input is a **slot** -- a role the module's room binds,
+rather than one device. `ModuleBinding` is therefore
+`{kind: "literal" | "entity" | "output" | "slot"}`, and `modules/read` answers
+with the two vocabularies that answer needs: `slots` (every name this house
+carries) and `rooms` (where the module may sit). A slot the room has not bound
+yet is not an error: the module is hosted, `automation_id` stays empty, and
+`HostedModule.slots` names the device it is waiting for. Binding that slot in
+the room creates the automation.
+
+What `modules/read` offers to publish is read out of the source: its `variables:`,
+its entity inputs, its `response_variable`s, and its **service calls that drive a
+device** -- named `service:<service_id>` for the devices the call acted on and
+`service:<service_id>:<data key>` for each value it set. A candidate that reads a
+value only one action produces carries `after`, the path to that action, and
+`publish_actions` inserts its publisher immediately after it rather than at the
+end of the automation. `template` says the expression is already template text
+(a call's `'{{ brightness | int }}'` is) and must not be wrapped in `{{ }}` again.
 
 ## Layout
 

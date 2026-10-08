@@ -250,3 +250,80 @@ def test_the_panel_and_the_integration_agree_on_every_command() -> None:
         f"the integration registers and the panel never sends: "
         f"{sorted(integration - panel)}"
     )
+
+
+def test_the_panel_and_the_integration_agree_on_every_refusal() -> None:
+    """The two refusal tables name the same codes.
+
+    A code is a string compared in branches on both sides of the wire, so a
+    spelling that differs by one character is not a build error on either side
+    -- it is a branch that never runs. That is the same class of defect as the
+    duplicate schema key above, caught by the same kind of reading: the codes as
+    text, from the file that spells each one once.
+    """
+    server_source = (paths.ROOT / WS_MODULE).read_text(encoding="utf-8")
+    server = set(
+        re.findall(
+            r"^(?:UNAUTHORIZED|NOT_SETUP|NOT_READY|NOT_FOUND|"
+            r'INVALID_FORMAT|STALE_PAGE) = "([^"]+)"',
+            server_source,
+            re.MULTILINE,
+        )
+    )
+    assert server, f"{WS_MODULE}: no refusal codes are declared"
+    panel_source = (paths.ROOT / PROTOCOL).read_text(encoding="utf-8")
+    block = panel_source.split("export const REFUSALS", 1)
+    assert len(block) == 2, f"{PROTOCOL} no longer declares REFUSALS"
+    panel = set(re.findall(r'^\s+\w+: "([^"]+)"', block[1], re.MULTILINE))
+    assert panel, f"{PROTOCOL}: REFUSALS names no code"
+    assert panel == server, (
+        f"the panel knows and the server never sends: {sorted(panel - server)}; "
+        f"the server sends and the panel never knows: {sorted(server - panel)}"
+    )
+
+
+#: The commands a page sends the revision it was rendered from with.
+#:
+#: Every one of them writes state a house profile governs, so a write decided
+#: against a profile that has since been replaced has to be refused rather than
+#: applied. The list is here, spelled out, because the alternative is deriving
+#: it -- and a derivation would agree with whatever the server happens to do,
+#: including "forgot to guard this one".
+REVISION_COMMANDS = frozenset(
+    {
+        "ROOM_BIND",
+        "ROOM_REPLACE",
+        "ROOM_UNBIND",
+        "ROOM_OPTIONS_SET",
+        "MODULES_SETTINGS",
+        "MODULES_DETACH",
+        "MODULES_CONFIG_SWITCH",
+    }
+)
+
+
+def test_every_command_whose_write_can_be_stale_carries_a_revision() -> None:
+    """The guarded commands are exactly the ones that write profile-governed state.
+
+    Read off the schemas rather than the handlers, because the schema is what
+    Home Assistant validates against: a `revision` the handler reads but the
+    schema does not declare is a field stripped before the handler ever sees it,
+    which is a guard that can never fire.
+    """
+    takes_revision: set[str] = set()
+    for _line, schema, _handler in _schemas(_module()):
+        keys = {_schema_key(key) for key in schema.keys if key is not None}
+        if "revision" not in keys:
+            continue
+        for key, value in zip(schema.keys, schema.values, strict=True):
+            if key is None or _schema_key(key) != _TYPE_KEY:
+                continue
+            assert isinstance(value, ast.Name), (
+                "a schema that takes a revision names its command by a literal, "
+                "which this test cannot read back to the constant it stands for"
+            )
+            takes_revision.add(value.id)
+    assert takes_revision == set(REVISION_COMMANDS), (
+        f"guarded but not expected: {sorted(takes_revision - REVISION_COMMANDS)}; "
+        f"expected but not guarded: {sorted(REVISION_COMMANDS - takes_revision)}"
+    )

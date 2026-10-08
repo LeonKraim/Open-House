@@ -445,3 +445,61 @@ def test_every_built_in_default_reads_as_the_kind_its_reader_wants() -> None:
         assert _resolver().resolve(key, _HOUSE).integer() >= 0
     for key in (PRESENCE_QUIET_TIMEOUT_KEY, RATE_LIMIT_WINDOW_KEY):
         assert _resolver().resolve(key, _HOUSE).number() > 0.0
+
+
+# --------------------------------------------------------------------------
+# Writing a persistent layer (the layers below the override)
+# --------------------------------------------------------------------------
+
+
+def test_a_house_setting_can_be_set_and_cleared_without_rebuilding() -> None:
+    """The writer changes what the running resolver answers, and clearing reveals.
+
+    This is the pair a live session needs: it records a person's setting in its
+    own document *and* has to make the engine it is already holding decide by it.
+    A resolver that could only be told these at construction would leave a
+    cleared value standing at the layer it was set on.
+    """
+    resolver = _resolver(builtin={_KEY: "builtin"})
+    assert resolver.resolve(_KEY, _HOUSE).value == "builtin"
+
+    resolver.set_house_setting(_KEY, "house")
+    assert resolver.resolve(_KEY, _HOUSE).layer is Layer.HOUSE
+
+    resolver.clear_house_setting(_KEY)
+    assert resolver.resolve(_KEY, _HOUSE).layer is Layer.BUILTIN
+
+
+def test_a_room_setting_can_be_set_and_cleared_without_rebuilding() -> None:
+    resolver = _resolver(builtin={_KEY: "builtin"}, house={_KEY: "house"})
+
+    resolver.set_room_setting(_KEY, "kitchen", "kitchen")
+    assert resolver.resolve(_KEY, _KITCHEN).value == "kitchen"
+    # The house's other rooms are untouched by a room's own layer.
+    assert resolver.resolve(_KEY, _BEDROOM).value == "house"
+
+    resolver.clear_room_setting(_KEY, "kitchen")
+    assert resolver.resolve(_KEY, _KITCHEN).value == "house"
+
+
+def test_setting_a_room_the_resolver_was_not_built_with_still_answers() -> None:
+    """A room added since the build gets a layer rather than a failure.
+
+    A caller that has just added a room has a session that will rebuild in a
+    moment; until it does, the resolver still has to answer for the new room.
+    """
+    resolver = _resolver(builtin={_KEY: "builtin"})
+
+    resolver.set_room_setting(_KEY, "study", "study")
+
+    assert resolver.resolve(_KEY, RoomScope("study")).value == "study"
+
+
+def test_clearing_a_setting_that_was_never_set_is_not_a_failure() -> None:
+    """Both clear methods are safe to call for a value only one layer held."""
+    resolver = _resolver(builtin={_KEY: "builtin"})
+
+    resolver.clear_house_setting(_KEY)
+    resolver.clear_room_setting(_KEY, "kitchen")
+
+    assert resolver.resolve(_KEY, _HOUSE).layer is Layer.BUILTIN

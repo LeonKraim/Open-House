@@ -114,6 +114,169 @@ def reach_key(slot: str) -> str:
     return f"reach.{slot}"
 
 
+#: The two facts a module can hold about one of its own slots, as the suffix each
+#: resolves under. Named constants rather than literals at the two call sites,
+#: because a reader and a writer that spell a key differently are a setting that
+#: silently never resolves -- the failure mode this whole namespace exists to make
+#: impossible.
+SLOT_ENTITY = "entity"
+SLOT_LABEL = "label"
+
+#: Which *part* of a split slot this module is on (`ha_adapter.slot_parts`),
+#: empty for the slot itself. A person divides a role into parts when two modules
+#: must not share one device -- and each module says which part it is on here,
+#: beside the device it reaches, because "which device" and "which part of the
+#: role" are the same act of configuration seen from two sides.
+SLOT_PART = "part"
+
+#: The facts that make up a **rule**: the logic a person has put on a slot row so
+#: that logic -- and not a device they picked -- decides what the slot is pointed
+#: at. `ha_adapter.slot_rules` says what a rule is; `slot_rule_key` below says why
+#: it is several keys and not one.
+#:
+#: Each kind uses the ones it needs and leaves the others absent, which is what
+#: "the absence of a fact is not a fact" means here: a template writes a kind and
+#: a payload, a script adds the list of what starts it, and a condition adds the
+#: device it gates -- and no kind carries a key belonging to another kind.
+SLOT_RULE_KIND = "kind"
+SLOT_RULE_VALUE = "rule"
+SLOT_RULE_WHEN = "when"
+SLOT_RULE_DEVICE = "device"
+
+#: Every fact a rule may be recorded under, in the order a reader wants them.
+SLOT_RULE_FACTS = (
+    SLOT_RULE_KIND,
+    SLOT_RULE_VALUE,
+    SLOT_RULE_WHEN,
+    SLOT_RULE_DEVICE,
+)
+
+
+def slot_key(slot: str, fact: str) -> str:
+    """The option key for one *fact* about one of a pack's slots.
+
+    The unprefixed half, for the reason `reach_key` gives: `option_key(pack,
+    slot_key(slot, fact))` is the whole key. The `slot.` prefix keeps these clear
+    of the pack's declared `options` -- a manifest option keyed `light_group` and
+    a slot named `light_group` are two different things, and one flat namespace
+    without the prefix would make them collide the first time an author used a
+    slot name for an option.
+
+    A fact rather than a flat pair of keys because there is more than one: which
+    entity this module reaches, and what this module calls it. Both are settings
+    about one slot, so both belong under its name rather than beside it, and a
+    third -- a per-module unit, a per-module polarity -- would extend this table
+    rather than inventing a namespace.
+    """
+    return f"slot.{slot}.{fact}"
+
+
+def slot_entity_key(slot: str) -> str:
+    """The key the entity one module reaches through `slot` resolves under.
+
+    Empty means "no override", which is the whole of the clearing story: the
+    resolver reads a string, and a value that is not one -- an empty string, a
+    number, a `None` written by hand -- is the absence of an override rather than
+    a bad one. That is what lets the panel clear an override with the same single
+    write that sets one, and what keeps a house that never set one on the room's
+    own binding.
+    """
+    return slot_key(slot, SLOT_ENTITY)
+
+
+def slot_label_key(slot: str) -> str:
+    """The key the name one module gives `slot` resolves under.
+
+    Display-only, and deliberately so: the engine never reads it, because a name
+    a person chose is not a fact about a device. It is a setting rather than a
+    field on the module's record for the same reason the entity is -- a name per
+    module per room is a household's answer, not a fact about the pack, and the
+    record is written once at install and never again.
+    """
+    return slot_key(slot, SLOT_LABEL)
+
+
+def slot_part_key(slot: str) -> str:
+    """The key the *part* of `slot` one module is on resolves under.
+
+    Empty means the slot itself -- the whole role -- which is the state of every
+    module in a house that has split nothing, and so the reading every record
+    written before slots could be split still gets.
+
+    Recorded as a name rather than as the part's binding key (`light_group__a`)
+    because the record is about *this module's* answer to a role, and the key is
+    what the answer resolves to: a record holding the key would have to be
+    rewritten by whoever renames a part, and a module would then be pointing at a
+    name the house no longer carries. A part removed while a module names it is
+    refused for the same reason (`live_modules`), rather than left dangling.
+    """
+    return slot_key(slot, SLOT_PART)
+
+
+def slot_rule_key(slot: str, fact: str) -> str:
+    """The key one of a rule's facts about `slot` resolves under.
+
+    **Several keys rather than one object**, for the reason a slot's entity and
+    its label are two keys rather than one stored row: a setting is one JSON value
+    in one layer, and a rule is several facts of different shapes -- a kind that is
+    a word, a payload whose shape the kind decides, a list of entities to watch, a
+    device a condition gates. Recorded as separate keys, each is written, forgotten
+    and captured on its own, and the *absence of a kind* is what "no rule" means --
+    the same "the absence of a decision is not a decision" rule the switches
+    follow, and why clearing a rule is one empty write rather than as many
+    deletions as the last rule happened to warrant.
+    (`ha_adapter.slot_rules.rule_from` reads them, and refuses the one shape that
+    would be half a rule: a kind that is set with nothing under it.)
+
+    A *fact* per key and not one nested object even for the two a condition writes
+    together, because a nested object would have to be un-nested by a reader, and
+    a condition's config is itself a mapping that carries a `condition` key of its
+    own -- so `{"condition": {...}}` and a bare condition config are the same JSON,
+    and no reader could tell which it had.
+    """
+    return slot_key(slot, fact)
+
+
+def slot_rule_kind_key(slot: str) -> str:
+    """The key the *kind* of a slot's rule resolves under (`template`, ...)."""
+    return slot_rule_key(slot, SLOT_RULE_KIND)
+
+
+def slot_rule_value_key(slot: str) -> str:
+    """The key a slot rule's *payload* resolves under, shaped by its kind.
+
+    A template's text, a condition's builder config, a flow's entity, a script's
+    id -- four shapes under one key, which is honest rather than tidy: the key
+    names the fact ("the logic"), and the kind beside it names the shape.
+    """
+    return slot_rule_key(slot, SLOT_RULE_VALUE)
+
+
+def slot_rule_when_key(slot: str) -> str:
+    """The key the entities a *script* rule watches resolve under.
+
+    Only a script needs it -- a template is watched by Home Assistant's own
+    tracker and a flow by the entity it writes -- and it is recorded rather than
+    derived because there is nothing to derive it from: a script runs when
+    something calls it, and *what* calls it is a person's answer.
+    """
+    return slot_rule_key(slot, SLOT_RULE_WHEN)
+
+
+def slot_rule_device_key(slot: str) -> str:
+    """The key the device a *condition* rule gates resolves under.
+
+    Only a condition needs it, and it is the fact that makes a condition a rule
+    about a slot rather than a rule about nothing: a condition answers yes or no
+    and never an entity, so *which* device it is asking about has to be said
+    somewhere. It is recorded here rather than left in the row's own
+    `slot.<slot>.entity` because that key is what the module acts through, and the
+    watcher has to be able to empty it while the condition is false -- a pick still
+    sitting in it would put the gated device back the moment the condition failed.
+    """
+    return slot_rule_key(slot, SLOT_RULE_DEVICE)
+
+
 def option_rows(document: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
     """A manifest's declared options, in the order it wrote them.
 
@@ -186,6 +349,18 @@ class DeclaredBehaviour:
     #: the language's convenience: the reader of this dataclass is looking for
     #: the manifest's clause and finds its name with one word appended.
     for_option: str | None = None
+    #: The packs this behaviour holds off while it is on, from
+    #: `pack-manifest/1.4.0`'s `suppresses` clause: the module-level override a
+    #: pack is allowed to place over another pack, and nothing more.
+    #:
+    #: Deliberately a list of *packs* and not of behaviours or settings. What a
+    #: suppression can do is switch a whole module off -- the one act that is
+    #: clearly temporary and clearly reversible, because nothing about the target
+    #: changes -- and a clause that reached further would be a pack editing
+    #: another pack's configuration, which installation cannot undo. An empty
+    #: tuple is every behaviour that suppresses nothing, which is all of 1.2.0
+    #: and most of 1.3.0.
+    suppresses: tuple[str, ...] = ()
     #: The options the pack declares, as the manifest's own rows -- one mapping
     #: per entry of the top-level `options` array, unchanged. The unit carries
     #: them because the *manifest document* is not part of an installed record
@@ -446,6 +621,7 @@ def declared_units(
                 match=_names(row.get("match")),
                 mode=_clause_name(row.get("mode")),
                 for_option=_clause_name(row.get("for")),
+                suppresses=_names(row.get("suppresses")),
                 priority=_priority(row.get("priority"), default_priority),
                 scope=_scope(row.get("scope")),
             )
