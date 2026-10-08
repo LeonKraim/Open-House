@@ -310,6 +310,14 @@ class ModuleDefinition:
                 "module": binding.module,
                 "key": binding.key,
                 "slot": binding.slot,
+                # Where the slot is looked up, and which part of it. Both are
+                # `InputBinding`'s own fields and both narrow *which device* the
+                # answer resolves to, so a row that left either out is a room
+                # answered with a different device than the one it named --
+                # `modules._bindings_json` writes them for the same reason, and
+                # the two serialisers are read by the same `InputBinding(**row)`.
+                "scope": binding.scope,
+                "part": binding.part,
             }
         conditions = {
             name: condition

@@ -1961,6 +1961,22 @@ def _bindings_json(
             "module": binding.module,
             "key": binding.key,
             "slot": binding.slot,
+            # Where the slot is looked up: the module's own room, or the whole
+            # house. Left out, a **global slot** answer -- "the *house's*
+            # lights" -- is read back as a room answer and resolves to whatever
+            # the room bound under that name, which is a different device in
+            # every room and a silent one: the card that set it goes on saying
+            # "whole house", because the card is reading the form, not the
+            # record.
+            "scope": binding.scope,
+            # Which part of a split slot, when the answer narrowed to one
+            # (`slot_parts`). Written for the reason the docstring gives: a part
+            # left out here is a part the module is rebuilt without, so the
+            # automation would act on the whole slot's device while the card that
+            # set it went on showing the part -- two different devices under one
+            # name, and the answer to "which one is live" visible from neither
+            # screen.
+            "part": binding.part,
         }
         for name, binding in (bindings or {}).items()
     }
