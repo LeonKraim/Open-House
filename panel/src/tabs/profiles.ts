@@ -34,6 +34,7 @@ export class ProfilesTab extends OpenHouseElement {
     fileLabel: { state: true },
     renaming: { state: true },
     typed: { state: true },
+    confirmingDelete: { state: true },
   };
 
   private profiles: ProfileRef[] = [];
@@ -48,6 +49,8 @@ export class ProfilesTab extends OpenHouseElement {
   /** The profile the rename sheet is renaming, and the name typed into it. */
   private renaming: string | null = null;
   private typed = "";
+  /** The profile whose Delete button has been armed, or `null` for none. */
+  private confirmingDelete: string | null = null;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -115,7 +118,15 @@ export class ProfilesTab extends OpenHouseElement {
   private async rename(from: string): Promise<void> {
     const to = this.typed.trim();
     if (to === "") return;
-    await this.act(() => this.requireClient().renameProfile(from, to));
+    // **The sheet only closes on a rename that happened.** `act` reports its
+    // success rather than swallowing a refusal into the banner: a sheet that
+    // slid away over a name that never changed looks like it worked, and the
+    // only clue -- a banner behind it -- is the one thing the person is not
+    // looking at.
+    const renamed = await this.act(() =>
+      this.requireClient().renameProfile(from, to),
+    );
+    if (!renamed) return;
     this.renaming = null;
     this.typed = "";
   }
@@ -128,23 +139,35 @@ export class ProfilesTab extends OpenHouseElement {
    * rather than only on the one in force.
    */
   private async drop(name: string): Promise<void> {
-    await this.act(() => this.requireClient().removeProfile(name));
+    if (await this.act(() => this.requireClient().removeProfile(name))) {
+      this.confirmingDelete = null;
+    }
   }
 
-  /** One write, one reload, one place the busy flag is cleared. */
-  private async act(write: () => Promise<unknown>): Promise<void> {
+  /**
+   * One write, one reload, one place the busy flag is cleared.
+   *
+   * Returns whether the write landed, because a caller that closes a sheet on
+   * the far side of it is a caller that has to know: a refusal is caught here
+   * into the banner, and a sheet that closed anyway would be a sheet that said
+   * a refused rename had worked.
+   */
+  private async act(write: () => Promise<unknown>): Promise<boolean> {
     this.busy = true;
     this.error = null;
     this.notice = null;
+    let done = false;
     try {
       await write();
       await this.load();
+      done = true;
     } catch (error) {
       this.error = this.toError(error);
     } finally {
       this.busy = false;
       this.requestUpdate();
     }
+    return done;
   }
 
   /**
@@ -212,6 +235,11 @@ export class ProfilesTab extends OpenHouseElement {
         document,
         this.replaceOnImport,
       );
+      // **Unticked again once it has been used.** Overwriting a profile this
+      // house already holds is a decision about *one* file, and a box left
+      // ticked would let the next import silently replace profiles nobody
+      // meant to touch. The Store tab's import resets its twin the same way.
+      this.replaceOnImport = false;
       this.notice = this.importNotice(result.imported, result.replaced);
       await this.load();
     } catch (error) {
@@ -302,7 +330,10 @@ export class ProfilesTab extends OpenHouseElement {
           not remember what every room was on before.
         </p>
         ${houseProfiles.length === 0
-          ? html`<p class="muted">No house profiles installed.</p>`
+          ? html`<p class="muted">
+              No house profiles yet. Capture one from the House tab, or import a
+              profile file below.
+            </p>`
           : html`<div class="grid">
               ${houseProfiles.map(
                 (profile) => html`<div class="card">
@@ -352,17 +383,42 @@ export class ProfilesTab extends OpenHouseElement {
                         </button>`
                       : nothing}
                     ${this.admin
-                      ? html`<button
-                          type="button"
-                          class="icon danger"
-                          data-profile-delete=${profile.name}
-                          ?disabled=${this.busy}
-                          @click=${() => void this.drop(profile.name)}
-                        >
-                          Delete
-                        </button>`
+                      ? this.confirmingDelete === profile.name
+                        ? html`<button
+                              type="button"
+                              class="icon danger"
+                              data-profile-delete=${profile.name}
+                              ?disabled=${this.busy}
+                              @click=${() => void this.drop(profile.name)}
+                            >
+                              Yes, delete it
+                            </button>
+                            <button
+                              type="button"
+                              class="icon"
+                              @click=${() => (this.confirmingDelete = null)}
+                            >
+                              Cancel
+                            </button>`
+                        : html`<button
+                            type="button"
+                            class="icon danger"
+                            data-profile-delete=${profile.name}
+                            ?disabled=${this.busy}
+                            @click=${() => (this.confirmingDelete = profile.name)}
+                          >
+                            Delete
+                          </button>`
                       : nothing}
                   </div>
+                  ${this.confirmingDelete === profile.name
+                    ? html`<p class="help">
+                        Deleting this drops the profile: every room selection
+                        naming it goes with it, and the house comes off it if it
+                        was in force. Import a file of the same name to bring it
+                        back.
+                      </p>`
+                    : nothing}
                 </div>`,
               )}
             </div>`}
@@ -383,7 +439,9 @@ export class ProfilesTab extends OpenHouseElement {
           on different axes.
         </p>
         ${roomProfiles.length === 0
-          ? html`<p class="muted">No room profiles installed.</p>`
+          ? html`<p class="muted">
+              No room profiles yet. Import a profile file below to add one.
+            </p>`
           : html`<table>
               <thead>
                 <tr>
@@ -424,7 +482,10 @@ export class ProfilesTab extends OpenHouseElement {
       <div class="card">
         <h2>Rooms</h2>
         ${this.rooms.length === 0
-          ? html`<p class="muted">No rooms.</p>`
+          ? html`<p class="muted">
+              No rooms yet -- add one from the Rooms tab, and it appears here
+              with the profile it is on.
+            </p>`
           : this.rooms.map((room) => this.renderRoom(room))}
       </div>
 

@@ -42,9 +42,11 @@ returns.
 from __future__ import annotations
 
 import contextlib
+import os
 import socket
 from collections import deque
 from dataclasses import dataclass
+from secrets import token_hex
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -191,6 +193,17 @@ def _read_length(sock: socket.socket) -> int:
     raise MqttError("the remaining length ran past four bytes, which no packet may")
 
 
+def _client_id() -> str:
+    """A client id this process is not already using.
+
+    The broker's id, not ours: it is what a session is keyed by, so two clients
+    sharing one cannot both be connected. The pid separates concurrent processes
+    -- the fleet and a stimulus run are two -- and the token separates two in one
+    process, where a pid alone would still collide.
+    """
+    return f"open-house-{os.getpid()}-{token_hex(4)}"
+
+
 class Client:
     """One connection to one broker, good for one publish and subscribe loop.
 
@@ -206,13 +219,24 @@ class Client:
         host: str,
         port: int = 1883,
         *,
-        client_id: str = "open-house-fleet",
+        client_id: str | None = None,
         keepalive: int = 60,
         timeout: float = 10.0,
     ) -> None:
         self.host = host
         self.port = port
-        self.client_id = client_id
+        # **A name of its own, unless the caller names it.** A broker keys a
+        # session by the client id, and takes a second connection under the same
+        # id as the *first* one going away: it disconnects the older. That is the
+        # right rule for a device reconnecting after a network blip and the wrong
+        # one for a test bench, where the fleet, the stimulus and a `--clear` run
+        # are three different clients on one machine. Given one shared id, the
+        # first of them to connect -- usually the fleet, which serves for the
+        # whole run -- was dropped the moment any other tool touched the broker,
+        # and it saw that as the broker closing on it mid-loop. So the default is
+        # derived rather than fixed, and a caller that wants a name of its own
+        # still passes one.
+        self.client_id = client_id or _client_id()
         self.keepalive = keepalive
         self.timeout = timeout
         self._socket: socket.socket | None = None

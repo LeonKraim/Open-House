@@ -56,6 +56,19 @@ export class ScriptEditor extends OpenHouseElement {
   declare label: string;
   open = false;
 
+  /**
+   * Bumped by everything that opens or closes the editor, and read back after
+   * the await in `reload`.
+   *
+   * Reload is the only act here that takes *two* renders -- the frame has to go
+   * before it can come back -- and the gap between them is long enough for a
+   * person's finger. `Done` pressed in that gap closes the editor, and the
+   * continuation would then open it again over whatever they had gone back to.
+   * So each open and each close stamps a new number, and a reload that finds the
+   * stamp moved on is a reload somebody has already answered.
+   */
+  private generation = 0;
+
   constructor() {
     super();
     this.script = "";
@@ -81,6 +94,7 @@ export class ScriptEditor extends OpenHouseElement {
       this.close();
       return;
     }
+    this.generation += 1;
     this.open = true;
   }
 
@@ -95,6 +109,7 @@ export class ScriptEditor extends OpenHouseElement {
    */
   private close(): void {
     const script_id = this.frameScript();
+    this.generation += 1;
     this.open = false;
     if (!script_id) return;
     this.dispatchEvent(
@@ -127,10 +142,18 @@ export class ScriptEditor extends OpenHouseElement {
     }
   }
 
-  /** Reload the frame by taking it away and putting it back. */
+  /**
+   * Reload the frame by taking it away and putting it back.
+   *
+   * The stamp is read before the frame goes and checked after it is back: what
+   * the await is waiting for is the render that removed it, and anything that
+   * opened or closed the editor in between has answered this already.
+   */
   private async reload(): Promise<void> {
+    const generation = ++this.generation;
     this.open = false;
     await this.updateComplete;
+    if (this.generation !== generation) return;
     this.open = true;
   }
 

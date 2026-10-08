@@ -125,12 +125,12 @@ registry rather than a network. The consequence is that the whole thing works on
 a house with no internet, and that installing the panel is copying one built
 bundle into the instance's `www/` directory.
 
-The panel has nine tabs. *Overview* answers "is anything wrong, and what is the
+The panel has eight tabs. *Overview* answers "is anything wrong, and what is the
 house doing" from one command, so a room list and a health count are never shown
 from two moments taken apart. *Rooms* is the list and the way into one room's
 settings page; the settings page lists every slot the room type provides, with
 each bound device's live state and health and the actions to rebind or replace
-it. *Modules* answers "what is installed, and where", across every room, because
+it. *House* answers "what is installed, and where", across every room, because
 the question a person has when something behaves oddly is a question about the
 house and not yet about a room. *Profiles* shows what profiles exist and lets an
 admin move a room onto one, keeping the room and the axis together so a person
@@ -138,14 +138,16 @@ can see which profiles can run at once; it is also where a profile leaves the
 house and comes back — one profile from its own row, or every profile at once, as
 a file that imports anywhere. The house-wide and per-room backup files are gone:
 a document is a profile and only a profile, so what travels between houses is the
-thing a person actually authored. *Store* browses the pack catalog and installs
-from it. *Activity* is the engine's decision log as "why did this happen", with
-each row expandable to read the reason in full; its live stream is subscribed on
-request rather than on mount. *Health* is the list of what is wrong right now — a
-dead sensor, a required slot unbound, a pack whose engine range no longer matches
-— each linking to the room it concerns. *Dev* is the workbench that is not for a
-person's house at all: it turns an automation into a module and a module back
-into automations, which is why it sits last and why it is admin-only.
+thing a person actually authored. *Activity* is the engine's decision log as "why
+did this happen", with each row expandable to read the reason in full; its live
+stream is subscribed on request rather than on mount. *Health* is the list of what
+is wrong right now — a dead sensor, a required slot unbound, a pack whose engine
+range no longer matches — each linking to the room it concerns. *Store* browses
+the pack catalog and installs from it, and *Dev* is the workbench that is not for
+a person's house at all: it turns an automation into a module and a module back
+into automations. Those last two are administrator work rather than a person's
+house, so they sit at the end of the strip as one pair, where an admin's tab strip
+reads the same as everyone else's with the tools appended rather than interleaved.
 
 **A profile for the whole house, at the top of the Rooms tab.** *Whole house*
 sits above the room list, and on the House tab as well, because it is the one

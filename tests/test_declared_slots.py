@@ -746,3 +746,19 @@ def test_a_name_the_index_publishes_is_not_replaced_by_a_local_one(
     )
     assert FRIDGE in extended.slots
     assert "larder_shelf" not in extended.slots
+
+
+def test_installed_units_are_ordered_by_pack_name(tmp_path: Path) -> None:
+    """The engine reads units in the order this returns, so two runs must agree.
+
+    The decision log is read in evaluation order, so two runs over one installed
+    set have to visit the atoms in the same sequence or a replay stops being a
+    replay. The registry index is in the order a *publisher* added entries, which
+    is not that sequence, so this reader sorts by pack name -- the same order its
+    sibling `with_declared_slots` already sorts by, for the same reason.
+    """
+    root = _checkout(tmp_path, _document(name="zebra"), _document(name="alpha"))
+    units = adapter_units.installed_units(
+        root, _installed("zebra", "alpha"), vocabulary.Vocabulary.load(ROOT)
+    )
+    assert [unit.id for unit in units] == ["alpha.warn", "zebra.warn"]

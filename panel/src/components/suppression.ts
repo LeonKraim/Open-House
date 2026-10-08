@@ -22,10 +22,35 @@
  * holder's own switch or the suppressing atom's, and a button on the target's
  * card that reached into another module's card would be this panel editing
  * something a person cannot see. The sentence names where to go instead.
+ *
+ * This is also where the *banner* itself is spelled, because this file was the
+ * first thing on the panel to need one and four screens now draw the same mark:
+ * the suppression panel, a refused detach, and a hosted module's error, warning
+ * and notice lines.
  */
 
 import { html, type TemplateResult } from "lit";
 import type { InstalledModule } from "../api/models.ts";
+
+/** The three weights a banner is drawn in, and the only three there are. */
+export type BannerKind = "error" | "warn" | "info";
+
+/**
+ * One banner, spelled once.
+ *
+ * Four screens drew the same three kinds of message and had drifted on the one
+ * thing that is not a style choice: the `role`. An `error` is an assertion that
+ * something did not happen -- `role="alert"`, so it is announced when it
+ * appears -- while a warning or a notice is a status to be read at leisure, and
+ * announcing those interrupts whatever the person was doing. What sits inside
+ * the banner is the caller's, because that is the part that is actually about
+ * the thing being reported.
+ */
+export function banner(kind: BannerKind, content: unknown): TemplateResult {
+  return html`<div class="banner ${kind}" role=${kind === "error" ? "alert" : "status"}>
+    ${content}
+  </div>`;
+}
 
 /**
  * The red panel for a suppressed module, or `null` when it is not suppressed.
@@ -40,20 +65,21 @@ export function suppressionBanner(
   if (module.suppressed_by === null) return null;
   const holder = module.suppressed_by;
   const atom = module.suppressed_behaviour;
-  return html`<div class="banner error" role="status">
-    <strong>This module is currently suppressed by the ${holder} module.</strong>
-    ${atom
-      ? html`<p class="help" style="margin:6px 0 0">
-          The ${holder} module's
-          <code>${atom}</code>
-          behaviour is holding it off. This is a temporary override: nothing about
-          ${module.name || module.pack} has been changed, and its own switch is
-          still where you left it. It comes back the moment ${holder} stops.
-        </p>`
-      : html`<p class="help" style="margin:6px 0 0">
-          Another module is holding it off. This is a temporary override: nothing
-          about ${module.name || module.pack} has been changed, and it comes back
-          the moment ${holder} stops.
-        </p>`}
-  </div>`;
+  return banner(
+    "error",
+    html`<strong>This module is currently suppressed by the ${holder} module.</strong>
+      ${atom
+        ? html`<p class="help" style="margin:6px 0 0">
+            The ${holder} module's
+            <code>${atom}</code>
+            behaviour is holding it off. This is a temporary override: nothing about
+            ${module.name || module.pack} has been changed, and its own switch is
+            still where you left it. It comes back the moment ${holder} stops.
+          </p>`
+        : html`<p class="help" style="margin:6px 0 0">
+            Another module is holding it off. This is a temporary override: nothing
+            about ${module.name || module.pack} has been changed, and it comes back
+            the moment ${holder} stops.
+          </p>`}`,
+  );
 }

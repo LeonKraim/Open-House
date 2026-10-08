@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial
+from functools import lru_cache, partial
 from pathlib import Path
 from typing import cast
 
@@ -223,15 +223,106 @@ class Vocabulary:
         constructor would make the file that happens to be read first decide
         which of a tree's faults is reported, which is a fact about this method
         rather than about the tree.
+
+        **The read is cached on the root's stamp, and the stamp is why.** The
+        vocabulary is frozen and `hashable`-in-spirit, and the tree it is read
+        from cannot change while Home Assistant runs -- the repository is
+        bind-mounted read-only and nothing writes `schemas/` at runtime -- so a
+        rebuild that read the six artifacts again would be six `read_text` calls
+        on the event loop. A rebuild is not rare: it happens on every binding
+        write, every slot-rule write, every module build and every room edit
+        (`ha_adapter.live.LiveSession.rebuild` through
+        `ha_adapter.composition.build_live_house`), each one a websocket command
+        on that loop, where Home Assistant reports a blocking read and asks a
+        person to file a bug about it. `_loaded` remembers the projection against
+        `_artifacts_stamp(root)`, which is what makes the cache safe rather than
+        merely fast: the key carries each artifact's identity (modification time
+        and size, `_stamp`) as well as the root, so a checkout whose artifacts
+        *do* change on disk -- a developer's, mid-edit -- is re-read while one
+        nobody touched is not. A bare `lru_cache` on the path would serve that
+        checkout stale forever, which is the reason this is a stamp and not the
+        path alone (`ha_adapter.live_modules._stamp` is the same discipline and
+        the same rationale). A failed read is not cached: `lru_cache` stores no
+        exception, so a tree that is missing an artifact today and complete
+        tomorrow is read again.
         """
-        return cls(
-            slots=_slots(root, _load_yaml(root, _SLOTS_PATH)),
-            house_slots=_house_slots(root, _load_yaml(root, _ROOM_TYPES_PATH)),
-            house_schema=_schema(root, _HOUSE_SCHEMA_PATH),
-            mode_schema=_schema(root, _MODE_SCHEMA_PATH),
-            engine_api_version=_engine_api_version(root),
-            pack_policy=_pack_policy(root, _load_yaml(root, _PACK_POLICY_PATH)),
-        )
+        return _loaded(root, _artifacts_stamp(root))
+
+
+#: How many distinct (root, stamp) vocabularies a process remembers. A checkout
+#: has one root and a test suite has a few; the bound is only so a process that
+#: walked many fixture trees cannot grow without limit, mirroring
+#: `ha_adapter.live_modules._CACHE`.
+_CACHE = 256
+
+
+@lru_cache(maxsize=_CACHE)
+def _loaded(root: Path, stamp: tuple[tuple[str, int, int], ...]) -> Vocabulary:
+    """The projection at `stamp`, already known to be the tree's current stamp.
+
+    The key is `(root, stamp)` rather than the root alone for the reason
+    `Vocabulary.load` gives: a stamp carries the artifacts' identity, so a tree
+    that changes on disk is re-read. `stamp` is not read here at all -- it exists
+    only to be part of the cache key -- which is the property that separates this
+    from a check: it is the *reader* that must run at most once per stamp, not a
+    validator that must agree with one.
+    """
+    return Vocabulary(
+        slots=_slots(root, _load_yaml(root, _SLOTS_PATH)),
+        house_slots=_house_slots(root, _load_yaml(root, _ROOM_TYPES_PATH)),
+        house_schema=_schema(root, _HOUSE_SCHEMA_PATH),
+        mode_schema=_schema(root, _MODE_SCHEMA_PATH),
+        engine_api_version=_engine_api_version(root),
+        pack_policy=_pack_policy(root, _load_yaml(root, _PACK_POLICY_PATH)),
+    )
+
+
+def _stamp(path: Path) -> tuple[int, int]:
+    """A path's modification time and size, or zeros when it cannot be read.
+
+    A metadata read and not a content read, which is why this is a stamp and not
+    a hash: Home Assistant's loop detector reports `read_text` and does not
+    report `stat`, so a stamp lets a rebuild decide "the same tree" without the
+    blocking call the cache exists to avoid (`ha_adapter.live_modules._stamp`
+    states the same, for the same readers).
+    """
+    try:
+        info = path.stat()
+    except OSError:
+        return (0, 0)
+    return (info.st_mtime_ns, info.st_size)
+
+
+def _artifacts_stamp(root: Path) -> tuple[tuple[str, int, int], ...]:
+    """A stamp over every artifact a `Vocabulary.load` reads, under `root`.
+
+    The five fixed files, plus the `engine-api` directory and each version file
+    in it: the API version is the *current* one of a concept, so adding,
+    removing or editing a version file changes which version a load reaches, and
+    a stamp that named only the directory would miss an edit to a file already
+    in it (`load_versions` reads each version's `supersedes` to answer
+    current-ness, so its *content* is part of the vocabulary). The order is
+    fixed -- files, then the directory, then its versions sorted -- so two stamps
+    of one tree compare equal and one stamp of two trees does not.
+    """
+    stamped: list[tuple[str, int, int]] = []
+    for parts in (
+        _SLOTS_PATH,
+        _ROOM_TYPES_PATH,
+        _PACK_POLICY_PATH,
+        _HOUSE_SCHEMA_PATH,
+        _MODE_SCHEMA_PATH,
+    ):
+        stamped.append((Path(*parts).as_posix(), *_stamp(root.joinpath(*parts))))
+    directory = root.joinpath(*_ENGINE_API_DIR)
+    stamped.append((Path(*_ENGINE_API_DIR).as_posix(), *_stamp(directory)))
+    try:
+        versions = sorted(directory.glob("*.json"))
+    except OSError:  # pragma: no cover - an unreadable directory is a stamp miss
+        versions = []
+    for version in versions:
+        stamped.append((version.relative_to(root).as_posix(), *_stamp(version)))
+    return tuple(stamped)
 
 
 @dataclass(frozen=True, slots=True)

@@ -33,6 +33,7 @@
 
 import { html, nothing, type TemplateResult } from "lit";
 import { OpenHouseElement } from "../base.ts";
+import { banner } from "./suppression.ts";
 
 /** What a finished detach tells the row it was pressed on. */
 export interface DetachedDetail {
@@ -340,7 +341,7 @@ export class DetachCast extends OpenHouseElement {
         </p>
       </div>
       ${this.renderTrigger()}
-      ${this.failed ? html`<div class="banner error" role="alert">${this.failed}</div>` : nothing}
+      ${this.failed ? banner("error", this.failed) : nothing}
       <div class="row wrap">
         <button type="button" data-detach-confirm ?disabled=${this.busy} @click=${() => void this.detach()}>
           ${this.busy ? "Detaching..." : "Make it a module"}

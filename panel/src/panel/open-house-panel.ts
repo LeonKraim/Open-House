@@ -14,7 +14,7 @@
  * a courtesy, not a control.
  */
 
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { OpenHouseElement } from "../base.ts";
 import { OpenHouseClient } from "../api/client.ts";
 import { isConnected } from "../api/connection.ts";
@@ -54,6 +54,28 @@ import "../components/schema-form.ts";
  */
 const TAB_PARAM = "open_house_tab";
 const ROOM_PARAM = "open_house_room";
+
+/**
+ * One line about each tab, shown on hover and to a screen reader.
+ *
+ * A tab's label is one word, and a strip of one-word labels leans on a person
+ * already knowing the panel. The hint is the sentence that would otherwise be
+ * the first paragraph of the tab: "Rooms" is where a room is configured, not
+ * that a room exists; "Dev" is where an automation becomes a module. It is a
+ * `title` on the button rather than a second visible line, because the strip is
+ * already the width of the screen and a strip of two-line tabs reads worse than
+ * one of one-line tabs with an answer on hover.
+ */
+const TAB_HINT: Record<TabId, string> = {
+  overview: "Is anything wrong, and what the house is doing",
+  rooms: "Your rooms, and the settings inside each",
+  house: "The whole house: its slots, its modules, its settings",
+  profiles: "Which profile each room is on, and files to carry one",
+  activity: "Why the house did what it did",
+  health: "What is wrong right now, and where to fix it",
+  store: "Install packs, and the modules you have made",
+  dev: "Turn an automation or a blueprint into a module",
+};
 
 function recalled(key: string): string | null {
   try {
@@ -109,6 +131,13 @@ export class OpenHousePanel extends OpenHouseElement {
     ...OpenHouseElement.properties,
     activeTab: { state: true },
     navigateRoomId: { state: true },
+    // Reactive rather than plain fields with a hand-called `requestUpdate()`:
+    // `loadCapabilities` sets all three, and the one path that skipped the call
+    // -- losing the client -- is exactly the path whose state a person needs to
+    // see. As reactive properties the assignment is the re-render.
+    capabilities: { state: true },
+    capabilityError: { state: true },
+    loadingCapabilities: { state: true },
   };
 
   private activeTab: TabId = tabFromUrl();
@@ -117,24 +146,41 @@ export class OpenHousePanel extends OpenHouseElement {
   private loadingCapabilities = false;
   /** A room another tab asked Rooms to open. */
   private navigateRoomId = roomFromUrl();
-  /** The last `hass` the client was built from, to rebuild only on change. */
-  private clientHass: unknown = null;
+  /** The connection the client was built from, to rebuild only on a real change. */
+  private clientConnection: unknown = undefined;
   /** Whether the automation editor's strings have been asked for yet. */
   private askedForConfigStrings = false;
 
   override updated(changed: Map<string, unknown>): void {
-    // `hass` is reassigned by the frontend on every state change, so compare by
-    // identity: rebuilding the client each time would be cheap but pointless,
-    // and skipping the rebuild entirely would leave a client pointed at a stale
-    // `hass` after a reconnect.
-    if (changed.has("hass") && this.hass !== this.clientHass) {
-      this.clientHass = this.hass;
-      this.client = isConnected(this.hass)
-        ? OpenHouseClient.fromHass(this.hass)
-        : null;
-      void this.loadCapabilities();
-    }
+    if (changed.has("hass")) this.syncClient();
     void this.loadConfigStrings();
+  }
+
+  /**
+   * Build the client from `hass`, but only when something actually moved.
+   *
+   * The frontend hands the panel a **new `hass` object on every state change in
+   * the house** -- every light coming on, every sensor updating -- so comparing
+   * `hass` by identity is always true and rebuilt the client and re-fetched the
+   * capabilities on each one. The comment here used to claim the identity guard
+   * prevented that, and it did the opposite; the guard was the bug.
+   *
+   * What moves on a reconnection is the *connection*, so that is the key: the
+   * client is rebuilt when there was none and a connection is now available, and
+   * when the connection is a different one from the last. For a `hass` that
+   * carries only `callWS` (no `connection`), the key stays `undefined` and the
+   * upstream `callWS` is stable, so the client is built once and kept.
+   */
+  private syncClient(): void {
+    const connected = isConnected(this.hass);
+    const connection = this.hass?.connection;
+    if (this.client !== null && connected && connection === this.clientConnection) {
+      return;
+    }
+    if (this.client === null && !connected) return;
+    this.clientConnection = connection;
+    this.client = connected ? OpenHouseClient.fromHass(this.hass) : null;
+    void this.loadCapabilities();
   }
 
   /**
@@ -166,14 +212,27 @@ export class OpenHousePanel extends OpenHouseElement {
       await ask.call(this.hass, "config");
       this.requestUpdate();
     } catch {
-      // A frontend that will not answer is not a panel that cannot run.
+      // A frontend that will not answer is not a panel that cannot run -- but a
+      // failure here is not final either: the flag is cleared so a *transient*
+      // one (a reload in flight) is retried on the next update. Left set, one
+      // rejected call would leave the automation editor's labels blank for the
+      // life of the page.
+      this.askedForConfigStrings = false;
     }
   }
 
   private async loadCapabilities(): Promise<void> {
-    if (!this.client) return;
+    if (!this.client) {
+      // The client is gone -- a dropped connection, or a reconnect before the
+      // next one is built. Clearing the capabilities is what makes the
+      // connection banner say so; leaving them would keep drawing the last
+      // house's answers over a body with no client to fill it.
+      this.capabilities = null;
+      this.capabilityError = null;
+      this.loadingCapabilities = false;
+      return;
+    }
     this.loadingCapabilities = true;
-    this.requestUpdate();
     try {
       this.capabilities = await this.client.capabilities();
       this.admin = this.capabilities.admin;
@@ -188,7 +247,6 @@ export class OpenHousePanel extends OpenHouseElement {
       this.capabilityError = this.toError(error);
     } finally {
       this.loadingCapabilities = false;
-      this.requestUpdate();
     }
   }
 
@@ -246,40 +304,121 @@ export class OpenHousePanel extends OpenHouseElement {
     window.dispatchEvent(new Event("location-changed"));
   }
 
+  /**
+   * Move between tabs with the keyboard, the way a tab strip is read.
+   *
+   * The strip is a `role="tablist"`, and the pattern that role promises is the
+   * one where the whole strip is a single Tab stop and the arrows move inside
+   * it. Tabbing onto each tab in turn is the alternative, and it makes the tab
+   * bar a detour a keyboard user walks through before reaching the screen. So
+   * only the selected tab is in the tab order (`renderTabButton`), and Left and
+   * Right -- and Home and End -- move the selection and the focus together, so
+   * what is highlighted is what is active.
+   */
+  private onTabKeys(event: KeyboardEvent): void {
+    const tabs = tabsFor(this.admin);
+    const index = tabs.findIndex((tab) => tab.id === this.activeTab);
+    if (index < 0) return;
+    let next: number;
+    switch (event.key) {
+      case "ArrowRight":
+        next = (index + 1) % tabs.length;
+        break;
+      case "ArrowLeft":
+        next = (index - 1 + tabs.length) % tabs.length;
+        break;
+      case "Home":
+        next = 0;
+        break;
+      case "End":
+        next = tabs.length - 1;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    const target = tabs[next];
+    if (!target) return;
+    this.selectTab(target.id);
+    // The button is rebuilt by the render the selection just scheduled, so the
+    // focus is moved once that has happened rather than onto the node that is
+    // about to be replaced.
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLButtonElement>(`#tab-${target.id}`)?.focus();
+    });
+  }
+
   protected override render(): TemplateResult {
     return html`
       <style>
         ${sharedStyles}
       </style>
       <div class="layout" @navigate=${this.onNavigate} @repair=${this.onRepair}>
-        ${this.renderHeader()}
-        ${this.renderConnectionState()}
-        <nav class="tabs" role="tablist">
-          ${tabsFor(this.admin).map((tab) => this.renderTabButton(tab))}
-        </nav>
-        <div style="margin-top:16px">${this.renderActiveTab()}</div>
+        ${this.renderHeader()} ${this.renderConnectionState()}
+        ${this.renderContent()}
       </div>
     `;
   }
 
+  /**
+   * Who is looking, and which engine they are looking at.
+   *
+   * One muted line under the panel's name. It is drawn from the *server's*
+   * answer rather than from `hass.user`: the server is the authority on what
+   * this person may do, and the frontend's idea of the user can be stale, which
+   * is the same reason the panel asks the server at all. Before the capabilities
+   * land the line is empty rather than guessed at.
+   */
+  private identity(): string {
+    if (!this.capabilities) return "";
+    const role = this.admin ? "administrator" : "limited view";
+    return `${this.capabilities.user_name} · ${role} · engine API ${this.capabilities.engine_api}`;
+  }
+
+  /**
+   * The app bar: the panel's name, and nothing competing with the page title.
+   *
+   * It holds *no heading*. Every tab draws its own `<h1>` -- "Rooms", "Health",
+   * the house's own name on Overview -- and the header used to draw a second
+   * `<h1>Open House</h1>` above it, so every screen led with "Open House" and
+   * then, a line later, the name of the screen. Two top-level headings, the
+   * first of them the same on every screen, is a page a screen reader has to
+   * navigate past and a page a person reads as duplicated. The name is kept as a
+   * modest brand mark -- the panel still says who it is -- and the single `<h1>`
+   * belongs to the screen that is showing.
+   */
   private renderHeader(): TemplateResult {
-    const language = this.hass?.language ?? "en";
-    return html`<div class="row spread wrap" style="margin-bottom:8px">
-      <div class="stack">
-        <h1>Open House</h1>
-        <p class="muted small">
-          ${this.capabilities?.user_name
-            ? this.admin
-              ? `${this.capabilities.user_name} (administrator)`
-              : `${this.capabilities.user_name} (limited view)`
-            : ""}
-          ${this.capabilities
-            ? `· engine API ${this.capabilities.engine_api}`
-            : ""}
-        </p>
-      </div>
-      <span class="visually-hidden">Language ${language}</span>
-    </div>`;
+    return html`<header class="app-bar">
+      <span class="brand">Open House</span>
+      ${this.capabilities
+        ? html`<p class="muted small">${this.identity()}</p>`
+        : nothing}
+    </header>`;
+  }
+
+  /**
+   * The tab strip and the screen it selects, once there is a house to show.
+   *
+   * Withheld until the capabilities are known, for two reasons that are one:
+   * the tab strip is drawn from the answer (a non-admin sees fewer tabs), so
+   * drawing it early draws the wrong one; and the body's own loader ran beside
+   * the connection loader, putting two spinners on one screen with nothing
+   * between them. So the panel is the connection state alone until the server
+   * has answered, and the tabs appear with the content they belong to.
+   */
+  private renderContent(): TemplateResult {
+    if (this.capabilityError || !this.capabilities) return html``;
+    return html`
+      <nav
+        class="tabs"
+        role="tablist"
+        aria-label="Open House sections"
+        @keydown=${this.onTabKeys}
+      >
+        ${tabsFor(this.admin).map((tab) => this.renderTabButton(tab))}
+      </nav>
+      <div class="tab-body">${this.renderActiveTab()}</div>
+    `;
   }
 
   private renderConnectionState(): TemplateResult {
@@ -324,11 +463,13 @@ export class OpenHousePanel extends OpenHouseElement {
       class="tab"
       role="tab"
       id="tab-${tab.id}"
+      title=${TAB_HINT[tab.id] ?? ""}
+      tabindex=${selected ? 0 : -1}
       aria-selected=${selected ? "true" : "false"}
       aria-controls="panel-${tab.id}"
       @click=${() => this.selectTab(tab.id)}
     >
-      <ha-icon icon=${tab.iconName}></ha-icon>
+      <ha-icon icon=${tab.iconName} aria-hidden="true"></ha-icon>
       ${tab.label}
     </button>`;
   }
@@ -345,7 +486,17 @@ export class OpenHousePanel extends OpenHouseElement {
    * one constructed is constructed with it.
    */
   private renderActiveTab(): TemplateResult {
-    if (!this.client) return html``;
+    if (!this.client) {
+      // A drawn message rather than nothing. Losing the client -- a dropped
+      // websocket, a reconnect mid-flight -- used to leave a header and a tab
+      // bar over a blank body, which reads as a panel that has silently stopped
+      // working rather than as one waiting to reconnect.
+      return this.emptyState(
+        "Not connected",
+        "Open House has no connection to Home Assistant. This screen returns " +
+          "when the connection does.",
+      );
+    }
     const tab = TABS.find((entry) => entry.id === this.activeTab) ?? TABS[0]!;
     const roomId =
       tab.id === "rooms" && this.navigateRoomId ? this.navigateRoomId : "";

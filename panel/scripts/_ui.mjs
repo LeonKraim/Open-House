@@ -36,14 +36,30 @@ const DEEP = `
   window.__slotLabel = (row) => {
     const cell = row.querySelector('td')
     if (!cell) return ''
+    // The label is the cell's first span -- the slot's own name -- and not the
+    // cell. Everything drawn after it is about the slot rather than the name of
+    // it: the required/optional chip, the modules that reach it, and the parts
+    // block with its "Add a part" control. Reading the whole cell put "Add a
+    // part" on the end of every label, so a walk binding a row called "Fan"
+    // looked for "Fan Add a part", found none, and reported the house unbound.
+    //
     // The chip is taken out rather than the label being read around it: the
-    // cell is a div.stack holding a span that holds the label *and* the chip,
-    // so reading the cell's own text nodes returned nothing at all -- every
-    // row's label read as the empty string, and a walk that binds by label
-    // bound whichever row it found first, twenty-nine times over.
-    const copy = cell.cloneNode(true)
+    // span holds the label *and* the chip, so reading the span's own text nodes
+    // returned "Light group required", which compares equal to no label at all.
+    const first = cell.querySelector('div.stack > span') ?? cell
+    const copy = first.cloneNode(true)
     for (const chip of copy.querySelectorAll('.chip')) chip.remove()
-    return (copy.textContent ?? '').replace(/\s+/g, ' ').trim()
+    // The backslash is doubled because this whole block is one plain template
+    // literal: inside one, an escape the language does not know is dropped and
+    // the character itself is kept, so a single backslash here ships as a bare
+    // \`s\` and the expression reads /s+/g -- *replace every run of the letter s
+    // with a space*. It did: "Ambient light sensor" arrived at the walk as
+    // "Ambient light  en or", every room's every row failed to match the label
+    // it was looked up by, and a 117-failure run was read as a broken panel
+    // when the panel had rendered the label correctly all along. Any regex that
+    // belongs to the *page* rather than to this file has to survive the same
+    // trip, so it is written for the page's eyes and not for the editor's.
+    return (copy.textContent ?? '').replace(/\\s+/g, ' ').trim()
   }
   window.__boots = Number(sessionStorage.getItem('probeBoots') ?? 0) + 1
   sessionStorage.setItem('probeBoots', String(window.__boots))

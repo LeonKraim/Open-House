@@ -15,7 +15,7 @@ import { test } from "node:test";
 
 import { OpenHouseClient } from "./client.ts";
 import { COMMANDS, REFUSALS } from "./protocol.ts";
-import { PanelError, type HaConnection, type HassLike } from "./connection.ts";
+import { PanelError, isConnected, type HaConnection, type HassLike } from "./connection.ts";
 
 interface Call {
   type: string;
@@ -186,6 +186,55 @@ test("availableModules unwraps the offers key", async () => {
     type: "open_house/rooms/available_modules",
     room_id: "bedroom",
   });
+});
+
+test("a command sent with no connection fails at once rather than hanging", async () => {
+  // **A `hass` with neither `callWS` nor a connection must refuse, not wait.**
+  // A promise that never settles is the worst of the two: the screen sits on
+  // "Reading the house..." for ever and nothing says why. `sendMessage` rejects
+  // with `unavailable`, which is the code the banner knows a sentence for.
+  const client = new OpenHouseClient({});
+  await assert.rejects(
+    () => client.rooms(),
+    (error: unknown) => error instanceof PanelError && error.code === "unavailable",
+  );
+});
+
+test("isConnected agrees with sendMessage about a connection that is not there", () => {
+  // The two read the same object and used to answer differently: `isConnected`
+  // tested `!== undefined`, so a `hass` whose `connection` was present-but-null
+  // counted as connected -- and the panel, which uses this to decide whether to
+  // draw its screens, rendered everything and then failed every command.
+  assert.equal(isConnected({ connection: null as unknown as HaConnection }), false);
+  assert.equal(isConnected({}), false);
+  assert.equal(isConnected(undefined), false);
+  assert.equal(isConnected({ callWS: async <T>(_m: Record<string, unknown>) => ({}) as T }), true);
+});
+
+test("editing a module sends every one of the module's answers", async () => {
+  // The server's schema is `vol.Required` for these six: a missing one is read
+  // as "this module now answers nothing" and every room running it is rebuilt
+  // that way. The client's type said they were optional, so a caller could leave
+  // one out and never know the field was owed.
+  const { hass, calls } = fakeHass(() => ({ module: "dim_a_light", modules: [], store: [] }));
+  await new OpenHouseClient(hass).modulesEdit(
+    "dim_a_light",
+    "text",
+    { text: "- trigger: []" },
+    {
+      title: "Dim a light",
+      bindings: {},
+      outputs: [],
+      settings: [],
+      casts: {},
+      flows: [],
+      scripts: {},
+    },
+  );
+  const sent = calls[0] ?? {};
+  for (const field of ["bindings", "outputs", "settings", "casts", "flows", "scripts"]) {
+    assert.ok(field in sent, `modules/edit was sent without ${field}`);
+  }
 });
 
 test("subscribeActivity refuses when there is no connection", async () => {

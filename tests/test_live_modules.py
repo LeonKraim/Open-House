@@ -24,6 +24,7 @@ import pytest
 import yaml
 
 from engine.behaviours import enable_key, module_enable_key
+from engine.behaviours.declared import option_key, slot_part_key
 from engine.binding import HouseScope, RoomScope
 from engine.decision_log import Outcome
 from engine.install import InstalledSet
@@ -1529,3 +1530,81 @@ def test_a_module_carries_the_settings_it_owns() -> None:
     assert not any(
         key.startswith("module.fridge_guard.") is False for key in module["option_keys"]
     )
+
+
+def test_a_recorded_part_the_vocabulary_lacks_falls_back_to_the_slot() -> None:
+    """A stale part name must not crash the tick for the whole house.
+
+    A module's part is a setting (`module.<pack>.slot.<slot>.part`) while the part
+    itself is a vocabulary word grown from the parts record, so a record that has
+    since dropped the part leaves the module naming a slot key the vocabulary does
+    not carry. The engine's reader must fall back to the slot itself: otherwise
+    `resolve_slot` raises `UnknownSlotError`, nothing between the reader and
+    `Engine.tick` catches it, and one stale row kills every tick for the house,
+    forever -- where `slot_parts_of` already drops the same name, so the panel
+    reads fine over a house whose tick is dead.
+    """
+    session = _session()
+    live_modules.install(session, EXAMPLE, room_id="hall")
+    live_modules.set_enabled(session, room_id="hall", pack="example_pack", enabled=True)
+    # A part nothing has split, so `light_group__a` is in no vocabulary.
+    session.remember_setting(
+        option_key("example_pack", slot_part_key("light_group")),
+        RoomScope("hall"),
+        "a",
+    )
+    assert "light_group__a" not in session.engine.house.vocabulary.slots
+
+    records = session.tick()
+
+    assert any(record.actor == MOTION_UNIT for record in records)
+
+
+def test_slots_reached_by_orders_its_keys() -> None:
+    """The rows are ordered by slot name, not by a set's iteration order.
+
+    The join is built by collecting slot names into a set per module, and a set
+    yields in an order that depends on hashing rather than on the house -- so a
+    table built straight off it reshuffles between reads. Every sibling in this
+    module sorts; this one sorts too, so two calls over one house answer the same
+    table with the rows in the same places.
+    """
+    session = _session()
+    live_modules.install(session, KITCHEN, room_id="hall")
+
+    reached = live_modules.slots_reached_by(session, room_id="hall")
+
+    assert len(reached) > 3
+    assert list(reached) == sorted(reached)
+
+
+def test_a_user_pack_edited_in_place_is_read_again(tmp_path: Path) -> None:
+    """An edit saved under the same name is re-read, not served from the scan.
+
+    The Dev tab writes one file per pack, and editing it in place does not move
+    the *directory's* stamp -- only the file's own. A scan that cached the loaded
+    manifests against the directory's stamp would keep serving the copy from
+    before the edit, so a change a person saved would not reach the panel until
+    the process restarted. The scan caches the file *names* and each read is
+    stamped on the file itself, so the edit is seen while the scan is not re-run.
+    """
+    root = tmp_path / "checkout"
+    root.mkdir()
+    user = tmp_path / "config" / "open_house" / "packs"
+    user.mkdir(parents=True)
+    authored = user / "authored.yaml"
+    authored.write_bytes(
+        generated_pack(tmp_path, "authored", version="1.0.0").read_bytes()
+    )
+
+    first = live_modules._published(root, user)
+    assert [(row.name, row.version) for row in first] == [("authored", "1.0.0")]
+
+    # The same file, rewritten in place: no add and no remove, so the directory's
+    # stamp stands and only the file's moves.
+    authored.write_bytes(
+        generated_pack(tmp_path, "authored", version="2.0.0").read_bytes()
+    )
+
+    again = live_modules._published(root, user)
+    assert [(row.name, row.version) for row in again] == [("authored", "2.0.0")]

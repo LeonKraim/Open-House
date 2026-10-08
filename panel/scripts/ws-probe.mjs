@@ -203,8 +203,15 @@ async function main() {
   const profiles = await api.call("open_house/profiles/list");
   check("profiles/list succeeds", profiles.success === true, JSON.stringify(profiles.error ?? ""));
 
-  const exported = await api.call("open_house/import_export/export");
-  check("import_export/export succeeds", exported.success === true, JSON.stringify(exported.error ?? ""));
+  // `open_house/import_export/export` was asserted here and is a command that
+  // exists nowhere: not in `websocket_api.py`, not in `api/protocol.ts`. The
+  // assertion therefore failed on every run and reported `unknown_command` --
+  // a real answer to a made-up question, and one that reads as a broken export
+  // rather than as a probe pointed at a name nobody ever registered. The
+  // command a person actually reaches for is the profile export, which with no
+  // profile named answers the whole set as one document.
+  const exported = await api.call("open_house/profiles/export");
+  check("profiles/export succeeds", exported.success === true, JSON.stringify(exported.error ?? ""));
   if (exported.success) {
     const document = exported.result?.document ?? exported.result;
     check("export carries a document", isMapping(document), typeof document);

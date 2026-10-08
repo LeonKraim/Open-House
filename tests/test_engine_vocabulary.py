@@ -529,6 +529,94 @@ def test_a_missing_policy_fails_naming_the_file(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
+# The read is cached on the tree's stamp, and the cache is not stale
+# --------------------------------------------------------------------------
+
+
+def test_a_tree_nobody_touched_is_read_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second `Vocabulary.load` of one tree reads no artifact at all.
+
+    This is the defect's claim in the form it can be checked: a rebuild on Home
+    Assistant's event loop read all six artifacts again, and the fix is that a
+    rebuild of a tree nobody touched does not. The proof is a spy on
+    `Path.read_text`, installed *after* the first load so the cache is already
+    warm, which the second load must not call. Falsified by the pre-fix
+    `Vocabulary.load`, which read the tree every time -- the spy would catch the
+    artifacts and the identity assertion would fail with it.
+    """
+    root = _tree(tmp_path)
+    first = Vocabulary.load(root)
+    reads: list[Path] = []
+    real_read_text = Path.read_text
+
+    def counting(self: Path, *args: object, **kwargs: object) -> str:
+        reads.append(self)
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting)
+    second = Vocabulary.load(root)
+    assert second is first
+    assert reads == [], "a warm load re-read the tree"
+
+
+def test_a_republished_artifact_is_re_read(tmp_path: Path) -> None:
+    """A tree that changes on disk is read again, not served from the cache.
+
+    The other half of the caching claim, and the one a bare `lru_cache` on the
+    path would fail: the key carries the artifacts' stamp, so an edited file is
+    seen and served fresh. The edited policy differs in length as well as in
+    contents, so the size in the stamp moves even where a filesystem's
+    modification-time resolution is coarse -- the test does not rest on two
+    writes within one tick landing on different nanoseconds.
+    """
+    root = _tree(tmp_path)
+    before = Vocabulary.load(root)
+    assert before.pack_policy.default_priority == 7
+    write(
+        root,
+        "catalog/pack-policy.yaml",
+        _FIXTURE_POLICY.replace("default_priority: 7", "default_priority: 70"),
+    )
+    after = Vocabulary.load(root)
+    assert after is not before
+    assert after.pack_policy.default_priority == 70
+
+
+def test_an_added_api_version_is_re_read(tmp_path: Path) -> None:
+    """A version file *appearing* is a change the stamp sees.
+
+    The API version is not one of the five fixed files, so its artifacts are the
+    directory and each version in it: the directory's own stamp catches a file
+    added or removed, and each version file's stamp catches an edit to one
+    already present. This is the added-file half, which a cache keyed on the five
+    files alone would miss -- it would answer the old version for a tree that had
+    published a successor.
+    """
+    root = _tree(tmp_path)
+    assert Vocabulary.load(root).engine_api_version == _FIXTURE_API_VERSION
+    write_version(root, "engine-api", _FIXTURE_API_SUCCESSOR, _FIXTURE_API_VERSION)
+    assert Vocabulary.load(root).engine_api_version == _FIXTURE_API_SUCCESSOR
+
+
+def test_a_failed_load_is_not_remembered(tmp_path: Path) -> None:
+    """A tree that was incomplete and is completed loads: a failure is no cache.
+
+    `lru_cache` stores no exception, and the stamp moves when the missing
+    artifact is written, so a checkout that was missing a file and then had it
+    restored -- or a fixture completed between two loads -- is read rather than
+    handed the earlier failure. Falsified by any cache that remembered the
+    exception, or a stamp that did not carry the appearing file.
+    """
+    root = _tree(tmp_path, policy=None)
+    with pytest.raises(MissingArtifactError):
+        Vocabulary.load(root)
+    write(root, "catalog/pack-policy.yaml", _FIXTURE_POLICY)
+    assert Vocabulary.load(root).pack_policy.default_priority == 7
+
+
+# --------------------------------------------------------------------------
 # The engine's own source
 # --------------------------------------------------------------------------
 

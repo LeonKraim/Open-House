@@ -90,8 +90,11 @@ const activityAction = (page, known) =>
       if (seen.includes(text)) continue;
       // `applied` is the panel's word for the engine's `Outcome.ACTED`; the
       // translation is `ha_adapter/live_export.py`'s, and the wire carries the
-      // panel's word, so this is the word to match.
-      if (!/\bapplied\b/.test(text)) continue;
+      // panel's word, so this is the word to match. It is matched without case
+      // because the chip draws it the way the outcome menu spells it -- the
+      // filter and the row it found are one outcome seen twice, and a person who
+      // filtered for "Applied" then meets the same word on the row.
+      if (!/\bapplied\b/i.test(text)) continue;
       const why = [...row.querySelectorAll("button")].find(
         (b) => (b.textContent ?? "").trim() === "Why",
       );
@@ -138,6 +141,15 @@ const activityRows = (page) =>
  * slot answers "No match", and the walk cannot tell that apart from a panel
  * that failed to look.
  */
+/**
+ * The room the walk gives something to do, and then walks into.
+ *
+ * One room, named once: the module that acts is installed here and the motion
+ * that makes it act is here, so "the room acted" is a claim about a module this
+ * walk installed rather than about whatever an earlier run left behind.
+ */
+const ACT_ROOM = "Living Room";
+
 const ROOMS = [
   { name: "Kitchen", type: "kitchen" },
   { name: "Living Room", type: "living_room" },
@@ -353,67 +365,125 @@ async function bindSlot(page, slotLabel) {
   await page.mouse.click(at.x, at.y);
   await sleep(1200);
 
-  // The picker is found by its own markup -- the search box it is the only one
-  // to carry -- and not by a `role="group"`, which stopped naming it: two other
-  // groups on this page answer to that now (the "where it applies" menu, and
-  // the import screen's own checks), so the walk was reading a group with no
-  // candidates in it and pressing a Cancel button it does not have.
+  // A page that has gone stale draws a backdrop over itself and refuses every
+  // click, so "the picker did not open" and "this page has stopped answering"
+  // are the same reading from here -- and they are not the same finding. Said
+  // apart, because a hundred rooms' worth of "no-picker" is what a walk reports
+  // for a page that was inert from the second row on.
+  const inert = await page.evaluate(
+    () => window.__deepAll(".stale-backdrop").length > 0,
+  );
+  if (inert) return "stale-page";
+
+  // The picker is found by the heading it carries -- "Bind the X slot", or
+  // "Replace the X slot" where something is already bound -- and it is Home
+  // Assistant's own entity selector that does the choosing now. It used to be
+  // this panel's own list with a "Search devices" box and a "Use this" button,
+  // and the walk went on looking for those after the page stopped drawing them:
+  // every row in every room came back "no-picker", which is a sentence about the
+  // harness that reads exactly like a sentence about the panel.
+  //
+  // The choosing itself is driven without a real click, and says so: the search
+  // box and the list are HA's component, and driving those is a test of that
+  // component rather than of this panel. What the panel owns is the
+  // `value-changed` event dispatched below, which is exactly what the selector
+  // emits when a person picks something; everything after it -- the write, the
+  // row, its status -- is read back off the server's own answer. `_roomwide.mjs`
+  // takes the same step for the same reason.
   const picker = await page.evaluate(() => {
-    const card = window
-      .__deepAll("open-house-room-settings .card")
-      .find((c) => c.querySelector('input[aria-label="Search devices"]'));
+    const card = window.__deepAll("open-house-room-settings .card").find((c) => {
+      const words = window.__deepText(c).replace(/\s+/g, " ").trim();
+      return words.startsWith("Bind the") || words.startsWith("Replace the");
+    });
     if (!card) return { present: false };
-    const at = (label) => {
-      const button = [...card.querySelectorAll("button")].find(
-        (b) => (b.textContent ?? "").trim() === label,
-      );
-      if (!button) return null;
-      button.scrollIntoView({ block: "center" });
-      const r = button.getBoundingClientRect();
-      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-    };
-    const buttons = [...card.querySelectorAll("button")].map((b) =>
-      (b.textContent ?? "").trim(),
+    const selector = window.__deepAll("ha-selector", card)[0];
+    // The panel's own candidate list, in the panel's own order: the row's room
+    // first and the rest of the house behind it. Taking its first entry is what
+    // "pick the first thing offered" meant, without a second guess at what the
+    // selector happens to be showing.
+    const includes = selector?.selector?.entity?.include_entities ?? [];
+    const cancel = [...card.querySelectorAll("button")].find(
+      (b) => (b.textContent ?? "").trim() === "Cancel",
     );
+    let at = null;
+    if (cancel) {
+      cancel.scrollIntoView({ block: "center" });
+      const r = cancel.getBoundingClientRect();
+      at = { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    }
     return {
       present: true,
-      uses: buttons.filter((b) => b === "Use this").length,
-      use: at("Use this"),
-      cancel: at("Cancel"),
+      offers: [...includes],
+      cancel: at,
       text: window.__deepText(card).replace(/\s+/g, " ").trim().slice(0, 160),
     };
   });
   if (!picker.present) return "no-picker";
-  if (picker.uses === 0) {
+  if (picker.offers.length === 0) {
     if (picker.cancel) await page.mouse.click(picker.cancel.x, picker.cancel.y);
     return `no-candidate (${picker.text})`;
   }
-  await page.mouse.click(picker.use.x, picker.use.y);
+  await page.evaluate((entity) => {
+    const card = window.__deepAll("open-house-room-settings .card").find((c) => {
+      const words = window.__deepText(c).replace(/\s+/g, " ").trim();
+      return words.startsWith("Bind the") || words.startsWith("Replace the");
+    });
+    const selector = window.__deepAll("ha-selector", card)[0];
+    selector.dispatchEvent(
+      new CustomEvent("value-changed", {
+        detail: { value: entity },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }, picker.offers[0]);
   await sleep(2200);
   return "bound";
 }
 
-/** The Modules card of the open room: one row per installed module. */
+/** The Modules card of the open room: one row per installed module.
+ *
+ * One card per module, found by the pack it names (`data-pack`) rather than by
+ * a card headed "Modules": that heading is a section, and the cards under it
+ * each name their pack, which is also how a person's click is aimed at one
+ * module rather than at a position in a list.
+ *
+ * **Read off the card itself, because the card has no table.** This used to
+ * look for `tbody tr` inside each card and for the module's list of behaviours
+ * in `.chip`s. Neither exists any more: a module card is a heading, a button or
+ * two, a `<details>` whose summary counts the behaviours, and one `label.toggle`
+ * per behaviour. The old reader therefore matched nothing and returned an empty
+ * list for a room that held a module -- which did not fail the walk, it made it
+ * *skip* the whole "turn the module on and watch it change" half of step 4
+ * without a word, because an empty list reads the same as "the room already had
+ * none". A walk that silently drops its most important assertion is worse than
+ * one that fails it.
+ *
+ * Only the room's own cards count. A module placed in the whole house is drawn
+ * on this page too, so that a person can see it reaches here, but it carries no
+ * Remove button -- it is not this room's to remove -- and the steps below are
+ * about what this room was given. The Remove button is what tells the two
+ * apart -- it is offered only for a module this room can remove.
+ */
 const moduleRows = (page) =>
   page.evaluate(() => {
-    // One card per module, found by the pack it names rather than by a card
-    // headed "Modules": that heading is a section now, and the cards under it
-    // are the room's own -- each `data-pack`, which is also how a person's
-    // click is aimed at one module rather than at a position in a list.
+    const buttons = (card) =>
+      [...card.querySelectorAll("button")].map((b) => (b.textContent ?? "").trim());
     const cards = window.__deepAll("open-house-room-settings .card[data-pack]");
     if (cards.length === 0) return null;
-    return cards.flatMap((card) =>
-      [...card.querySelectorAll("tbody tr")].map((row) => ({
-        text: window.__deepText(row).replace(/\s+/g, " ").trim(),
-        actions: [...row.querySelectorAll("button")].map((b) =>
-          (b.textContent ?? "").trim(),
-        ),
-        behaviours: [...row.querySelectorAll(".chip")].map((chip) => ({
-          label: (chip.textContent ?? "").trim(),
-          on: chip.classList.contains("ok"),
+    return cards
+      .filter((card) => buttons(card).includes("Remove"))
+      .map((card) => ({
+        pack: card.dataset.pack,
+        text: window.__deepText(card.querySelector("h3") ?? card)
+          .replace(/\s+/g, " ")
+          .trim(),
+        actions: buttons(card),
+        behaviours: [...card.querySelectorAll("label.toggle")].map((label) => ({
+          label: (label.querySelector("span")?.textContent ?? "").trim(),
+          on: label.querySelector("input[type=checkbox]")?.checked === true,
         })),
-      })),
-    );
+      }));
   });
 
 /**
@@ -432,11 +502,20 @@ const moduleRows = (page) =>
  * no way to switch it on and nothing it could ever run, and this step would
  * then be testing a form instead of the product. A pack with behaviours says so
  * in a `<details>` summary, and that is what is read off the page.
+ *
+ * `wanted` names the pack to prefer, and the step that turns the light on is
+ * what needs it. "Any pack with behaviours" was the old rule, and it made the
+ * two halves of this walk talk past each other: the module it happened to
+ * install was a climate one -- behaviours, yes, but nothing here reacts to
+ * somebody walking in -- while the step watching for the room to act waited for
+ * a motion-triggered light that no installed module would ever run. A walk that
+ * picks by *shape* rather than by *what it is about to claim* is a walk whose
+ * expectation is whatever the catalog happened to offer first.
  */
-async function installFirstModule(page) {
+async function installFirstModule(page, wanted = null) {
   await click(page, "open-house-room-settings button", { nth: "Add module to room" });
   await sleep(1800);
-  const choice = await page.evaluate(() => {
+  const choice = await page.evaluate((preferred) => {
     const cards = window.__deepAll("open-house-dialog .card[data-pack]");
     const installable = (card) =>
       [...card.querySelectorAll("button")].some(
@@ -447,6 +526,9 @@ async function installFirstModule(page) {
         /\bbehaviours?\b/i.test(s.textContent ?? ""),
       );
     const pick =
+      (preferred === null
+        ? undefined
+        : cards.find((card) => card.dataset.pack === preferred && installable(card))) ??
       cards.find((card) => installable(card) && hasBehaviours(card)) ??
       cards.find(installable);
     return {
@@ -454,7 +536,7 @@ async function installFirstModule(page) {
       hasBehaviours: pick ? hasBehaviours(pick) : false,
       offers: cards.length,
     };
-  });
+  }, wanted);
   if (!choice.pack) {
     await click(page, "open-house-dialog button", { nth: "Close" }).catch(() => {});
     await page.keyboard.press("Escape");
@@ -551,7 +633,27 @@ try {
   // with it. Both halves are needed before anything in this house can act, and
   // this is the half no earlier step touched.
   log("\n== step 4: install a module and turn it on");
-  const MODULE_ROOM = "Kitchen";
+  // The room step 7 walks into, and the module that will make it act. The two
+  // are one story -- a module that turns a light on when somebody walks in is
+  // installed in the living room, somebody walks in, the light comes on, and the
+  // panel says why -- so the module is installed *here*, in the room that is
+  // watched, and not in a room chosen for whatever the dialog happened to offer.
+  //
+  // The pack is named for the same reason, and by its behaviour rather than by
+  // its shape. `example_pack` is the catalog's own "Motion turns the light on":
+  // it triggers on `motion_sensor`, conditions on `ambient_light_sensor` being
+  // below the threshold, and acts on `light_group` -- the three slots step 7
+  // binds and reads, and the same three the room's page lists. A pick by shape
+  // instead took whichever offer the catalog happened to put first (a `climate`
+  // pack, which declares behaviours and acts on no light), and the walk then
+  // failed a claim it had never arranged to be true.
+  //
+  // `lighting` is deliberately *not* named. It is the obvious pack for the
+  // story and the wrong one for the walk: the house already holds it, so the
+  // dialog draws it with an "installed" chip and no button, and a walk that
+  // asked for it would be asking the panel to install a pack it holds.
+  const MODULE_ROOM = ACT_ROOM;
+  const MODULE_PACK = "example_pack";
   if (!(await openRoom(page, MODULE_ROOM))) {
     fail(`${MODULE_ROOM}: could not be opened to install a module`);
   } else {
@@ -567,13 +669,15 @@ try {
     for (let attempt = 0; attempt < 6; attempt += 1) {
       const held = await moduleRows(page);
       if (!held || held.length === 0) break;
-      await click(page, "open-house-room-settings tbody button", { nth: "Remove" });
+      await click(page, "open-house-room-settings .card[data-pack] button", {
+        nth: "Remove",
+      });
       await sleep(1800);
     }
     let rows = await moduleRows(page);
     if (rows === null) fail("the room settings page has no Modules card");
     if (rows && rows.length === 0) {
-      const offer = await installFirstModule(page);
+      const offer = await installFirstModule(page, MODULE_PACK);
       log(`  the dialog offered ${offer.offers} module(s)`);
       if (!offer.installed) fail(`nothing could be installed in the ${MODULE_ROOM}`);
       else
@@ -604,7 +708,9 @@ try {
         // A pack installs disabled -- "installation is not activation" -- so a
         // module that arrives already enabled is a defect, not a convenience.
         if (!wasEnabled) {
-          await click(page, "open-house-room-settings tbody button", { nth: "Enable" });
+          await click(page, "open-house-room-settings .card[data-pack] button", {
+            nth: "Enable",
+          });
           await sleep(2200);
           const after = (await moduleRows(page))[0];
           log(`  after Enable: ${after.text}`);
@@ -647,14 +753,63 @@ try {
   if (!profilePage.here) fail("the Profiles tab did not render");
   if (profilePage.error) fail("the Profiles tab answered with an error");
   if (profilePage.activate > 0) {
+    // *Which* profile the walk is putting in force, read off the card the button
+    // sits in. "Something is marked in force afterwards" is not the claim and
+    // would not test one: this house may already be on a profile, so a chip that
+    // was there before the click passes a check about the click. What is asked
+    // is that this profile -- and not the one before it -- is the one in force,
+    // which is also the only reading that can fail.
+    const chosen = await page.evaluate(() => {
+      const button = window
+        .__deepAll("open-house-tab-profiles button")
+        .find((b) => (b.textContent ?? "").trim() === "Activate for the house");
+      if (!button) return null;
+      const card = button.closest(".card");
+      return (card?.querySelector("h3")?.textContent ?? "").trim() || null;
+    });
     await click(page, "open-house-tab-profiles button", { nth: "Activate for the house" });
-    await sleep(2500);
+    // Wait for the *panel*, not for a number of milliseconds.
+    //
+    // A profile taken from a house carries that house, so putting the house on
+    // one is a whole-house restore -- every room's bindings written through its
+    // configuration subentry and every hosted module built again -- and it is
+    // slow: measured at 6-10 s on this 15-room house. The screen knows, because
+    // every button on it is disabled for the duration, so the idle flag is what
+    // is waited on. A fixed 2500 ms was shorter than the restore and read the
+    // card list from *before* the click, which is how this step came to report
+    // "activating Test did not put it in force" over a house that had already
+    // been put on Test.
+    await page
+      .waitForFunction(
+        () => window.__deepAll("open-house-tab-profiles")[0]?.busy === false,
+        { timeout: 120000, polling: 500 },
+      )
+      .catch(() => fail("the Profiles tab never finished activating a profile"));
+    await sleep(500);
     const after = await page.evaluate(() =>
-      window.__deepAll("open-house-tab-profiles .chip.ok").map((c) => (c.textContent ?? "").trim()),
+      window
+        .__deepAll("open-house-tab-profiles .card")
+        // The innermost cards only. A card that *contains* cards is the
+        // section around them ("House profiles"), and `querySelector("h3")`
+        // descends, so it answers with whichever profile it holds first -- the
+        // section counted as a profile, and the same name read twice. A
+        // profile card holds no other card, which is what tells them apart.
+        .filter((card) => card.querySelector("h3") && !card.querySelector(".card"))
+        .map((card) => ({
+          name: (card.querySelector("h3")?.textContent ?? "").trim(),
+          // The panel's word for a profile that is the one in force; the chip is
+          // how a person reads it, so the chip is what is asserted.
+          inForce: [...card.querySelectorAll(".chip")].some((chip) =>
+            /in force/i.test(chip.textContent ?? ""),
+          ),
+        })),
     );
-    log(`  after activating: ${after.join(", ") || "(nothing reads as active)"}`);
-    if (!after.some((label) => label === "active")) {
-      fail("activating a house profile did not mark anything active");
+    const inForce = after.filter((row) => row.inForce).map((row) => row.name);
+    log(`  after activating: ${inForce.join(", ") || "(nothing reads as in force)"}`);
+    if (chosen === null) {
+      fail("could not tell which house profile that button belongs to");
+    } else if (!after.some((row) => row.name === chosen && row.inForce)) {
+      fail(`activating ${chosen} did not put it in force`);
     }
   }
 
@@ -668,7 +823,7 @@ try {
   // too -- the Modules tab was removed, and a walk still clicking `#tab-modules`
   // would report a tab that no longer exists as one that renders nothing.
   log("\n== step 6: every tab");
-  const TABS = ["overview", "rooms", "house", "profiles", "store", "activity", "health", "dev"];
+  const TABS = ["overview", "rooms", "house", "profiles", "activity", "health", "store", "dev"];
   for (const tab of TABS) {
     await click(page, `#tab-${tab}`);
     await sleep(1800);
@@ -698,7 +853,6 @@ try {
   // exactly that -- with the observation made in the panel, where a person would
   // make it, and Home Assistant's own state read alongside as corroboration.
   log("\n== step 7: somebody walks in, and the house acts");
-  const ACT_ROOM = "Living Room";
   const slug = ACT_ROOM.toLowerCase().replace(/[^a-z0-9]+/g, "_");
   let watched = null;
   if (!(await toRoomList(page))) {
@@ -790,6 +944,14 @@ try {
 
   log(`\n== events\n${events.slice(-8).map((e) => `    ${e}`).join("\n") || "    (none)"}`);
   log(failures === 0 ? "\nE2E: PASS" : `\nE2E: ${failures} FAILURE(S)`);
+} catch (error) {
+  // A walk that dies says what it died of *and* what the page recorded on the
+  // way, because the two together are the finding: the error names the step and
+  // the console names the reason. Thrown away, a crash here reads as a broken
+  // page and reads as nothing at all about why.
+  log(`\n== the walk stopped: ${error}`);
+  log(`\n== events\n${events.slice(-12).map((e) => `    ${e}`).join("\n") || "    (none)"}`);
+  failures += 1;
 } finally {
   await page.screenshot({ path: "e2e-house.png", fullPage: true }).catch(() => {});
   await browser.close();

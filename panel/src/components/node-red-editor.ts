@@ -23,11 +23,26 @@
  *
  * A house with no Node-RED address set gets the sentence saying where to set
  * one, because an iframe pointed at no address is a blank rectangle that
- * explains nothing.
+ * explains nothing. An address that is set and does *not* answer gets a sentence
+ * too, for the same reason and one more: the rectangle it would otherwise draw is
+ * the browser's own error page, which the panel cannot tell from a fault of its
+ * own. So the editor is embedded only once the address has answered.
  */
 
 import { html, type TemplateResult } from "lit";
 import { OpenHouseElement } from "../base.ts";
+import { banner } from "./suppression.ts";
+
+/**
+ * How long the address is given to answer before it is called unreachable.
+ *
+ * Node-RED's landing page is a local document and answers in milliseconds; this
+ * is only long enough to forgive a box that is waking up, and short enough that
+ * a person is not left looking at "looking for the editor" for long. It is not a
+ * read of the editor -- an unreachable address that answers later is reached
+ * again by pressing Reload, which is what the sentence tells them to do.
+ */
+const PROBE_MS = 8000;
 
 export class NodeRedEditor extends OpenHouseElement {
   static override properties = {
@@ -44,6 +59,10 @@ export class NodeRedEditor extends OpenHouseElement {
     // reactive property rather than a plain field because a button is what
     // changes it, and a click that assigns a plain field schedules no render.
     reloads: { state: true },
+    // Whether the address answered, once it has been asked: `null` while the
+    // question is out. Reactive, because the answer is what decides whether an
+    // iframe is drawn at all.
+    reachable: { state: true },
   };
 
   /** Left undefined by a caller that has no address to pass, which asks for one. */
@@ -52,6 +71,15 @@ export class NodeRedEditor extends OpenHouseElement {
   declare label: string;
 
   private reloads = 0;
+  private reachable: null | boolean = null;
+  /**
+   * The address an answer is already held for.
+   *
+   * Plain rather than reactive because nothing is drawn from it: it is the guard
+   * that stops the probe running again for an address it has already been asked
+   * about, which `updated` would otherwise do on every render that touched `url`.
+   */
+  private probedFor = "";
 
   /**
    * Whether a capabilities read is in flight, so a reconnect does not start a
@@ -67,6 +95,7 @@ export class NodeRedEditor extends OpenHouseElement {
     super();
     this.flow = "";
     this.label = "";
+    this.reachable = null;
   }
 
   override connectedCallback(): void {
@@ -75,6 +104,57 @@ export class NodeRedEditor extends OpenHouseElement {
     // used as given, and an empty string is a screen that has asked and been told
     // there is none.
     if (this.url === undefined && !this.asking) void this.loadUrl();
+  }
+
+  /**
+   * Ask the address whether anything is listening, when there is a new one.
+   *
+   * Run from `updated` rather than from the places that set `url`, because there
+   * are two of them and they are on different sides of this element: the
+   * capabilities read here, and a caller that passes the address down
+   * (`tabs/host-module.ts` does). One hook that watches the property is one place
+   * that cannot be forgotten by the next caller.
+   */
+  protected override updated(changed: Map<string, unknown>): void {
+    if (changed.has("url")) void this.probe();
+  }
+
+  /**
+   * Whether the address answers at all, which is not the same question as
+   * whether it is set.
+   *
+   * **An iframe pointed at a host that is not there does not come up empty.** It
+   * comes up as the browser's own error page -- "this site can't be reached" --
+   * inside the panel, under this panel's label, which reads as Open House having
+   * broken rather than as the editor being down. So the address is asked first
+   * and the editor is embedded only if something answers.
+   *
+   * The question is a `no-cors` GET, and it is deliberately one the page throws
+   * away: what is being asked is whether the address resolves and accepts a
+   * connection, not what it says. `no-cors` is what makes that a question a
+   * browser will ask across origins at all, and it is also the reason a refusal
+   * is meaningful -- the answer is opaque and ignored, so the only thing that can
+   * reject is the request failing to reach the address at all.
+   */
+  private async probe(): Promise<void> {
+    const url = this.url;
+    if (!url || this.probedFor === url) return;
+    this.probedFor = url;
+    this.reachable = null;
+    const control = new AbortController();
+    const stop = setTimeout(() => control.abort(), PROBE_MS);
+    try {
+      await fetch(url, {
+        mode: "no-cors",
+        cache: "no-store",
+        signal: control.signal,
+      });
+      if (this.probedFor === url) this.reachable = true;
+    } catch {
+      if (this.probedFor === url) this.reachable = false;
+    } finally {
+      clearTimeout(stop);
+    }
   }
 
   /**
@@ -122,9 +202,22 @@ export class NodeRedEditor extends OpenHouseElement {
   /** Bump the nonce, which is what makes the browser navigate again. */
   private reload(): void {
     this.reloads += 1;
+    // A reload is also the way *back* from an address that did not answer: the
+    // box may have come up since, and there is no iframe to re-navigate when
+    // there is none. Pressed while the editor is up, it is only a re-navigation
+    // -- asking again would take the working editor away to ask a question whose
+    // answer is already on the screen.
+    if (this.reachable === false) {
+      this.probedFor = "";
+      void this.probe();
+    }
   }
 
   override render(): TemplateResult {
+    // **Not asked for yet, so nothing is said yet.** `url` is undefined until the
+    // capabilities read lands, and the "set an address" sentence drawn on it
+    // flashed at every house that has one for the length of the round trip.
+    if (this.url === undefined) return html``;
     if (!this.url) {
       return html`<p class="help" data-node-red>
         Set the Node-RED address in this integration's options and its editor
@@ -132,20 +225,40 @@ export class NodeRedEditor extends OpenHouseElement {
       </p>`;
     }
     return html`<div class="embed" data-node-red>
-      <div class="embed-bar">
-        <span class="label">${this.label || "Node-RED"}</span>
-        <span class="embed-actions">
-          <button type="button" @click=${() => this.reload()}>Reload</button>
-          <a href=${this.source} target="_blank" rel="noreferrer"
-            >Open its own tab</a
-          >
-        </span>
-      </div>
-      <iframe
-        title=${this.label || "Node-RED"}
-        src=${this.source}
-        referrerpolicy="no-referrer"
-      ></iframe>
+      ${this.renderBar()}
+      ${this.reachable === null
+        ? html`<p class="help" style="margin:8px 10px">
+            Looking for the editor at <code>${this.url}</code>...
+          </p>`
+        : this.reachable
+          ? html`<iframe
+              title=${this.label || "Node-RED"}
+              src=${this.source}
+              referrerpolicy="no-referrer"
+            ></iframe>`
+          : html`<div style="padding:8px 10px">
+              ${banner(
+                "warn",
+                html`The editor at <code>${this.url}</code> did not answer, so
+                  it is not embedded here. It may be down, or the address may be
+                  one this page cannot reach at all -- a panel served over https
+                  cannot load an editor that is not. Both are worth a look, and
+                  Reload asks again.`,
+              )}
+            </div>`}
+    </div>`;
+  }
+
+  /** The row above the editor: what it is, and the two ways to it. */
+  private renderBar(): TemplateResult {
+    return html`<div class="embed-bar">
+      <span class="label">${this.label || "Node-RED"}</span>
+      <span class="embed-actions">
+        <button type="button" @click=${() => this.reload()}>Reload</button>
+        <a href=${this.source} target="_blank" rel="noreferrer"
+          >Open its own tab</a
+        >
+      </span>
     </div>`;
   }
 }

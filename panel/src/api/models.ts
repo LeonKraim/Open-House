@@ -670,7 +670,18 @@ export interface StoreEntry {
   sha256: string;
 }
 
-/** The `subscribeMessage` payload for the Activity stream. */
+/**
+ * The `subscribeMessage` payload for the Activity stream.
+ *
+ * **`reset` is in the vocabulary and the server does not send it.** The one
+ * publisher is `host.async_publish_activity`, and it writes `{"kind": "entry"}`
+ * and nothing else -- so the `kind === "reset"` branch the activity screen keeps
+ * is a branch that cannot run, and a reader of this type would conclude the
+ * server had a way to say "the log was cleared" that it does not have. It is
+ * kept here rather than removed because the branch is the *screen's* and taking
+ * the word out of the type would make it a type error in a file this one does
+ * not own; what the type can do is say so.
+ */
 export interface ActivityStreamEvent {
   kind: "entry" | "reset";
   entry?: DecisionLogEntry;

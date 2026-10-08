@@ -1106,7 +1106,11 @@ def slots_reached_by(
             keys.update(optional_keys(name, document))
         for slot in keys:
             found.setdefault(slot, set()).add(display)
-    return {slot: tuple(sorted(modules)) for slot, modules in found.items()}
+    # Ordered by slot name, not by the order `keys` -- a set -- happened to yield,
+    # so two calls over one house answer the same table and a page that redraws it
+    # does not reshuffle its rows. Every sibling in this module sorts for the same
+    # reason; the modules under each slot are sorted too, for the matching one.
+    return {slot: tuple(sorted(modules)) for slot, modules in sorted(found.items())}
 
 
 def _slot_override(
@@ -2773,23 +2777,36 @@ USER_TIER = "local"
 
 
 def _user_manifests(user_root: Path) -> tuple[pack_manifest.Manifest, ...]:
-    """Every manifest directly inside `user_root`, in name order."""
-    return _manifests_at(user_root, _stamp(user_root))
+    """Every manifest directly inside `user_root`, in name order.
+
+    The *scan* is cached on the directory's stamp and each *file read* on its own
+    (`_manifest_at`), and the split is what makes an in-place edit visible. A
+    directory's stamp moves when a file is added or removed and not when one is
+    rewritten under the same name, so a scan that cached the loaded manifests too
+    would keep serving the copy it read before the edit -- while the readers that
+    load one named file (`_manifest_at`, `_load_at`) re-read it. Loading here,
+    outside the scan's cache, puts every file through its own stamp again, so an
+    edited pack is re-read even though the scan is not.
+    """
+    found: list[pack_manifest.Manifest] = []
+    for path in _manifest_paths_at(user_root, _stamp(user_root)):
+        manifest = _manifest_at(path)
+        if manifest is not None:
+            found.append(manifest)
+    return tuple(found)
 
 
 @lru_cache(maxsize=_CACHE)
-def _manifests_at(
-    user_root: Path, stamp: tuple[int, int]
-) -> tuple[pack_manifest.Manifest, ...]:
-    """`user_root` scanned for `*.yaml` at `stamp`.
+def _manifest_paths_at(user_root: Path, stamp: tuple[int, int]) -> tuple[Path, ...]:
+    """The `*.yaml` files directly inside `user_root`, at the directory's `stamp`.
 
-    **Cached on the directory's stamp, not just its path**, for the reason the
-    readers above are cached on a file's: `installed_modules` and `offers` run on
-    Home Assistant's event loop, and a scan that ran on every call would be a
-    blocking call reported on every panel load. A directory's stamp moves when a
-    file is added or removed, which is exactly when this answer changes, and not
-    when one is rewritten in place -- the file readers are stamped separately, so
-    an edited pack is re-read even though the scan is not.
+    **Cached on the directory's stamp, and it holds file *names* and never loaded
+    manifests**, for the reason `_user_manifests` gives: `installed_modules` and
+    `offers` run on Home Assistant's event loop, so the scan is memoised against a
+    blocking call -- but the answer that may go stale in place is a file's
+    *content*, and that is read through the per-file cache instead. A directory's
+    stamp moves when a file is added or removed, which is exactly when this list
+    changes.
 
     A pack saved by the Dev tab is one file with everything in it, so a flat scan
     is the whole of what there is to find. A directory that is not there is no
@@ -2798,17 +2815,10 @@ def _manifests_at(
     """
     if stamp == (0, 0):
         return ()
-    found: list[pack_manifest.Manifest] = []
     try:
-        candidates = sorted(user_root.glob("*.yaml"))
+        return tuple(sorted(user_root.glob("*.yaml")))
     except OSError:
         return ()
-    for path in candidates:
-        manifest = _manifest_at(path)
-        if manifest is None:
-            continue
-        found.append(manifest)
-    return tuple(found)
 
 
 def _index(root: Path) -> tuple[Mapping[str, object], ...]:

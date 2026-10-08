@@ -73,13 +73,18 @@ from ha_adapter import live_modules
 from ha_adapter import slot_rules as rules
 from ha_adapter.live import LiveSessionError
 
-from . import modules as module_hosting
 from .binary_sensor import TICK_SECONDS, condition_rows, watched_targets
 from .const import SIGNAL_MODULES_CHANGED
 
 __all__ = ["SlotRuleWatcher", "async_setup_slot_rules"]
 
 _LOGGER = logging.getLogger(__name__)
+
+#: "Nothing is waiting to be settled." A settled value of `None` is a real answer
+#: -- a rule whose template rendered nothing, a condition that does not hold -- so
+#: the queue slot `_Listener` keeps cannot use `None` to mean empty. One object,
+#: compared by identity, is what tells "nothing queued" from "queue `None`".
+_UNSET: Any = object()
 
 
 async def async_setup_slot_rules(
@@ -174,22 +179,25 @@ class SlotRuleWatcher:
     async def _wanted(self) -> dict[tuple[str, str, str], rules.SlotRule]:
         """Every rule in force, by module, room and slot.
 
-        Read from the *hosted* records rather than from the engine's installed
-        packs, because a module's room is a fact about where it was put and the
-        installed set does not carry one: a rule's settings live at its room's
-        scope (`live_modules._scope_for`), so the room has to come from the module
-        the house hosts. A module whose pack is gone from the installed set is
-        skipped by `slot_rules_of` answering nothing, which is the right reading --
-        there is no row left to hold a rule.
+        Read over the *installed* packs, each by its own room -- the same two
+        facts `installed_names_by_room` already gives the room page. The reader
+        this feeds, `slot_rules_of`, looks a pack up in the engine's installed
+        set, so a rule can only ever be found under a name that set holds. Walking
+        the hosted *records* instead asked about every slug the house has imported
+        from a blueprint -- none of which is an installed pack name -- and
+        `slot_rules_of` answered nothing for each, so no listener was ever built
+        and a rule a person set was never re-decided: it was recorded on the row
+        and simply sat there. The room is the pack's own (`_module_room`, the same
+        answer `installed_modules` gives), which is the scope `set_slot_rule`
+        wrote the rule under.
         """
         session = self._host.session
         wanted: dict[tuple[str, str, str], rules.SlotRule] = {}
-        for record in await module_hosting.async_records(self._hass):
-            found = live_modules.slot_rules_of(
-                session, pack=record.slug, room_id=record.room_id
-            )
-            for slot, rule in found.items():
-                wanted[(record.slug, record.room_id, slot)] = rule
+        for pack, room_id in live_modules.installed_names_by_room(session):
+            for slot, rule in live_modules.slot_rules_of(
+                session, pack=pack, room_id=room_id
+            ).items():
+                wanted[(pack, room_id, slot)] = rule
         return wanted
 
 
@@ -216,6 +224,9 @@ class _Listener:
         self._stop: list[Callable[[], None]] = []
         self._check: AndConditionChecker | None = None
         self._pending = False
+        # The last value to arrive while a write was in flight, or `_UNSET`. See
+        # `_async_settle` for why a value is kept rather than dropped.
+        self._queued: Any = _UNSET
 
     def async_start(self) -> None:
         """Subscribe according to the kind, and read the world once.
@@ -443,38 +454,61 @@ class _Listener:
 
     async def _async_settle(self, entity_id: str | None) -> None:
         if self._pending:
-            # One write in flight at a time. Two settles for the same rule would
-            # otherwise race -- a template rendering twice inside one save -- and
-            # the later-started one is the correct final answer, so the guard
-            # defers rather than queues: the next evaluation of a template, a
-            # condition or a state change will arrive on its own.
+            # **A value that arrives while one is in flight is remembered, not
+            # dropped.** One write at a time, because two settles for the same
+            # rule would race -- a template rendering twice inside one save -- and
+            # the later one is the correct final answer. For a template, a
+            # condition or a flow, dropping the in-flight value is enough: each is
+            # driven by the world and the world will move again on its own. A
+            # *script* is not -- it runs only when something calls it
+            # (`_script_fired`) and nothing else -- so a call that lands during the
+            # write before it is the only answer that will ever arrive for it, and
+            # dropping it would leave the slot on a device the script has since
+            # replaced. Kept here and re-run below; a later value overwrites an
+            # earlier one, because only the last answer matters.
+            self._queued = entity_id
             return
         self._pending = True
         try:
-            changed = live_modules.settle_slot_rule(
-                self._session,
-                room_id=self._room_id,
-                pack=self._module,
-                slot=self._slot,
-                entity_id=entity_id,
-            )
-        except LiveSessionError as refusal:
-            # The rule this listener was made for has gone -- somebody took it
-            # off the row while this change was in flight. The refresh that
-            # follows the write will drop this listener; saying so here is what
-            # makes the one window where that has not happened yet visible.
-            _LOGGER.debug(
-                "%s of %s no longer has a rule on %s: %s",
-                self._module,
-                self._room_id,
-                self._slot,
-                refusal,
-            )
-            return
+            value = entity_id
+            while True:
+                try:
+                    changed = live_modules.settle_slot_rule(
+                        self._session,
+                        room_id=self._room_id,
+                        pack=self._module,
+                        slot=self._slot,
+                        entity_id=value,
+                    )
+                except LiveSessionError as refusal:
+                    # The rule this listener was made for has gone -- somebody
+                    # took it off the row while a change was in flight. The
+                    # refresh that follows the write will drop this listener;
+                    # saying so here is what makes the one window where that has
+                    # not happened yet visible. A queued value goes with it:
+                    # there is no rule left to settle.
+                    self._queued = _UNSET
+                    _LOGGER.debug(
+                        "%s of %s no longer has a rule on %s: %s",
+                        self._module,
+                        self._room_id,
+                        self._slot,
+                        refusal,
+                    )
+                    return
+                if changed:
+                    await self._host.async_slot_changed(self._room_id, self._slot)
+                # Whatever arrived during that write, in its turn. The queue is
+                # read under `_pending`, so a settle that lands here refills it
+                # rather than starting a second writer -- and there is no `await`
+                # between this read and the `finally`, so a value cannot slip in
+                # after it is seen empty.
+                if self._queued is _UNSET:
+                    break
+                value = self._queued
+                self._queued = _UNSET
         finally:
             self._pending = False
-        if changed:
-            await self._host.async_slot_changed(self._room_id, self._slot)
 
 
 def _entity(value: Any) -> str | None:

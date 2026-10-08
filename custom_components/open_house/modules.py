@@ -42,7 +42,7 @@ import asyncio
 import contextlib
 import copy
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -166,6 +166,36 @@ async def async_write_records(
     await hass.async_add_executor_job(
         module_records.write, records_root(hass), tuple(records)
     )
+
+
+async def _async_amend_records(
+    hass: HomeAssistant,
+    amend: Callable[[tuple[ModuleRecord, ...]], tuple[ModuleRecord, ...]],
+) -> tuple[ModuleRecord, ...]:
+    """Read the records, change them, and write them back -- as one step.
+
+    The whole read-modify-write is under `_MUTATION_LOCK`, not just the write,
+    because the write is not the racy half: the file holds the *whole* list, so a
+    change is `load`, `put`, `write`, and two of those interleaved lose one. Two
+    modules hosted at once -- a person pressing twice, a profile activation
+    rebuilding beside an edit -- both read the list before either writes, both add
+    their own record, and the second write drops the first module: its automation
+    is running and nothing records it. Serialising only the `write` would keep the
+    file well-formed and still lose the same module, which is why the lock is taken
+    here, around all three steps, and why every site that changes the list goes
+    through this function rather than reaching for `async_records` and
+    `async_write_records` itself.
+
+    Nothing else holds `_MUTATION_LOCK` across a call to any of these sites -- the
+    other two users (`_async_retire`, `_async_create_automation`) take it around a
+    single edit to `automations.yaml` and let it go -- so `amend` may not call one
+    of these sites back, and an `asyncio.Lock` that is not reentrant would deadlock
+    on itself if it did.
+    """
+    async with _MUTATION_LOCK:
+        amended = amend(await async_records(hass))
+        await async_write_records(hass, amended)
+        return amended
 
 
 # --------------------------------------------------------------------------
@@ -1323,8 +1353,8 @@ async def _async_store(
     a configuration should not move the card somebody was reading to the bottom
     of the page.
     """
-    await async_write_records(
-        hass, module_records.put(await async_records(hass), record)
+    await _async_amend_records(
+        hass, lambda records: module_records.put(records, record)
     )
     _attach(hass, entry_id, record)
     return record
@@ -1594,8 +1624,8 @@ async def async_unhost(hass: HomeAssistant, entry_id: str, module: str) -> Modul
     ):
         await _async_forget_flow(hass, entry_id, flow_id)
     await _async_retire(hass, module)
-    await async_write_records(
-        hass, [record for record in records if record.slug != module]
+    await _async_amend_records(
+        hass, lambda all_records: tuple(r for r in all_records if r.slug != module)
     )
     runtime = hass.data.get(DOMAIN, {}).get(entry_id)
     if runtime is not None:
@@ -1770,8 +1800,9 @@ async def _async_build(
                 bindings=_bindings_json(bindings),
             )
         )
-        kept = module_records.put(await async_records(hass), built)
-        await async_write_records(hass, kept)
+        await _async_amend_records(
+            hass, lambda records: module_records.put(records, built)
+        )
         _attach(hass, entry_id, built)
         return built
 
@@ -1798,8 +1829,7 @@ async def _async_build(
             bindings=_bindings_json(bindings),
         )
     )
-    kept = module_records.put(await async_records(hass), built)
-    await async_write_records(hass, kept)
+    await _async_amend_records(hass, lambda records: module_records.put(records, built))
     _attach(hass, entry_id, built)
     return built
 

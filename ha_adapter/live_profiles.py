@@ -69,6 +69,7 @@ from engine.install import InstalledPack, InstalledSet
 from engine.profiles import Profile, ProfileError, ProfileKind
 
 from .live import HOUSE, LiveSession, LiveSessionError
+from .slot_parts import record_from as recorded_slot_parts
 
 __all__ = [
     "activate",
@@ -314,17 +315,24 @@ def _restored(session: LiveSession, profile: Profile) -> None:
     **The parts are restored whole, not merged.** A pack the house has installed
     and the snapshot does not is *removed*, a module placed in a room the
     snapshot does not place it in is moved, a binding the snapshot does not name
-    is taken off. Restoring is putting the house back rather than adding what is
-    missing: a merge would leave everything done since the profile was taken
-    still in force, which is the state somebody takes a profile in order to
-    leave.
+    is taken off, a slot the snapshot did not split is one role again. Restoring
+    is putting the house back rather than adding what is missing: a merge would
+    leave everything done since the profile was taken still in force, which is
+    the state somebody takes a profile in order to leave.
 
-    **Rooms are the one thing that cannot be restored from here.** A room is a
-    configuration subentry and this is the session, so the room *list* and each
-    room's own slot bindings are the caller's (see `restore_rooms`) -- what this
-    restores is a room's settings, and only for the rooms that are still here. A
-    room the house has since gained is left alone rather than given settings
-    nobody ever chose for it.
+    **A room's bindings are the caller's; its settings are this function's.** A
+    room is a configuration subentry and this is the session, so the room *list*
+    and each room's slot bindings are the caller's (`host`'s
+    `_async_restore_rooms`) -- what this restores is a room's settings, and only
+    for the rooms that are still here. A room the house has since gained is left
+    alone rather than given settings nobody ever chose for it.
+
+    A room's *lighting permission* is one of those settings and not an exception
+    to them: `auto_lighting` is what the room's switch is the master for, so it
+    comes back through `set_room_auto_lighting` -- the same call the switch makes
+    -- rather than being left wherever the switch was last moved to. A profile
+    that restored "the house as it was" while leaving one room's lights disabled
+    is the quiet gap a person only finds by staring at a switch.
 
     This rebuilds once per call it makes and `_rebuilt` rebuilds again, which is
     the price of using the doors a person's edits use rather than writing the
@@ -339,6 +347,29 @@ def _restored(session: LiveSession, profile: Profile) -> None:
     recorded = _nested(setup.get("room_settings"), "room_settings")
     for room in session.rooms:
         session.set_room_settings(room.id, recorded.get(room.id, {}))
+
+    # The rooms' lighting permissions, for the rooms still here, through the door
+    # the switch uses. Read from the snapshot's rows rather than the settings map
+    # above, because `auto_lighting` is not a resolved setting: it is a field of
+    # the room's own document, which is where the switch writes it and where a
+    # rebuild reads it from.
+    here = {room.id for room in session.rooms}
+    for row in _room_rows(setup.get("rooms")):
+        room_id = str(row.get("id", ""))
+        if room_id in here:
+            session.set_room_auto_lighting(
+                room_id, on=bool(row.get("auto_lighting", True))
+            )
+
+    # The parts come back *before* the bindings, and the order is the whole of
+    # why this is not beside the packs above: a part is a vocabulary word
+    # (`slot_parts.grow`), and a binding on one -- the house's global device for a
+    # half of a role -- is refused by the very next rebuild against a vocabulary
+    # that does not carry the part yet. Restoring the bindings first would raise
+    # on the first split slot the profile named, and the raise would be *partway
+    # through*: everything above has already landed, so the house would be left
+    # half on the profile it was coming off and half on the one it is going on.
+    session.set_slot_parts(recorded_slot_parts(setup.get("slot_parts")))
 
     bound = _mapping(setup.get("house_bindings"), "house_bindings")
     for slot in set(session.house_bindings) - set(bound):
@@ -462,17 +493,69 @@ def _snapshot(
 
     The modules are the one part the session cannot supply and the caller does:
     see `capture`.
+
+    `house_bindings` and `slot_parts` are read off the session rather than out of
+    `state` because both are session state that reaches the engine as wiring and
+    the snapshot is put back through the session's own doors (`_restored`); the
+    parts are written as lists because a profile's `setup` is a JSON-shaped
+    document, and read back through the same lenient reader the store uses
+    (`slot_parts.record_from`). A snapshot that dropped either would be a profile
+    that could not put a split slot, or a house-scope binding, back at all.
+
+    The rooms are projected rather than carried whole (`_captured_rooms`), and by
+    the same rule the restore applies: the fields a room's row carries are the
+    ones `_restored` reads back, so what a profile says it holds is what putting
+    it back actually does.
     """
     state = session.to_state()
     return {
         "installed": state["installed"],
-        "rooms": state["rooms"],
+        "rooms": _captured_rooms(state),
         "house_settings": state["house_settings"],
         "room_settings": state["room_settings"],
         "module_rooms": state["module_rooms"],
         "house_bindings": dict(session.house_bindings),
+        "slot_parts": {
+            parent: list(names) for parent, names in session.slot_parts.items()
+        },
         "modules": [dict(row) for row in modules],
     }
+
+
+def _room_rows(value: object) -> tuple[Mapping[str, object], ...]:
+    """The rows of a snapshot's `rooms`, or the empty tuple when it names none.
+
+    A house whose profile predates the field, or that was captured when it held
+    no rooms, has no rows rather than a malformed list -- the same tolerance
+    `_mapping` shows for an absent part. A row that is not an object is skipped
+    rather than raised on: it carries nothing `_restored` reads, so dropping it
+    is the honest reading of a document this build did not write.
+    """
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(row for row in value if isinstance(row, Mapping))
+
+
+def _captured_rooms(state: Mapping[str, object]) -> list[Mapping[str, object]]:
+    """The house's rooms as a snapshot carries them: everything but the mode.
+
+    A room travels as `live._room_document` writes it, so it carries
+    `auto_lighting` and `mode` beside its bindings. `auto_lighting` is kept
+    because it is a *setting* -- "a permission, not an actuation", `live.py`'s
+    own word for it -- and `_restored` puts it back through the door the room's
+    switch uses.
+
+    `mode` is dropped, by the rule `capture` already states for the house's own
+    mode: a mode is a *moment* rather than a way of being, and every room's
+    `mode` field holds that same one house mode (a room's mode select sets the
+    house's -- `automation._room_changed`). A snapshot cannot put a moment back
+    and must not claim to, so the field is not written down; a profile that
+    carried it would be one whose restore silently disagreed with its contents.
+    """
+    return [
+        {key: value for key, value in row.items() if key != "mode"}
+        for row in _room_rows(state.get("rooms"))
+    ]
 
 
 def deactivate_house(session: LiveSession) -> None:

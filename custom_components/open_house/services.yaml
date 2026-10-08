@@ -1,0 +1,69 @@
+# What `open_house.publish_output` and `open_house.set_flow_value` take.
+#
+# This file exists because Home Assistant decides an integration *has* services
+# by asking whether it ships one (`Integration.has_services` is literally
+# `"services.yaml" in self._top_level_files`) and logs a loud ERROR -- "Failed to
+# load services.yaml for integration: open_house" -- for a domain that registers
+# services without it. Nothing was broken when it was missing; the services ran,
+# the panel drove them, and no assertion in this repository failed. What a person
+# saw was an error in the log every time Home Assistant built its service
+# descriptions, about an integration that was working, which is the kind of noise
+# that teaches a person to stop reading the log.
+#
+# The descriptions are also the only place the Developer Tools' service form
+# learns what to ask for, so they are written for the person filling that form in
+# rather than as a restatement of the code.
+publish_output:
+  name: Publish a module output
+  description: >-
+    Write a value onto a hosted module's output, which is what the automation
+    behind that module calls. The module is named rather than addressed by
+    config entry, because the automation is a document a person may edit and it
+    should not have to carry an identifier that is a fact about this install.
+  fields:
+    module:
+      name: Module
+      description: The hosted module to write to, by its name.
+      required: true
+      example: bedtime
+      selector:
+        text:
+    key:
+      name: Output
+      description: The output's declared name on that module.
+      required: true
+      example: is_dark
+      selector:
+        text:
+    value:
+      name: Value
+      description: >-
+        What to publish. Any type: a number, a string, a boolean, a list or a
+        mapping. The output's declared kind decides how the entity shows it.
+set_flow_value:
+  name: Set a flow value
+  description: >-
+    Hand a value back to a module from a pushed Node-RED flow, under a key that
+    says it came from the flow. A running flow cannot assign a Home Assistant
+    entity, so this is the one call it makes to answer the module that started
+    it.
+  fields:
+    module:
+      name: Module
+      description: The hosted module the flow is answering, by its name.
+      required: true
+      example: bedtime
+      selector:
+        text:
+    input:
+      name: Input
+      description: The input on that module the value is for.
+      required: true
+      example: guest_count
+      selector:
+        text:
+    value:
+      name: Value
+      description: >-
+        What the flow answered. Any type, and read under a key of its own -- an
+        input and an output of the same name are two different readings.

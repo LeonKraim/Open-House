@@ -290,7 +290,12 @@ function slotRuleRow(options: SlotDeviceRowOptions): TemplateResult | typeof not
   const fallback = home(options.house);
   const kind: ModuleSlotRuleKind | "" = editing?.kind ?? "";
   const open = kind !== "";
-  const hasRule = slot.rule_kind !== null;
+  // `!= null` and not `!== null`: the field is reported by the listing that has
+  // a rule to report, and a slot whose rule nothing has said is one with the key
+  // absent as much as one with it set to `null`. Read strictly, the absent one is
+  // a *rule* -- the chip renders the word "undefined" and the row offers to clear
+  // something that is not there.
+  const hasRule = slot.rule_kind != null;
   return html`<div class="stack" style="margin-top:6px">
     <div class="row wrap" style="align-items:center;gap:8px">
       <label class="muted small" for=${`slot-rule-${slot.slot}`}>Set it to</label>
@@ -548,13 +553,17 @@ export interface SlotDevicesOptions extends SlotRowCommon {
 }
 
 /**
- * Every device one module acts through, in the order the server sent them.
+ * A module's device rows, in the order the server sent them.
  *
- * The whole section rather than a lone row, so the caller draws a module's
- * devices in one place and the empty case reads the same everywhere: a module
- * whose pack declares no slot at all -- a mode-only behaviour -- has no devices,
- * and says so rather than leaving a person wondering whether the section failed
- * to load.
+ * **The list is the caller's, and it is not always the module's whole set.** The
+ * room's page passes the rows that are *set apart from the room's own binding*,
+ * with the rest folded into a disclosure beside it -- so an empty list here is
+ * the ordinary case of a module reaching through bindings it did not change, and
+ * a sentence claiming the pack declares no slot would be flatly untrue there.
+ * The case where the section is genuinely empty -- a module whose pack declares
+ * no slot, a mode-only behaviour -- is said where the whole slot list is in hand
+ * (`hosted-module.ts`, the card's own "Acts on" section), which is the only place
+ * that can tell the two apart.
  */
 export function slotDevices(options: SlotDevicesOptions): TemplateResult | typeof nothing {
   const { slots } = options;

@@ -9,13 +9,13 @@
  * draws, because a module put in the house and a module put in a room are the
  * same kind of thing in two different places.
  *
- * A house slot is not bound here. It is *collected* (`engine.binding.resolve_slot`
- * gathers it from every room, in room order), so the one edit a person can make
- * to "all the lights" is a light in a room, and this screen is where that fact is
- * legible rather than something a person has to infer from a behaviour that
- * reached through it. A role no room has filled yet is drawn anyway, empty: "the
- * house has no door contacts" is exactly what a person needs to see before
- * wondering why the alarm never fires.
+ * A house slot *is* bound here, and it is the house's own device. A room's role
+ * is the collected one (`engine.binding.resolve_slot` gathers it from every room,
+ * in room order), so the edit a person makes to a room's "all the lights" is a
+ * light in that room; what this page binds is the other, standing thing -- one
+ * global device that fills the role for the house scope and for every room that
+ * bound none of its own (`HouseSlot`). Only the roles an installed module
+ * actually reaches are listed, so every row here has an automation behind it.
  *
  * The house's *options* and its *modules* are not collections, though. A module
  * can be installed into the house (`""` is the house's placement), and that
@@ -41,13 +41,18 @@ import { devicePicker } from "../components/slot-devices.ts";
 // room's page draws, because the parts are one house-level record whichever page
 // a person splits them from.
 import { slotParts, type SlotPartAction } from "../components/slot-parts.ts";
+// The house's own status wording, beside the room and module pages' so the two
+// meanings of a collected role's `missing` are visible in one file.
+import {
+  HOUSE_STATUS_CHIP,
+  HOUSE_STATUS_LABEL,
+} from "../components/binding-status.ts";
 import {
   fieldOrder,
   schemaForKeys,
   withoutReachRoles,
 } from "../components/schema-spec.ts";
 import type {
-  BindingStatusKind,
   HostedModule,
   HouseScope,
   HouseSlot,
@@ -74,24 +79,6 @@ interface PickerState {
   accepts: string[];
   loading: boolean;
 }
-
-const STATUS_LABEL: Record<BindingStatusKind, string> = {
-  ok: "ok",
-  unavailable: "unavailable",
-  unknown: "unknown",
-  missing: "missing",
-  domain_mismatch: "wrong domain",
-  unbound: "unbound",
-};
-
-const STATUS_CHIP: Record<BindingStatusKind, string> = {
-  ok: "ok",
-  unavailable: "warn",
-  unknown: "",
-  missing: "warn",
-  domain_mismatch: "warn",
-  unbound: "",
-};
 
 export class HouseTab extends OpenHouseElement {
   static override properties = {
@@ -319,9 +306,14 @@ export class HouseTab extends OpenHouseElement {
       await this.requireClient().setSlotParts(slot, action, name, newName);
       // This slot's drafts only: a split, a rename and a rejoin all end with the
       // control that asked for them closed, and a name left in a field the server
-      // has already taken is a form disagreeing with the record.
+      // has already taken is a form disagreeing with the record. Matched as the
+      // exact key or a `slot/part` key, never a bare prefix: `light` is the new-
+      // part field for the `light` slot and `light_group` is another slot's, and
+      // `startsWith("light")` would wipe the second while clearing the first.
       this.partDrafts = Object.fromEntries(
-        Object.entries(this.partDrafts).filter(([key]) => !key.startsWith(slot)),
+        Object.entries(this.partDrafts).filter(
+          ([key]) => key !== slot && !key.startsWith(`${slot}/`),
+        ),
       );
     });
   }
@@ -468,11 +460,11 @@ export class HouseTab extends OpenHouseElement {
   private renderSlots(scope: HouseScope): TemplateResult {
     return html`<div class="card">
       <h2>House slots</h2>
-      <p class="help">
-        The devices the whole house's automations act through. A slot bound here
-        is global: it fills that role for the house, and for every room that has
-        not bound one of its own. Only the slots a module on this page reaches
-        are listed, so every row has an automation behind it.
+      <p
+        class="help"
+        title=${"A slot bound here is global: it fills that role for the house and for every room that has not bound one of its own. Only the slots a module reaches are listed, so every row has an automation behind it."}
+      >
+        The devices the whole house's automations act through.
       </p>
       ${scope.slots.length === 0
         ? html`<p class="muted">
@@ -521,7 +513,7 @@ export class HouseTab extends OpenHouseElement {
                     event.preventDefault();
                     this.openRoom(module.room_id);
                   }}
-                  >${module.room_id}</a
+                  >${this.roomName(module.room_id)}</a
                 >`}
             &middot; v${module.version}
             ${module.satisfiable
@@ -697,10 +689,11 @@ export class HouseTab extends OpenHouseElement {
             </div>`
           : null}
       </div>
-      <p class="help">
-        Settings the house's form resolves that belong to no module on this page
-        -- a module whose atoms reach the house from a room that is not listed
-        here, or a pack that has since been removed.
+      <p
+        class="help"
+        title=${"A module whose atoms reach the house from a room that is not listed here, or a pack that has since been removed."}
+      >
+        Settings that belong to no module on this page.
       </p>
       <open-house-schema-form
         .schema=${schema}
@@ -762,8 +755,8 @@ export class HouseTab extends OpenHouseElement {
       </td>
       <td>${slot.state ?? html`<span class="muted">-</span>`}</td>
       <td>
-        <span class="chip ${STATUS_CHIP[slot.status]}"
-          >${STATUS_LABEL[slot.status]}</span
+        <span class="chip ${HOUSE_STATUS_CHIP[slot.status]}"
+          >${HOUSE_STATUS_LABEL[slot.status]}</span
         >
       </td>
       <td>
@@ -896,11 +889,11 @@ export class HouseTab extends OpenHouseElement {
       return this.renderModuleCard(module, scope);
     });
     return html`<h2 style="margin-bottom:8px">Modules</h2>
-      <p class="help">
-        Every module that acts on the whole house, and every module installed
-        into the house itself. Each one's switches and its settings are here
-        together, because they are the same thing: the behaviour is what it does
-        and the settings are how it does it.
+      <p
+        class="help"
+        title=${"Every module that acts on the whole house, and every module installed into the house itself. A card's switches and its settings are together because they are the same thing: the behaviour is what it does and the settings are how it does it."}
+      >
+        Modules acting on the whole house, and those installed into it.
       </p>
       ${scope.modules.length === 0
         ? html`<div class="card">
@@ -975,20 +968,22 @@ export class HouseTab extends OpenHouseElement {
    * where the "Add module to house" button is -- a module added by that button
    * and then visible nowhere would be one a person could put somewhere and not
    * take back. Nothing is drawn when there are none.
+   *
+   * The list is keyed by slug: a rebuild moves a module to the end of the house's
+   * own list, and an unkeyed list re-binds the card at that position to whatever
+   * module is there now -- taking the notice a save just wrote with it, and
+   * re-drawing a module nobody touched.
    */
   private renderHosted(): TemplateResult | typeof nothing {
     if (this.hosted.length === 0) return nothing;
     return html`<h2 style="margin-top:24px;margin-bottom:8px">Your modules</h2>
-      <p class="help">
-        Modules from your store that you have added to the whole house. Each has
-        its own automation and its own copy of the answers you gave when you
-        defined it, so editing it here changes this one only.
+      <p
+        class="help"
+        title=${"Each module has its own automation and its own copy of the answers you gave when you defined it, so editing it here changes this one only."}
+      >
+        Modules from your store added to the whole house.
       </p>
       <div class="stack">
-      // Keyed by slug: a rebuild moves a module to the end of the house's own
-      // list, and an unkeyed list re-binds the card at that position to whatever
-      // module is there now -- taking the notice a save just wrote with it, and
-      // re-drawing a module nobody touched.
         ${repeat(
           this.hosted,
           (module) => module.slug,
@@ -1003,6 +998,19 @@ export class HouseTab extends OpenHouseElement {
           ></open-house-hosted-module>`,
         )}
       </div>`;
+  }
+
+  /**
+   * A room's display name, for the surfaces a module's placement is named on.
+   *
+   * A module carries the room it sits in by id; every other surface in the panel
+   * shows the room's name, so a card that printed the id would be the one place a
+   * person reads `living_room` instead of "Living room". Falls back to the id when
+   * the room list does not carry it, which is honest -- the module names a room the
+   * page's own read did not.
+   */
+  private roomName(roomId: string): string {
+    return this.rooms.find((room) => room.id === roomId)?.name ?? roomId;
   }
 
   private openRoom(roomId: string): void {

@@ -24,6 +24,25 @@ const TIER_CHIP: Record<StoreEntry["tier"], string> = {
   local: "warn",
 };
 
+/**
+ * The tier as a menu choice, and as a chip: one value, one word.
+ *
+ * The wire's tier is a lower-case key (`official`, `local`); a person reads a
+ * capitalised word in both the filter and the chip beside the pack, so the
+ * thing they filtered for is the thing they then see. "All tiers" rather than
+ * "all" for the same reason Activity's "Any outcome" is spelled out: a bare
+ * value in a menu reads as a setting that failed to load.
+ */
+const TIERS: readonly { value: StoreEntry["tier"] | "all"; label: string }[] = [
+  { value: "all", label: "All tiers" },
+  { value: "official", label: "Official" },
+  { value: "verified", label: "Verified" },
+  { value: "community", label: "Community" },
+  { value: "local", label: "Local" },
+];
+
+const TIER_LABELS = new Map(TIERS.map((tier) => [tier.value, tier.label]));
+
 export class StoreTab extends OpenHouseElement {
   // `confirming` is a click that only arms a button, `tierFilter` and the
   // per-module pickers are choices; all are invisible to Lit as plain fields
@@ -185,6 +204,11 @@ export class StoreTab extends OpenHouseElement {
       this.error = this.toError(error);
     } finally {
       this.busy = null;
+      // **Cleared, so the same file can be chosen twice.** A `<input type=file>`
+      // fires no `change` when it is handed the value it already holds, so
+      // without this, re-importing a file somebody has just corrected does
+      // nothing at all and looks like the read failed.
+      input.value = "";
       this.requestUpdate();
     }
   }
@@ -214,23 +238,8 @@ export class StoreTab extends OpenHouseElement {
     return html`
       ${this.errorBanner(this.error)}
       ${this.notice ? html`<div class="banner info">${this.notice}</div>` : null}
+      <h1>Store</h1>
       ${this.renderModules()}
-      <div class="row spread wrap" style="margin-bottom:12px">
-        <h1>Store</h1>
-        <select
-          aria-label="Filter by tier"
-          @change=${(event: Event) => {
-            this.tierFilter = (event.target as HTMLSelectElement)
-              .value as StoreEntry["tier"] | "all";
-          }}
-        >
-          ${(["all", "official", "verified", "community", "local"] as const).map(
-            (tier) => html`<option value=${tier} ?selected=${tier === this.tierFilter}>
-              ${tier}
-            </option>`,
-          )}
-        </select>
-      </div>
       ${this.cached
         ? html`<div class="banner warn">
             Showing a cached index${this.generatedAt
@@ -238,6 +247,22 @@ export class StoreTab extends OpenHouseElement {
               : null}. It may be out of date.
           </div>`
         : null}
+      <div class="row spread wrap" style="margin-bottom:12px">
+        <span class="label" id="store-tier-label">Tier</span>
+        <select
+          aria-labelledby="store-tier-label"
+          @change=${(event: Event) => {
+            this.tierFilter = (event.target as HTMLSelectElement)
+              .value as StoreEntry["tier"] | "all";
+          }}
+        >
+          ${TIERS.map(
+            (tier) => html`<option value=${tier.value} ?selected=${tier.value === this.tierFilter}>
+              ${tier.label}
+            </option>`,
+          )}
+        </select>
+      </div>
       ${visible.length === 0
         ? this.emptyState(
             "Nothing here",
@@ -425,24 +450,29 @@ export class StoreTab extends OpenHouseElement {
       <div class="row spread wrap">
         <div class="grow">
           <h3>${entry.name || entry.pack}</h3>
-          <p class="muted small">
+          <p
+            class="muted small"
+            title=${entry.sha256 ? `SHA-256 ${entry.sha256}` : ""}
+          >
             ${entry.author} &middot; v${entry.version} &middot; ${entry.license}
           </p>
         </div>
-        <span class="chip ${TIER_CHIP[entry.tier]}">${entry.tier}</span>
+        <span class="chip ${TIER_CHIP[entry.tier]}"
+          >${TIER_LABELS.get(entry.tier) ?? entry.tier}</span
+        >
       </div>
       <p>${entry.description}</p>
       <div class="row wrap">
         ${entry.abandoned
-          ? html`<span class="chip warn">abandoned</span>`
+          ? html`<span class="chip warn">Abandoned</span>`
           : nothing}
         ${entry.installed_version
-          ? html`<span class="chip">installed v${entry.installed_version}</span>`
+          ? html`<span class="chip">Installed v${entry.installed_version}</span>`
           : nothing}
         ${entry.update_available
-          ? html`<span class="chip warn">update available</span>`
+          ? html`<span class="chip warn">Update available</span>`
           : nothing}
-        ${!entry.available ? html`<span class="chip warn">not in index</span>` : nothing}
+        ${!entry.available ? html`<span class="chip warn">Not in index</span>` : nothing}
       </div>
       ${entry.update_requires_review && !review
         ? html`<div class="banner warn">
@@ -479,7 +509,6 @@ export class StoreTab extends OpenHouseElement {
                 : "Install"}
             </button>`}
       </div>
-      <p class="help">SHA-256 ${entry.sha256.slice(0, 16)}...</p>
     </div>`;
   }
 }

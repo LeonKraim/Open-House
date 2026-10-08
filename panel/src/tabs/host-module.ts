@@ -178,6 +178,21 @@ const OUTPUT_SEPARATOR = "/";
 /** The option value meaning "leave this to the blueprint's own default". */
 const LEAVE = "default";
 
+/**
+ * What a cast is called on a row's own summary line, so an answered row says
+ * *which* cast is under it without the details having to be opened.
+ *
+ * `none` is empty because a row with no cast does not name one: its summary is
+ * the invitation ("Cast it"), and the word only appears once there is one.
+ */
+const CAST_WORDS: Record<CastMode, string> = {
+  none: "",
+  condition: "a condition",
+  template: "a template",
+  nodered: "a flow",
+  script: "a script",
+};
+
 export class HostModuleScreen extends OpenHouseElement {
   static override properties = {
     ...OpenHouseElement.properties,
@@ -329,6 +344,24 @@ export class HostModuleScreen extends OpenHouseElement {
     }
   }
 
+  /**
+   * The source changed: what was read from the old one is now about nothing.
+   *
+   * Called from the kind tabs **and from the two pickers**, because choosing a
+   * different automation or blueprint is as much a change of source as changing
+   * the kind -- and a title kept from the last one would be written into the
+   * store row, the downloaded file and every `sensor.open_house_<module>_...`
+   * entity id, naming this module after the previous source. The reading and its
+   * answers go with it: every one of them names an input only the old document
+   * declares.
+   */
+  private sourceChanged(): void {
+    this.reading = null;
+    this.decisions = [];
+    this.outputs = [];
+    this.moduleTitle = "";
+  }
+
   private get handle(): { key?: string; text?: string } {
     if (this.kind === "automation") return { key: this.automationKey };
     if (this.kind === "blueprint") return { key: this.blueprintKey };
@@ -375,6 +408,13 @@ export class HostModuleScreen extends OpenHouseElement {
         this.decisions.length > 0 ? castRowNames(this.decisions) : {},
       );
       this.reading = reply;
+      // **Pinned to the input's own name.** `ha-form` addresses its fields by
+      // index -- `how_<i>`, `cast_mode_<i>`, `value_<i>` -- and `applyInput`
+      // reads an answer back by that same index, so position *is* the row's
+      // identity here. A re-read that returned the inputs in another order would
+      // land one input's answer on another input's row, which is a module built
+      // from the wrong answers and nothing on the screen saying so.
+      reply.inputs.sort((left, right) => left.name.localeCompare(right.name));
       this.hosted = reply.hosted;
       this.slots = reply.slots;
       // The seed and the reading are the same fact read two ways -- what the
@@ -631,6 +671,21 @@ export class HostModuleScreen extends OpenHouseElement {
         this.notice =
           `Saved as ${reply.module}. It is in the Store tab, where you can ` +
           "install it into any room, or download the file to give to somebody else.";
+        // **The form is reset, so a second press cannot refuse itself.** The
+        // module is now in the store under this name, and Save is a *define*: a
+        // press with the same answers would come back a duplicate-name refusal,
+        // and that refusal would *replace* the success notice with a red error
+        // -- the screen contradicting the thing it has just done. Clearing the
+        // reading takes the filled rows and the button away together, and the
+        // next press has to start from a source as it did the first time.
+        this.reading = null;
+        this.decisions = [];
+        this.outputs = [];
+        this.moduleTitle = "";
+        this.moduleDescription = "";
+        this.moduleAuthor = "";
+        this.moduleVersion = "1.0.0";
+        this.moduleLicence = "no_licence";
       }
     } catch (error) {
       this.error = this.toError(error);
@@ -688,6 +743,7 @@ export class HostModuleScreen extends OpenHouseElement {
         document itself is not chosen here. Making a module out of a different
         one is an import.
       </p>
+      ${this.renderMetadata()}
       <details class="nested">
         <summary>The document it runs</summary>
         <pre class="expression">${seed.text}</pre>
@@ -695,9 +751,105 @@ export class HostModuleScreen extends OpenHouseElement {
     </section>`;
   }
 
+  /**
+   * The module's own words: name, description, author, version, licence.
+   *
+   * **In section 1, because they are what the module *is*.** They were in the
+   * save card, which made "4. Save it to your store" describe naming a module as
+   * much as saving it; here they sit with the source they describe, and the
+   * numbering comes out honest -- every card above the last says what the module
+   * is, and the last only saves it.
+   *
+   * The seeding is unchanged: `seedMetadata` fills these from the module being
+   * edited, and a fresh import takes the source's own title (`read`), so moving
+   * where they are drawn draws the same values.
+   */
+  private renderMetadata(): TemplateResult {
+    return html`
+      <div class="field">
+        <label class="label" for="host-title">Name</label>
+        <input
+          id="host-title"
+          type="text"
+          .value=${this.moduleTitle}
+          @input=${(event: Event) => {
+            this.moduleTitle = (event.target as HTMLInputElement).value;
+          }}
+        />
+        <p class="help">
+          What this house calls the module. It is the module's own name, the
+          store row's, and the file's when you download it.
+        </p>
+      </div>
+      <div class="field">
+        <label class="label" for="host-description">What it does</label>
+        <textarea
+          id="host-description"
+          rows="2"
+          .value=${this.moduleDescription}
+          @input=${(event: Event) => {
+            this.moduleDescription = (event.target as HTMLTextAreaElement).value;
+          }}
+        ></textarea>
+        <p class="help">
+          Left blank, this is the blueprint's own description -- the sentence
+          whoever wrote it wrote.
+        </p>
+      </div>
+      <details class="nested">
+        <summary>Who made it, its version, and its licence</summary>
+        <div class="row wrap">
+          <div class="field grow">
+            <label class="label" for="host-author">Who made it</label>
+            <input
+              id="host-author"
+              type="text"
+              .value=${this.moduleAuthor}
+              @input=${(event: Event) => {
+                this.moduleAuthor = (event.target as HTMLInputElement).value;
+              }}
+            />
+          </div>
+          <div class="field">
+            <label class="label" for="host-version">Version</label>
+            <input
+              id="host-version"
+              type="text"
+              .value=${this.moduleVersion}
+              @input=${(event: Event) => {
+                this.moduleVersion = (event.target as HTMLInputElement).value;
+              }}
+            />
+          </div>
+          <div class="field">
+            <label class="label" for="host-licence">Licence</label>
+            <select
+              id="host-licence"
+              .value=${this.moduleLicence}
+              @change=${(event: Event) => {
+                this.moduleLicence = (event.target as HTMLSelectElement).value;
+              }}
+            >
+              ${this.licences.map(
+                (licence) => html`<option value=${licence}>${licence}</option>`,
+              )}
+            </select>
+          </div>
+        </div>
+        <p class="help">
+          These three are what somebody else reads before they install a file you
+          send them. They do not change what the module does.
+        </p>
+      </details>`;
+  }
+
   private renderSource(): TemplateResult {
     return html`<section class="card">
-      <h2>1. Choose a source</h2>
+      <h2>1. What this module is</h2>
+      <p class="help">
+        Choose what it is made from -- an automation, a blueprint, or YAML you
+        paste -- and read it, then name it.
+      </p>
       <div class="tabs">
         ${(["automation", "blueprint", "text"] as const).map(
           (kind) => html`<button
@@ -706,10 +858,7 @@ export class HostModuleScreen extends OpenHouseElement {
             aria-selected=${this.kind === kind ? "true" : "false"}
             @click=${() => {
               this.kind = kind;
-              this.reading = null;
-              this.decisions = [];
-              this.outputs = [];
-              this.moduleTitle = "";
+              this.sourceChanged();
             }}
           >
             ${kind === "text" ? "Paste YAML" : capitalise(kind)}
@@ -728,6 +877,7 @@ export class HostModuleScreen extends OpenHouseElement {
           ${this.busy ? "Reading..." : "Read this source"}
         </button>
       </div>
+      ${this.reading ? this.renderMetadata() : nothing}
     </section>`;
   }
 
@@ -745,6 +895,7 @@ export class HostModuleScreen extends OpenHouseElement {
         .value=${this.automationKey}
         @change=${(event: Event) => {
           this.automationKey = (event.target as HTMLSelectElement).value;
+          this.sourceChanged();
         }}
       >
         ${this.automations.map(
@@ -776,6 +927,7 @@ export class HostModuleScreen extends OpenHouseElement {
         .value=${this.blueprintKey}
         @change=${(event: Event) => {
           this.blueprintKey = (event.target as HTMLSelectElement).value;
+          this.sourceChanged();
         }}
       >
         ${this.blueprints.map(
@@ -822,37 +974,37 @@ export class HostModuleScreen extends OpenHouseElement {
     }
     return html`<section class="card">
       <h2>2. Fill in what it asks for</h2>
-      ${this.seed
-        ? html`<p class="muted">
-            These are the <strong>module's own</strong> answers: what it does
-            wherever it is installed, until a room changes one for itself. A
-            ticked row stays a dial on the module card; an unticked one is
-            answered once, here, and fixed inside the automation.
-          </p>`
-        : nothing}
-      ${this.seed
-        ? nothing
-        : html`<p class="muted">
-            Every input the blueprint declares, and every one of them stays an
-            <strong>option</strong> on the module: it is settable there, wherever
-            the module ends up. A row left as "Blueprint default" starts at
-            the blueprint's own default where it has one -- and where it has
-            none, the module is saved and waits: nothing runs until somebody sets
-            that option. Answer a row here instead to give it the value it starts
-            at, or untick one to answer it once and fix it inside the automation.
-          </p>`}
-      <p class="muted">
-        Every row has a <strong>cast</strong> under it, and it is what to reach
-        for when the answer is not the thing itself. Home Assistant's own
-        <strong>condition</strong> editor is how one input answers a question
-        about the house -- true while a helper reads <code>sleep</code>, false
-        while it reads <code>awake</code> -- and Open House makes that condition
-        into a real entity and points the input at it, which is the only way it
-        can work where a <em>trigger</em> names the input. A
-        <strong>template</strong> is the other editor: an expression, rendered
-        wherever the input lands. Either one replaces the choice above while it
-        is there, and clearing it gives the choice back.
-      </p>
+      <details class="nested">
+        <summary>How these rows work</summary>
+        ${this.seed
+          ? html`<p class="muted">
+              These are the <strong>module's own</strong> answers: what it does
+              wherever it is installed, until a room changes one for itself. A
+              ticked row stays a dial on the module card; an unticked one is
+              answered once, here, and fixed inside the automation.
+            </p>`
+          : html`<p class="muted">
+              Every input the blueprint declares, and every one of them stays an
+              <strong>option</strong> on the module: it is settable there, wherever
+              the module ends up. A row left as "Blueprint default" starts at
+              the blueprint's own default where it has one -- and where it has
+              none, the module is saved and waits: nothing runs until somebody sets
+              that option. Answer a row here instead to give it the value it starts
+              at, or untick one to answer it once and fix it inside the automation.
+            </p>`}
+        <p class="muted">
+          Every row has a <strong>cast</strong> under it, and it is what to reach
+          for when the answer is not the thing itself. Home Assistant's own
+          <strong>condition</strong> editor is how one input answers a question
+          about the house -- true while a helper reads <code>sleep</code>, false
+          while it reads <code>awake</code> -- and Open House makes that condition
+          into a real entity and points the input at it, which is the only way it
+          can work where a <em>trigger</em> names the input. A
+          <strong>template</strong> is the other editor: an expression, rendered
+          wherever the input lands. Either one replaces the choice above while it
+          is there, and clearing it gives the choice back.
+        </p>
+      </details>
       ${this.unfilled.length > 0
         ? html`<div class="banner info">
             ${this.unfilled.join(", ")}
@@ -886,49 +1038,56 @@ export class HostModuleScreen extends OpenHouseElement {
     // and it is never kept as a setting: what it would be kept as is a device --
     // one house's -- which is the answer this rule removes.
     const device = isDeviceInput(input);
-    const schema: FormItem[] = [
+    const mode = castModeOf(decision);
+    // **What the row is, on one line; what it is cast to, one click under it.**
+    // The plain answer is the field the row always shows -- what fills it, and
+    // the value it holds -- and the cast lives in its own `ha-form` behind a
+    // closed `<details>`. Ten simple inputs then read as ten rows rather than as
+    // ten four-part forms, while every cast, both editors, the expose tick and
+    // the trigger warnings stay one click away. Splitting the row into two forms
+    // costs nothing: `applyInput` merges a partial answer, reading each field it
+    // did not receive back off the row (`data[...] ?? decision...`).
+    const baseSchema: FormItem[] = [
       { name: `how_${index}`, selector: howSelector(input, decision.how) },
     ];
-    const data: Record<string, unknown> = {
+    const baseData: Record<string, unknown> = {
       [`how_${index}`]: decision.how,
-      [`expose_${index}`]: decision.expose,
     };
-    // **The cast, in the row where the choosing happens -- and in every row.**
-    // Offered beside every answer, because the want it answers can arrive at any
-    // of them: what the blueprint should see may be logic worked out from what
-    // was chosen, or a condition of its own, or a template over a value typed in.
-    // A row that offers no cast is a row a person has to leave the screen to
-    // answer, which is what this replaced.
-    const mode = castModeOf(decision);
     // **One answer per row, and one control drawing it.** The choice the row's
     // own field holds is not used once a cast is on -- a template is bound in
     // place of it and a condition's entity is what the input is pointed at -- so
     // the field goes and only the editor that replaced it is drawn. Two controls
     // for one answer reads as two answers, and the dead one is on top.
+    //
+    // **Except a device row cast to a flow.** There the field *is* the answer:
+    // its device is what the flow's input node is wired to (`bindingFor`), so
+    // taking it away leaves the person neither seeing nor changing the device
+    // the flow runs from -- a flow built from a wire nothing on the screen can
+    // set. The picker stays; the answer it holds is what the flow is given.
     const value = valueSelector(decision, this.hosted, this.slots);
-    // **Every cast replaces the field, a flow included.** A flow is an answer
-    // like the other two, so the field goes with it and the row says instead
-    // what the flow will be given -- which device arrives wired into it, and
-    // where to build the rest. The field is still what *chooses* that device,
-    // and its answer is kept: the row goes on sending it while the flow is on,
-    // so switching back to the field finds the device where it was left.
-    if (value && mode === "none") {
-      schema.push({ name: `value_${index}`, selector: value });
+    if (value && (mode === "none" || (mode === "nodered" && device))) {
+      baseSchema.push({ name: `value_${index}`, selector: value });
     }
-    if (decision.value !== undefined) data[`value_${index}`] = decision.value;
-    schema.push({
-      name: `cast_mode_${index}`,
-      selector: castModeSelector(input.in_trigger),
-    });
-    data[`cast_mode_${index}`] = mode;
+    if (decision.value !== undefined) baseData[`value_${index}`] = decision.value;
+    // The cast, and everything it brings, addressed by the same row's index.
+    const castSchema: FormItem[] = [
+      {
+        name: `cast_mode_${index}`,
+        selector: castModeSelector(input.in_trigger),
+      },
+    ];
+    const castData: Record<string, unknown> = {
+      [`cast_mode_${index}`]: mode,
+      [`expose_${index}`]: decision.expose,
+    };
     if (mode === "template") {
-      schema.push({ name: `cast_${index}`, selector: { template: {} } });
-      data[`cast_${index}`] = decision.cast ?? "";
+      castSchema.push({ name: `cast_${index}`, selector: { template: {} } });
+      castData[`cast_${index}`] = decision.cast ?? "";
     }
     if (mode === "condition") {
-      schema.push({ name: `cast_${index}`, selector: { condition: {} } });
+      castSchema.push({ name: `cast_${index}`, selector: { condition: {} } });
       if (decision.condition !== undefined) {
-        data[`cast_${index}`] = decision.condition;
+        castData[`cast_${index}`] = decision.condition;
       }
     }
     if (mode === "script") {
@@ -936,13 +1095,15 @@ export class HostModuleScreen extends OpenHouseElement {
       // the field is a device-style picker over its entities, so the person names
       // one that already exists -- or opens the editor below and makes one, which
       // then arrives back here through `script-chosen`.
-      schema.push({
+      castSchema.push({
         name: `script_${index}`,
         selector: { entity: { domain: ["script"] } },
       });
-      if (decision.script) data[`script_${index}`] = `script.${decision.script}`;
+      if (decision.script) castData[`script_${index}`] = `script.${decision.script}`;
     }
-    if (!device) schema.push({ name: `expose_${index}`, selector: { boolean: {} } });
+    if (!device) {
+      castSchema.push({ name: `expose_${index}`, selector: { boolean: {} } });
+    }
     return html`<div class="field" data-input=${index}>
       <div class="label">${title}</div>
       ${input.description
@@ -955,37 +1116,51 @@ export class HostModuleScreen extends OpenHouseElement {
             module is put in -- or the whole house's, if you pick a global one.
           </p>`
         : nothing}
-      ${mode === "template" && input.in_trigger
-        ? html`<p class="help warn">
-            The trigger names this input, so a template here would not work:
-            Home Assistant matches a trigger's entity against the entities the
-            house has, and never renders what is written there -- so it would
-            match nothing and the automation would install and never fire. Use a
-            <strong>condition</strong> instead: Open House works it out and
-            points the trigger at the answer.
-          </p>`
-        : nothing}
       <ha-form
         data-input=${index}
         .hass=${this.hass}
-        .data=${data}
-        .schema=${schema}
+        .data=${baseData}
+        .schema=${baseSchema}
         .computeLabel=${(item: FormItem) => labelFor(item.name, decision.how, mode)}
         @value-changed=${(event: CustomEvent<{ value: Record<string, unknown> }>) => {
           this.applyInput(index, event.detail.value);
         }}
       ></ha-form>
-      ${mode === "script" && input.in_trigger
-        ? html`<p class="help warn">
-            The trigger names this input, so a script here would not work: Home
-            Assistant matches a trigger's entity against the entities the house
-            has, and never renders what is written there -- so the automation
-            would install and never fire. Use a <strong>condition</strong>
-            instead.
-          </p>`
-        : nothing}
-      ${mode === "nodered" ? this.renderFlow(decision) : nothing}
-      ${mode === "script" ? this.renderScript(decision, index) : nothing}
+      <details>
+        <summary>${mode === "none" ? "Cast it" : `Cast it: ${CAST_WORDS[mode]}`}</summary>
+        ${mode === "template" && input.in_trigger
+          ? html`<p class="help warn">
+              The trigger names this input, so a template here would not work:
+              Home Assistant matches a trigger's entity against the entities the
+              house has, and never renders what is written there -- so it would
+              match nothing and the automation would install and never fire. Use
+              a <strong>condition</strong> instead: Open House works it out and
+              points the trigger at the answer.
+            </p>`
+          : nothing}
+        <ha-form
+          data-input=${index}
+          .hass=${this.hass}
+          .data=${castData}
+          .schema=${castSchema}
+          .computeLabel=${(item: FormItem) =>
+            labelFor(item.name, decision.how, mode)}
+          @value-changed=${(event: CustomEvent<{ value: Record<string, unknown> }>) => {
+            this.applyInput(index, event.detail.value);
+          }}
+        ></ha-form>
+        ${mode === "script" && input.in_trigger
+          ? html`<p class="help warn">
+              The trigger names this input, so a script here would not work: Home
+              Assistant matches a trigger's entity against the entities the house
+              has, and never renders what is written there -- so the automation
+              would install and never fire. Use a <strong>condition</strong>
+              instead.
+            </p>`
+          : nothing}
+        ${mode === "nodered" ? this.renderFlow(decision) : nothing}
+        ${mode === "script" ? this.renderScript(decision, index) : nothing}
+      </details>
     </div>`;
   }
 
@@ -1087,6 +1262,23 @@ export class HostModuleScreen extends OpenHouseElement {
     this.decisions = this.decisions.map((decision, at) => {
       if (at !== index) return decision;
       const how = (data[`how_${index}`] as How) ?? decision.how;
+      // The row's own field is off the form while a cast is on, and a form
+      // reports what it drew -- so a name it did not carry keeps the answer it
+      // had rather than being read as one that was cleared.
+      const value =
+        how === LEAVE
+          ? undefined
+          : ((data[`value_${index}`] as unknown) ?? decision.value);
+      // **Which form spoke decides which half of the row moves.** The row is two
+      // forms -- the plain answer, and the cast behind its own `<details>` -- and
+      // each reports only what it drew. The cast menu is the marker: a submission
+      // without it came from the plain form and must leave the cast untouched,
+      // and a submission *with* it came from the cast form and must be read
+      // whole -- a condition builder cleared there has to be able to be cleared,
+      // which `?? decision.condition` would undo by putting the old one back.
+      if (!(`cast_mode_${index}` in data)) {
+        return { ...decision, how, value };
+      }
       const mode = (data[`cast_mode_${index}`] as CastMode) ?? castModeOf(decision);
       const written = data[`cast_${index}`];
       // The two editors write to the same field name and hold different things,
@@ -1096,13 +1288,7 @@ export class HostModuleScreen extends OpenHouseElement {
       return {
         input: decision.input,
         how,
-        // The row's own field is off the form while a cast is on, and a form
-        // reports what it drew -- so a name it did not carry keeps the answer it
-        // had rather than being read as one that was cleared.
-        value:
-          how === LEAVE
-            ? undefined
-            : ((data[`value_${index}`] as unknown) ?? decision.value),
+        value,
         // A device input keeps nothing: the switch is not drawn for one, and a
         // form reports what it drew.
         expose: isDeviceInput(decision.input)
@@ -1129,16 +1315,19 @@ export class HostModuleScreen extends OpenHouseElement {
     const candidates = this.outputs;
     return html`<section class="card">
       <h2>3. Say what it publishes</h2>
-      <p class="muted">
-        An output is a value from inside this blueprint that other modules,
-        automations and dashboards can read. Each one becomes an entity of its
-        own -- <code>sensor.open_house_&lt;module&gt;_&lt;key&gt;</code> --
-        published by one step added beside the value it reads, not by a rewrite
-        of the blueprint. A row you answered with <em>logic</em> -- a condition,
-        a template, a flow, a script -- is offered here too: tick it and the
-        answer that row works out becomes an entity the rest of the house can
-        read, which is what "expose it" means.
-      </p>
+      <details class="nested">
+        <summary>What an output is</summary>
+        <p class="muted">
+          An output is a value from inside this blueprint that other modules,
+          automations and dashboards can read. Each one becomes an entity of its
+          own -- <code>sensor.open_house_&lt;module&gt;_&lt;key&gt;</code> --
+          published by one step added beside the value it reads, not by a rewrite
+          of the blueprint. A row you answered with <em>logic</em> -- a condition,
+          a template, a flow, a script -- is offered here too: tick it and the
+          answer that row works out becomes an entity the rest of the house can
+          read, which is what "expose it" means.
+        </p>
+      </details>
       ${candidates.length === 0
         ? html`<p class="muted">
             This source carries nothing that could be published: no
@@ -1247,78 +1436,6 @@ export class HostModuleScreen extends OpenHouseElement {
             ${this.seed.installs.map((row) => row.room_name).join(", ")}.
           </div>`
         : nothing}
-      <div class="field">
-        <label class="label" for="host-title">Name</label>
-        <input
-          id="host-title"
-          type="text"
-          .value=${this.moduleTitle}
-          @input=${(event: Event) => {
-            this.moduleTitle = (event.target as HTMLInputElement).value;
-          }}
-        />
-        <p class="help">
-          What this house calls the module. It is the module's own name, the
-          store row's, and the file's when you download it.
-        </p>
-      </div>
-      <div class="field">
-        <label class="label" for="host-description">What it does</label>
-        <textarea
-          id="host-description"
-          rows="2"
-          .value=${this.moduleDescription}
-          @input=${(event: Event) => {
-            this.moduleDescription = (event.target as HTMLTextAreaElement).value;
-          }}
-        ></textarea>
-        <p class="help">
-          Left blank, this is the blueprint's own description -- the sentence
-          whoever wrote it wrote.
-        </p>
-      </div>
-      <div class="row wrap">
-        <div class="field grow">
-          <label class="label" for="host-author">Who made it</label>
-          <input
-            id="host-author"
-            type="text"
-            .value=${this.moduleAuthor}
-            @input=${(event: Event) => {
-              this.moduleAuthor = (event.target as HTMLInputElement).value;
-            }}
-          />
-        </div>
-        <div class="field">
-          <label class="label" for="host-version">Version</label>
-          <input
-            id="host-version"
-            type="text"
-            .value=${this.moduleVersion}
-            @input=${(event: Event) => {
-              this.moduleVersion = (event.target as HTMLInputElement).value;
-            }}
-          />
-        </div>
-        <div class="field">
-          <label class="label" for="host-licence">Licence</label>
-          <select
-            id="host-licence"
-            .value=${this.moduleLicence}
-            @change=${(event: Event) => {
-              this.moduleLicence = (event.target as HTMLSelectElement).value;
-            }}
-          >
-            ${this.licences.map(
-              (licence) => html`<option value=${licence}>${licence}</option>`,
-            )}
-          </select>
-        </div>
-      </div>
-      <p class="help">
-        These three are what somebody else reads before they install a file you
-        send them. They do not change what the module does.
-      </p>
       ${this.pinned
         ? html`<div class="banner warn">
             This module names devices from your house, so it is made for your
@@ -1368,21 +1485,24 @@ export class HostModuleScreen extends OpenHouseElement {
             ? "Saving..."
             : this.seed
               ? "Save the changes"
-              : "Save this module"}
+              : "Save it to your store"}
         </button>
       </div>
-      <p class="help">
-        ${this.seed
-          ? html`The document itself is unchanged, so this is what the module is
-              from now on: every room running it is built again from the answers
-              above, and an output you untick stops existing in those rooms. A
-              room that changed one of these answers for itself keeps its own.`
-          : html`The module keeps the document it was made from, so it goes on
-              working when the blueprint is edited underneath it -- importing it
-              again is how you take an update. Ticked outputs become this
-              module's own values: every room that installs it publishes them
-              under its own name.`}
-      </p>
+      <details class="nested">
+        <summary>What saving does</summary>
+        <p class="help">
+          ${this.seed
+            ? html`The document itself is unchanged, so this is what the module is
+                from now on: every room running it is built again from the answers
+                above, and an output you untick stops existing in those rooms. A
+                room that changed one of these answers for itself keeps its own.`
+            : html`The module keeps the document it was made from, so it goes on
+                working when the blueprint is edited underneath it -- importing it
+                again is how you take an update. Ticked outputs become this
+                module's own values: every room that installs it publishes them
+                under its own name.`}
+        </p>
+      </details>
     </section>`;
   }
 
@@ -1702,9 +1822,12 @@ export function splitOutput(value: unknown): [string, string] {
  * The control an input's value is typed into, or `null` for a choice that has
  * no value of its own.
  *
- * A `target` gets the entity picker, for the reason `websocket_api._selector_kind`
- * reports it as one: what a person binds is a device, and the difference is in
- * how the value is wrapped, which the server knows and this does not.
+ * What is drawn follows the **answer** (`how`), not the input's own selector: an
+ * input answered by a slot is given the slot menu, whatever the blueprint asked
+ * with, and an input bound to a device gets the entity picker, because a bound
+ * device *is* an entity. How the value is wrapped into the automation is the
+ * server's (`module_host._bound_value`), which is why nothing here reads the
+ * selector to decide it.
  */
 export function valueSelector(
   decision: InputDecision,
@@ -1713,7 +1836,7 @@ export function valueSelector(
 ): Record<string, unknown> | null {
   if (decision.how === LEAVE) return null;
   if (decision.how === "entity") {
-    // A `target` that names several -- the ellipse a blueprint asks a room's
+    // An input that names several -- the ellipse a blueprint asks a room's
     // lights with -- gets the control that takes several. One control for both
     // would either bind a list where one id belongs or offer one box for a
     // question about three lights.
@@ -1777,15 +1900,44 @@ export function hostedOutputs(hosted: readonly HostedModule[]): string[] {
 }
 
 /**
+ * The selector kinds that take a **device** rather than a value.
+ *
+ * `entity` and `target` are what a blueprint writes to ask for a device, and
+ * `device`, `area`, `floor`, `label` and `attribute` are Home Assistant's other
+ * ways of asking for one -- all five name a device the same way `entity` does.
+ * They belong on the list whatever the source spells them, so the two halves
+ * agree by construction rather than by whichever name the server happens to
+ * report: `websocket_api._selector_kind` names all seven, and each of the seven
+ * is spelled here exactly as it is there.
+ *
+ * An input on this list is answered by a **slot** and never kept as a plain
+ * setting, which is what the import screen's `how` menu reads this for. The value
+ * control `bySelector` would give such a selector therefore never renders for one
+ * -- but the set is one question asked in two places, so it is written once.
+ */
+const DEVICE_SELECTORS: ReadonlySet<string> = new Set([
+  "entity",
+  "target",
+  "device",
+  "area",
+  "floor",
+  "label",
+  "attribute",
+]);
+
+/**
  * Whether an input's own selector names a **device** rather than a value.
  *
- * A blueprint's `entity` and `target` selectors both take a device; the server
- * reports a target as an entity for the same reason (`websocket_api._selector_kind`),
- * and the two differ only in how the value is wrapped when it is written into the
- * automation (`module_host._bound_value`).
+ * A blueprint's `entity` and `target` selectors both take a device, and so do
+ * Home Assistant's `device`, `area`, `floor`, `label` and `attribute` selectors.
+ * `websocket_api._selector_kind` names all seven with the spelling matched here
+ * -- it names each for itself rather than folding them into `entity`, which is
+ * what lets this set be the one question asked in both halves -- and the seven
+ * differ only in how the value is wrapped when it is written into the automation
+ * (`module_host._bound_value`).
  */
 export function isDeviceInput(input: ModuleInputRow): boolean {
-  return input.selector === "entity" || input.selector === "target";
+  return DEVICE_SELECTORS.has(input.selector);
 }
 
 /**

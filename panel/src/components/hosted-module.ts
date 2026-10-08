@@ -46,6 +46,9 @@ import type {
   ModuleInputRow,
 } from "../api/models.ts";
 import { REFUSALS } from "../api/protocol.ts";
+// The banner mark, so a card's warning and the suppression panel's notice are
+// the same shape and carry the same `role`.
+import { banner } from "./suppression.ts";
 // The cast vocabulary lives beside this card rather than inside it, because the
 // question it answers -- what a row may be answered *with* instead of a value --
 // is asked on three screens: this card, the import screen, and a slot row. The
@@ -135,6 +138,14 @@ export function entityIds(value: unknown): string[] {
  * literal would put a mapping where the automation's target belongs, and the
  * module would run against a list of lights that is a string. Everything else
  * is the value the person typed, which is what the control for it holds.
+ *
+ * **A row the person did not type into is the row's own answer.** The form only
+ * reports what it drew, so a row showing a cast instead of its own field reports
+ * no value at all and the card records that as `undefined` -- which
+ * `JSON.stringify` then drops, so the server would receive `{kind: "literal"}`
+ * with no value rather than the answer the row still holds. The stored value is
+ * what such a row means; a row that has none is bound to nothing rather than to
+ * a key that vanishes on the wire.
  */
 export function bindingForSetting(
   settings: readonly ModuleInputRow[],
@@ -142,13 +153,14 @@ export function bindingForSetting(
   value: unknown,
 ): ModuleBinding {
   const row = settings.find((setting) => setting.name === name);
+  const answer = value === undefined ? row?.value : value;
   if (row?.selector === "entity" || row?.selector === "target") {
-    const ids = entityIds(value);
+    const ids = entityIds(answer);
     if (ids.length > 0) {
       return { kind: "entity", value: ids.length === 1 ? ids[0] : ids };
     }
   }
-  return { kind: "literal", value };
+  return { kind: "literal", value: answer ?? null };
 }
 
 /**
@@ -251,14 +263,26 @@ export class HostedModuleCard extends OpenHouseElement {
   static override properties = {
     ...OpenHouseElement.properties,
     module: { attribute: false },
-    // Whether this card may be taken out of the house, and whether a settings
-    // form is drawn at all. A viewer who is not an administrator reads the card
-    // and changes nothing, which is the same rule every other screen follows.
+    // Whether this card may be taken out of the house, and whether anything on
+    // it may be edited at all. A viewer who is not an administrator reads the
+    // card and changes nothing, which is the same rule every other screen
+    // follows -- so this is also what gates the settings form and the
+    // configuration controls, which a viewer who cannot send a write has no use
+    // for. The parents hand the administrator flag in as `removable` (the same
+    // person may do both); `admin` is read too, so a caller that sets it
+    // directly is not silently read-only.
     removable: { type: Boolean },
     draft: { state: true },
     busy: { state: true },
     notice: { state: true },
     error: { state: true },
+    // The publish toggles the card is showing flipped but has not heard back
+    // about, by setting name. Reactive because the box is drawn from it: without
+    // this the "Saving..." re-render would draw the row's old `published_key`
+    // and snap the box back under the person's finger. Also the configuration
+    // the menu is showing while a switch is in flight, for the same reason.
+    publishing: { state: true },
+    pendingConfig: { state: true },
     // Which configuration dialog is open, and the name typed into it. Reactive
     // because every one of them is a click: a plain field would leave the sheet
     // never drawn, which is the failure this card has already had once.
@@ -309,6 +333,32 @@ export class HostedModuleCard extends OpenHouseElement {
   private busy = false;
   private notice: string | null = null;
   private error: ReturnType<OpenHouseElement["toError"]> | null = null;
+  /** A publish toggle, or a configuration switch, waiting for a write to finish. */
+  private publishing: Record<string, boolean> = {};
+  /** The configuration the menu is showing while a switch is in flight. */
+  private pendingConfig: string | null = null;
+  /**
+   * A publish the person flipped while another write was in flight.
+   *
+   * Held rather than dropped, and applied the moment that write is out: a
+   * control that silently did nothing is a switch a person watches snap back.
+   * Plain rather than reactive because nothing is drawn from it -- it is read in
+   * `updated`, where the in-flight write's own re-render has cleared `busy`.
+   */
+  private queuedPublish: { setting: ModuleInputRow; publish: boolean } | null =
+    null;
+  /**
+   * Whether the module update now arriving is one this card asked for.
+   *
+   * Every write here ends by telling the page, and the page answers by re-reading
+   * the house and handing this card a fresh module. That reload is the card's own
+   * doing and what the card is holding unsent is still owed to the server, so the
+   * arrival must not be read as somebody else's answer landing over the top of
+   * it. A change that arrives with this false came from outside -- another card,
+   * or the page's own refresh -- and the answers on this card were decided
+   * against a house that has moved.
+   */
+  private ownReload = false;
   /** `none`, or which of the two name dialogs is open. */
   private configDialog: "none" | "new" | "rename" = "none";
   /** What has been typed into that dialog, as typed. */
@@ -321,6 +371,21 @@ export class HostedModuleCard extends OpenHouseElement {
     this.removable = false;
     this.revision = 0;
     this.stale = false;
+  }
+
+  /**
+   * Whether anything on this card may be written to at all.
+   *
+   * Two flags, because the same person arrives here two ways: the pages hand the
+   * administrator flag in as `removable` -- they have no name for the card's own
+   * right to be edited, and the person who may remove a module is the person who
+   * may change it -- while a card inside the panel reads `admin` off the element
+   * it inherited. Either is a yes. Reading only `admin` would make every card on
+   * every page read-only, since no caller sets it; reading only `removable` would
+   * ignore a caller that set the flag the panel uses everywhere else.
+   */
+  private get editable(): boolean {
+    return this.admin || this.removable;
   }
 
   /**
@@ -475,8 +540,17 @@ export class HostedModuleCard extends OpenHouseElement {
     // refuse it anyway. The timer that got here is not rearmed either -- see
     // `disconnectedCallback`, which is the other caller.
     if (this.stale) return;
+    // A write is already out. Every keystroke re-arms this timer, so this is the
+    // timer firing again while the previous save is still in flight -- and the
+    // change that re-armed it is still in the draft, which is what that save is
+    // sending. Going now would race it on the same record; the write's own reply
+    // re-arms the wait for whatever it did not carry.
+    if (this.busy) return;
     const bindings: Record<string, ModuleBinding> = {};
     const casts: Record<string, unknown> = {};
+    // The names this call actually put on the wire, so the reply can drop
+    // exactly those and leave anything typed while it was out for the next save.
+    const sent = new Set<string>();
     // The inputs answered by a *script*, by name. Unlike the flows this is not
     // read off the module for every setting -- a flow's set is the whole answer
     // (the server takes a name that dropped off it as a flow to take out of
@@ -509,20 +583,21 @@ export class HostedModuleCard extends OpenHouseElement {
       if (mode === "nodered") flows.add(name);
       // A **condition** travels as a condition and never as a binding: the server
       // makes an entity out of it and binds the input to that, and a device sent
-      // beside it would be the answer that won. An editor opened and left empty is
-      // not a condition but the *absence* of one, and a name sent as `null` is how
-      // a cast comes back off -- the same name not sent at all means "keep".
+      // beside it would be the answer that won.
       if (mode === "condition") {
         const written = writtenCondition(
           this.conditions[name] ?? row?.cast ?? null,
         );
         // An editor chosen and left empty is not an answer, it is a person on
-        // their way to one. Sending it would send `null` -- the same removal as
-        // taking the cast off -- and the rebuild that came back would draw the
-        // row without its cast: the editor they are typing into, gone. Held,
-        // and saved by the change that carries the condition itself.
-        if (written === null && row?.cast == null) continue;
+        // their way to one -- whether or not a condition was stored before. The
+        // menu is showing the editor, and the block inside it is deleted and
+        // retyped often enough that reading the empty moment as "a removal"
+        // would take the cast out from under the person mid-word. A condition
+        // comes *off* by flipping the menu back to the input field, which is the
+        // branch below, and never by leaving the editor empty.
+        if (written === null) continue;
         casts[name] = written;
+        sent.add(name);
         continue;
       }
       // A **script** is the fourth answer and the one with no binding either,
@@ -535,7 +610,10 @@ export class HostedModuleCard extends OpenHouseElement {
       // back would draw the row without the editor they are working in.
       if (mode === "script") {
         const script = this.scripts[name];
-        if (script) scripts[name] = script;
+        if (script) {
+          scripts[name] = script;
+          sent.add(name);
+        }
         continue;
       }
       // A **template** cast is the *whole* answer, exactly as it is on the import
@@ -563,6 +641,7 @@ export class HostedModuleCard extends OpenHouseElement {
       if (row?.script_id) scripts[name] = "";
       bindings[name] =
         cast ?? bindingForSetting(this.module.settings, name, value);
+      sent.add(name);
     }
     // Nothing to send, and nothing to say about it: this is reached by the
     // auto-save, where the empty case is a form reporting a value it already
@@ -579,6 +658,7 @@ export class HostedModuleCard extends OpenHouseElement {
     this.busy = true;
     this.error = null;
     this.notice = null;
+    let saved_ok = false;
     try {
       const reply = await this.requireClient().modulesSettings(
         this.module.slug,
@@ -594,14 +674,14 @@ export class HostedModuleCard extends OpenHouseElement {
       );
       const saved =
         reply.modules.find((row) => row.slug === this.module.slug) ?? this.module;
-      this.draft = {};
-      this.casting = {};
-      this.conditions = {};
-      this.scripts = {};
-      this.castModes = {};
-      this.dispatchEvent(
-        new CustomEvent("module-changed", { bubbles: true, composed: true }),
-      );
+      saved_ok = true;
+      // **Only what was sent.** A person who types into the next row while this
+      // one is in flight has an answer that belongs to the save after this one,
+      // and clearing the whole draft here is how it used to disappear: the reply
+      // took the new keystroke with it, the re-armed timer found nothing to send
+      // and stood down, and the value never left the card.
+      this.dropSent(sent);
+      this.moduleChanged();
       // What the save means is read off the module it produced rather than
       // assumed: a module whose slots its room has not bound yet, or whose own
       // options nothing has set, is saved and still not running, and saying
@@ -624,8 +704,57 @@ export class HostedModuleCard extends OpenHouseElement {
       if (!this.wentStale(error)) this.error = this.toError(error);
     } finally {
       this.busy = false;
+      // Whatever the reply did not carry is still owed to the server, and the
+      // reply that just landed is what says so -- not the timer, which was
+      // disarmed the moment this save started. Re-armed only after a write that
+      // landed: a refusal leaves the draft on the screen for the person to see,
+      // and retrying a refused write on a timer would be the card arguing with
+      // the server.
+      if (saved_ok && this.hasDraft()) this.queueSave();
       this.requestUpdate();
     }
+  }
+
+  /**
+   * Drop from the card's per-row maps exactly the names the last save carried.
+   *
+   * Each map is what the row is showing while it is unsent, so a name that did
+   * not travel keeps its entry -- and with it the editor a person is still
+   * typing in, which the rebuild that follows would otherwise take away.
+   */
+  private dropSent(sent: Set<string>): void {
+    if (sent.size === 0) return;
+    this.draft = this.forgetMany(this.draft, sent);
+    this.casting = this.forgetMany(this.casting, sent) as Record<string, string>;
+    this.conditions = this.forgetMany(this.conditions, sent);
+    this.scripts = this.forgetMany(this.scripts, sent) as Record<string, string>;
+    this.castModes = this.forgetMany(this.castModes, sent) as Record<
+      string,
+      CastMode
+    >;
+  }
+
+  /**
+   * Tell the page this module moved, and own the reload that comes back.
+   *
+   * Every write on this card ends here, and the page answers by re-reading the
+   * house and handing the card a fresh module. That is the card's own reload --
+   * see `ownReload` -- so the incoming module is not read as an outside answer
+   * landing over edits that have not been sent yet.
+   */
+  private moduleChanged(): void {
+    // **A card off the page has nobody to tell.** Every caller binds
+    // `module-changed` to the card element itself, so an event from a card that
+    // has already been taken out of the tree travels nowhere -- which is the
+    // case `disconnectedCallback` writes from, and the reason its flush used to
+    // leave a save that landed with nothing to say about it. The write stands;
+    // the page that draws this module reads it again when it next draws. And
+    // `ownReload` is left alone here, because no reload is coming to own.
+    if (!this.isConnected) return;
+    this.ownReload = true;
+    this.dispatchEvent(
+      new CustomEvent("module-changed", { bubbles: true, composed: true }),
+    );
   }
 
   /**
@@ -677,8 +806,20 @@ export class HostedModuleCard extends OpenHouseElement {
     setting: ModuleInputRow,
     publish: boolean,
   ): Promise<void> {
-    if (this.busy) return;
+    // A write is already out -- most often the auto-save, whose 600ms wait fired
+    // as the switch was pressed. The toggle waits for it rather than being
+    // dropped: a control that silently did nothing is a switch a person watches
+    // snap back under their hand, and `updated` applies this the moment the
+    // write in flight is done.
+    if (this.busy) {
+      this.queuedPublish = { setting, publish };
+      return;
+    }
     this.busy = true;
+    // Drawn as flipped from here, so the "Saving..." re-render shows the person's
+    // answer rather than the server's old one snapping the box back and re-ticks
+    // it a moment later when the reply lands.
+    this.publishing = { ...this.publishing, [setting.name]: publish };
     this.error = null;
     this.notice = null;
     this.requestUpdate();
@@ -689,14 +830,27 @@ export class HostedModuleCard extends OpenHouseElement {
         publish,
         this.revision,
       );
-      this.dispatchEvent(
-        new CustomEvent("module-changed", { bubbles: true, composed: true }),
-      );
+      this.moduleChanged();
     } catch (error) {
+      // Refused, so the box goes back to what the server still holds -- which is
+      // what the row says, and not what was pressed.
+      this.publishing = this.forgetMany(
+        this.publishing,
+        new Set([setting.name]),
+      ) as Record<string, boolean>;
       if (!this.wentStale(error)) this.error = this.toError(error);
     } finally {
       this.busy = false;
       this.requestUpdate();
+    }
+  }
+
+  /** Apply a publish that was flipped while another write was in flight. */
+  protected override updated(): void {
+    const queued = this.queuedPublish;
+    if (queued && !this.busy) {
+      this.queuedPublish = null;
+      void this.setPublished(queued.setting, queued.publish);
     }
   }
 
@@ -711,15 +865,18 @@ export class HostedModuleCard extends OpenHouseElement {
     this.notice = null;
     try {
       await this.requireClient().modulesUnhost(this.module.slug);
-      this.dispatchEvent(
-        new CustomEvent("module-changed", { bubbles: true, composed: true }),
-      );
+      this.moduleChanged();
       // No notice: the card is gone a moment later -- the list that drew it is
       // what was told to reload -- and a sentence about a module that is no
       // longer on the screen is a sentence nobody reads.
       void title;
     } catch (error) {
       this.error = this.toError(error);
+    } finally {
+      // Cleared on the way out of both paths, and not only the failed one: a
+      // removal that answered without the card actually leaving -- which is what
+      // happens whenever the page does not reload -- would otherwise leave every
+      // button here disabled and the label reading "Removing..." for good.
       this.busy = false;
       this.requestUpdate();
     }
@@ -763,9 +920,7 @@ export class HostedModuleCard extends OpenHouseElement {
       `${name} reads what it publishes.${watching}`;
     this.error = null;
     this.requestUpdate();
-    this.dispatchEvent(
-      new CustomEvent("module-changed", { bubbles: true, composed: true }),
-    );
+    this.moduleChanged();
   }
 
   /** A copy of one of the card's per-row maps without `name` in it. */
@@ -773,8 +928,16 @@ export class HostedModuleCard extends OpenHouseElement {
     record: Record<string, unknown>,
     name: string,
   ): Record<string, unknown> {
+    return this.forgetMany(record, new Set([name]));
+  }
+
+  /** A copy of one of the card's per-row maps with none of `names` in it. */
+  private forgetMany(
+    record: Record<string, unknown>,
+    names: Set<string>,
+  ): Record<string, unknown> {
     const copy = { ...record };
-    delete copy[name];
+    for (const name of names) delete copy[name];
     return copy;
   }
 
@@ -797,6 +960,9 @@ export class HostedModuleCard extends OpenHouseElement {
     // configuration that had just become the running one.
     this.cancelSave();
     this.busy = true;
+    // Shown as picked from here, so a refused switch puts the menu back rather
+    // than leaving it on an option the module is not running.
+    this.pendingConfig = name;
     this.error = null;
     this.notice = null;
     try {
@@ -815,10 +981,10 @@ export class HostedModuleCard extends OpenHouseElement {
         (unsaved
           ? ` The edits made on ${left} and not saved were left behind.`
           : "");
-      this.dispatchEvent(
-        new CustomEvent("module-changed", { bubbles: true, composed: true }),
-      );
+      this.moduleChanged();
     } catch (error) {
+      // The menu goes back to the configuration the module is still running.
+      this.pendingConfig = null;
       if (!this.wentStale(error)) this.error = this.toError(error);
       // The switch did not happen, so nothing was left behind and the answers
       // on the card are still the ones this configuration is running: what the
@@ -835,6 +1001,11 @@ export class HostedModuleCard extends OpenHouseElement {
   private async addConfiguration(): Promise<void> {
     const name = this.configName.trim();
     if (name === "") return;
+    const unsaved = this.hasDraft();
+    // Before the write goes, like a switch: a pending auto-save belongs to the
+    // configuration being left, and the round trip here is long enough for it to
+    // fire in the middle of one -- putting two writes on the same record.
+    this.cancelSave();
     this.busy = true;
     this.error = null;
     this.notice = null;
@@ -846,11 +1017,10 @@ export class HostedModuleCard extends OpenHouseElement {
       this.notice =
         `${this.module.title} is running ${name} now. It started as a copy of ` +
         "the configuration it was on, so change what makes it different.";
-      this.dispatchEvent(
-        new CustomEvent("module-changed", { bubbles: true, composed: true }),
-      );
+      this.moduleChanged();
     } catch (error) {
       this.error = this.toError(error);
+      if (unsaved && !this.stale) this.queueSave();
     } finally {
       this.busy = false;
       this.requestUpdate();
@@ -862,6 +1032,11 @@ export class HostedModuleCard extends OpenHouseElement {
     const from = this.module.config;
     const to = this.configName.trim();
     if (to === "" || to === from) return;
+    const unsaved = this.hasDraft();
+    // Cancelled for the same reason as a switch's: two writes must not race on
+    // the one record. The answers themselves do not move, so they are put back
+    // on the failure path and left to the reload on the success one.
+    this.cancelSave();
     this.busy = true;
     this.error = null;
     this.notice = null;
@@ -870,11 +1045,10 @@ export class HostedModuleCard extends OpenHouseElement {
       this.configDialog = "none";
       this.configName = "";
       this.notice = `${from} is called ${to} now. Its answers are unchanged.`;
-      this.dispatchEvent(
-        new CustomEvent("module-changed", { bubbles: true, composed: true }),
-      );
+      this.moduleChanged();
     } catch (error) {
       this.error = this.toError(error);
+      if (unsaved && !this.stale) this.queueSave();
     } finally {
       this.busy = false;
       this.requestUpdate();
@@ -891,6 +1065,11 @@ export class HostedModuleCard extends OpenHouseElement {
    */
   private async removeConfiguration(): Promise<void> {
     const name = this.module.config;
+    const unsaved = this.hasDraft();
+    // Cancelled like a switch's, and for the same reason: the module moves to
+    // another configuration, so a pending auto-save would be two writes racing
+    // on one record.
+    this.cancelSave();
     this.busy = true;
     this.error = null;
     this.notice = null;
@@ -904,25 +1083,30 @@ export class HostedModuleCard extends OpenHouseElement {
       this.notice = `${name} is gone. ${this.module.title} is running ${
         now?.config ?? "another configuration"
       } now.`;
-      this.dispatchEvent(
-        new CustomEvent("module-changed", { bubbles: true, composed: true }),
-      );
+      this.moduleChanged();
     } catch (error) {
       this.error = this.toError(error);
+      if (unsaved && !this.stale) this.queueSave();
     } finally {
       this.busy = false;
       this.requestUpdate();
     }
   }
 
-  /** Whether a setting has been touched on this card and not saved. */
+  /**
+   * Whether a setting has been touched on this card and not saved.
+   *
+   * `castModes` is deliberately not counted. It is which editor a row is
+   * *showing*, and merely picking a cast from the menu sets one with nothing
+   * typed behind it -- so counting it warned a person that unsaved edits would
+   * be left behind by a configuration switch that would in fact carry nothing.
+   */
   private hasDraft(): boolean {
     return (
       Object.keys(this.draft).length > 0 ||
       Object.keys(this.casting).length > 0 ||
       Object.keys(this.conditions).length > 0 ||
-      Object.keys(this.scripts).length > 0 ||
-      Object.keys(this.castModes).length > 0
+      Object.keys(this.scripts).length > 0
     );
   }
 
@@ -943,12 +1127,20 @@ export class HostedModuleCard extends OpenHouseElement {
   /**
    * A card taken off the page saves what it was holding rather than dropping it.
    *
-   * Leaving the page is not the same as abandoning the change: a reload that
-   * rebuilds the list, or a row that moves, takes the element out and puts it
-   * back, and a person who typed a number and clicked away in the same breath
-   * meant it. So the wait is cut short rather than the save thrown away -- and
-   * the two acts that *do* make the draft meaningless, unhosting and switching
-   * configuration, cancel it before this can see it.
+   * This is reached when the card is *removed* -- a tab change, a room's list
+   * rebuilt without this module in it, a page torn down. A row that merely moves
+   * does not come through here: the list is keyed by slug, so Lit reuses the
+   * element and a move is a move. What does arrive is a person who typed into a
+   * row and left in the same breath, and the wait is cut short for them rather
+   * than the save thrown away. The two acts that *do* make the draft
+   * meaningless, unhosting and switching configuration, cancel it before this
+   * can see it.
+   *
+   * **The write lands and the page is not told**, which is not a bug here but a
+   * fact about where the listener is: the pages bind `module-changed` to this
+   * element, and an element that is no longer in the tree cannot deliver it. So
+   * the flush gives the house the answer and `moduleChanged` stays quiet about
+   * it, and the next read of the house picks the change up.
    *
    * **Except on a stale page, where the flush is the bug.** A card on a page the
    * house has moved out from under is holding answers from the old profile, and
@@ -967,8 +1159,36 @@ export class HostedModuleCard extends OpenHouseElement {
     }
   }
 
+  protected override willUpdate(changed: Map<string, unknown>): void {
+    if (!changed.has("module")) return;
+    // A fresh answer for this module has changed hands, so the two things the
+    // card was showing on the server's behalf stop being guesses and follow it
+    // again: the publish toggle pressed a moment ago, and the configuration menu
+    // a switch is on.
+    this.publishing = {};
+    this.pendingConfig = null;
+    if (this.ownReload) {
+      // The page answering a write this card made. What is left in the draft is
+      // work the write did not carry, and it is still owed to the server -- so it
+      // stays, and the save that re-armed for it sends it.
+      this.ownReload = false;
+      return;
+    }
+    // An outside reload -- another card's write, or the page's own refresh. The
+    // draft was typed against a module that is no longer what the house runs, and
+    // leaving it standing shows the person their own old values over the server's
+    // new ones and writes them back over the top on the next keystroke.
+    this.forgetDraft();
+  }
+
   protected override render(): TemplateResult {
     const module = this.module;
+    // **Which set of answers it is running goes on the line above everything
+    // else.** It is the one fact that explains every value below it -- the same
+    // module on another configuration is a different module in every row -- and
+    // it used to be inside a disclosure, which is where a person reading the card
+    // does not look for it.
+    const running = this.pendingConfig ?? module.config;
     return html`<div class="nested">
       <div class="row spread wrap">
         <div class="grow">
@@ -978,13 +1198,14 @@ export class HostedModuleCard extends OpenHouseElement {
             ${module.room_id
               ? html` &middot; in ${module.room_name}`
               : html` &middot; in the whole house`}
+            ${running ? html` &middot; running <strong>${running}</strong>` : null}
             ${module.automation_id
               ? html` &middot; runs as <code>${module.automation_id}</code>`
               : html` &middot; <span class="chip warn">not running</span>`}
             ${module.blueprint ? html` &middot; from ${module.blueprint}` : null}
           </p>
         </div>
-        ${this.removable
+        ${this.editable
           ? html`<div class="row">
               <button
                 type="button"
@@ -1007,29 +1228,78 @@ export class HostedModuleCard extends OpenHouseElement {
             </div>`
           : nothing}
       </div>
-      ${this.errorBanner(this.error)}
-      ${this.notice ? html`<div class="banner info">${this.notice}</div>` : nothing}
-      ${this.renderWaiting(module)} ${this.renderSlots(module)}
-      ${module.outputs.length === 0
-        ? html`<p class="help">Publishes nothing.</p>`
-        : html`<div class="list">
-            ${module.outputs.map(
-              (output) => html`<div class="list-row">
-                <span>
-                  <code>${output.key}</code>
-                  <span class="chip">${output.kind}</span>
-                </span>
-                <span class="readonly-value">${readValue(output.value)}</span>
-                <p class="help">
-                  <code>${output.entity_id}</code> &middot;
-                  ${output.expression}
-                </p>
-              </div>`,
-            )}
-          </div>`}
-      ${this.renderConfigurations(module)} ${this.renderSettings(module)}
-      ${this.inputsOf(module)} ${this.renderEdit()}
+      ${this.renderBanner(module)} ${this.renderSlots(module)}
+      ${this.renderOutputs(module)} ${this.renderConfigurations(module)}
+      ${this.renderSettings(module)} ${this.renderEdit()}
     </div>`;
+  }
+
+  /**
+   * The one banner this card wears, and which of the three it is.
+   *
+   * **One, because they answer the same question.** An error, a module that is
+   * waiting to be bound or set up, and a notice about a save that just landed are
+   * three statements about what is happening to this module, and two of them
+   * stacked would be a queue for a person to read rather than a card that says
+   * one thing. So they are ranked -- a refusal outranks everything, because the
+   * write did not happen; waiting outranks a notice, because a module that cannot
+   * run yet is the more important fact about it; the notice is what is left --
+   * and only the winner is drawn.
+   *
+   * **An error that belongs to a dialog is the dialog's.** The two name dialogs
+   * are the only place a configuration write can be refused from, and the banner
+   * here is drawn *behind* the backdrop: shown by the card and read by nobody.
+   * While one of them is up, the card's own banner steps aside and the dialog
+   * draws it (see `renderConfigDialog`).
+   */
+  private renderBanner(module: HostedModule): TemplateResult | typeof nothing {
+    if (this.error && this.configDialog === "none") {
+      return this.errorBanner(this.error);
+    }
+    const waiting = this.renderWaiting(module);
+    if (waiting !== nothing) return waiting;
+    return this.notice ? banner("info", this.notice) : nothing;
+  }
+
+  /**
+   * What this module publishes, behind a disclosure.
+   *
+   * The rows are the point of a module -- an entity anything in the house may
+   * read -- but they are a list that grows with the blueprint and about half of
+   * it is the machinery: the key, what kind of output it is, the value it holds
+   * now, the entity it is at, and the expression the engine renders it with. The
+   * expression is the one nobody reads while using a module and everybody wants
+   * while debugging one, so the list folds away and the expression folds again
+   * inside it. What stays visible when the section is open is the two things a
+   * person binds to: the key and the entity.
+   */
+  private renderOutputs(module: HostedModule): TemplateResult {
+    if (module.outputs.length === 0) {
+      return html`<p class="help">Publishes nothing.</p>`;
+    }
+    return html`<details
+      class="nested"
+      data-kind="outputs"
+      data-module=${module.slug}
+    >
+      <summary>Outputs</summary>
+      <div class="list">
+        ${module.outputs.map(
+          (output) => html`<div class="list-row">
+            <span>
+              <code>${output.key}</code>
+              <span class="chip">${output.kind}</span>
+            </span>
+            <span class="readonly-value">${readValue(output.value)}</span>
+            <p class="help"><code>${output.entity_id}</code></p>
+            <details>
+              <summary class="muted small">How it is worked out</summary>
+              <p class="help"><code>${output.expression}</code></p>
+            </details>
+          </div>`,
+        )}
+      </div>
+    </details>`;
   }
 
   /**
@@ -1084,12 +1354,17 @@ export class HostedModuleCard extends OpenHouseElement {
    */
   private renderConfigurations(module: HostedModule): TemplateResult {
     const many = module.configs.length > 1;
+    const editable = this.editable;
+    // Which one the menu shows, which is not always the module's: a switch in
+    // flight is drawn on the option it was sent for, so a *refusal* puts the menu
+    // back to the configuration the module is actually running rather than
+    // leaving it on one that was never adopted.
+    const running = this.pendingConfig ?? module.config;
     // `data-kind` is what tells this section from the settings one below it:
     // both are a `details.nested` carrying the module's slug, and a caller
     // asking for "this module's nested section" gets whichever comes first.
     return html`<details
       class="nested"
-      open
       data-kind="configs"
       data-module=${module.slug}
       data-config=${module.config}
@@ -1105,14 +1380,14 @@ export class HostedModuleCard extends OpenHouseElement {
           id="config-${module.slug}"
           data-module=${module.slug}
           aria-label="${module.title} configuration"
-          ?disabled=${this.busy}
+          ?disabled=${this.busy || !editable}
           @change=${(event: Event) =>
             void this.switchConfiguration(
               (event.target as HTMLSelectElement).value,
             )}
         >
           ${module.configs.map(
-            (name) => html`<option value=${name} ?selected=${name === module.config}>
+            (name) => html`<option value=${name} ?selected=${name === running}>
               ${name}
             </option>`,
           )}
@@ -1120,7 +1395,7 @@ export class HostedModuleCard extends OpenHouseElement {
         <button
           type="button"
           id="config-new-${module.slug}"
-          ?disabled=${this.busy}
+          ?disabled=${this.busy || !editable}
           @click=${() => {
             this.configDialog = "new";
             this.configName = "";
@@ -1131,7 +1406,7 @@ export class HostedModuleCard extends OpenHouseElement {
         <button
           type="button"
           id="config-rename-${module.slug}"
-          ?disabled=${this.busy}
+          ?disabled=${this.busy || !editable}
           @click=${() => {
             this.configDialog = "rename";
             this.configName = module.config;
@@ -1142,7 +1417,7 @@ export class HostedModuleCard extends OpenHouseElement {
         <button
           type="button"
           id="config-delete-${module.slug}"
-          ?disabled=${this.busy || !many}
+          ?disabled=${this.busy || !many || !editable}
           @click=${() => void this.removeConfiguration()}
         >
           Delete
@@ -1154,8 +1429,8 @@ export class HostedModuleCard extends OpenHouseElement {
             This is the only configuration. A module is always running one, so
             dropping it is what taking the module out of the house is for.
           </p>`}
-      ${this.renderConfigDialog()}
-    </details>`;
+    </details>
+    ${this.renderConfigDialog()}`;
   }
 
   /**
@@ -1164,6 +1439,18 @@ export class HostedModuleCard extends OpenHouseElement {
    * The panel's own sheet rather than `window.prompt`, which is what the two
    * would otherwise be: a browser prompt is drawn by the browser, on top of
    * everything, in a font this page did not choose.
+   *
+   * **Drawn outside the configuration section it belongs to.** The section is a
+   * `<details>` and it is shut by default, and a dialog inside a shut disclosure
+   * is a dialog that is not in the page at all -- the one a person opened would
+   * simply never appear.
+   *
+   * **The refusal is drawn in here, with the button that caused it.** Both of
+   * these commands write, and both can be refused for reasons the server words
+   * better than this card can -- a name already taken, a module the house no
+   * longer holds. The card's own banner is behind the backdrop while this is up,
+   * so an error left to it is an error nobody sees: the same name stays in the
+   * field, the button stays pressable, and the person presses it again.
    */
   private renderConfigDialog(): TemplateResult | typeof nothing {
     if (this.configDialog === "none") return nothing;
@@ -1175,6 +1462,11 @@ export class HostedModuleCard extends OpenHouseElement {
       .open=${true}
       @dialog-closed=${() => {
         this.configDialog = "none";
+        this.configName = "";
+        // Nothing on the card is about this dialog once it is gone, and a
+        // refusal left standing would be read as a fault in the module -- the
+        // command it belongs to has been closed, not failed again.
+        this.error = null;
       }}
     >
       <div class="field">
@@ -1190,6 +1482,7 @@ export class HostedModuleCard extends OpenHouseElement {
           }}
         />
       </div>
+      ${this.errorBanner(this.error)}
       <div class="row">
         <button
           type="button"
@@ -1211,16 +1504,24 @@ export class HostedModuleCard extends OpenHouseElement {
    * built with. Saving builds the automation again from the same document, so a
    * change here is the same kind of change as the import was -- and the module
    * keeps its name, its automation and its outputs' entities.
+   *
+   * Three shapes, and the two outside the form are the two a viewer may still be
+   * owed: a card nobody may write to draws the same rows as values rather than
+   * fields (`renderSettingsReadonly`), and a module with nothing left settable
+   * draws only what it was filled in with (`renderFilledIn`).
    */
   private renderSettings(module: HostedModule): TemplateResult | typeof nothing {
-    if (module.settings.length === 0) return nothing;
+    // The record of what the module was filled in with is the whole of the
+    // section when there is nothing left to edit, and it is not nothing: see
+    // `renderFilledIn`.
+    if (module.settings.length === 0) return this.renderFilledIn(module);
+    if (!this.editable) return this.renderSettingsReadonly(module);
     // `data-module` is what makes this section addressable as *this* module's.
     // A rebuild moves a module to the end of the house's list, so a caller that
     // found the settings form by position -- `details.nested ha-form` -- would
     // read and write some other module's the moment anything was rebuilt.
     return html`<details
       class="nested"
-      open
       data-kind="settings"
       data-module=${module.slug}
       data-config=${module.config}
@@ -1395,8 +1696,9 @@ export class HostedModuleCard extends OpenHouseElement {
               >
                 <input
                   type="checkbox"
-                  .checked=${Boolean(setting.published_key)}
-                  ?disabled=${this.busy}
+                  .checked=${this.publishing[setting.name] ??
+                  Boolean(setting.published_key)}
+                  ?disabled=${this.busy || !this.editable}
                   @change=${(event: Event) =>
                     void this.setPublished(
                       setting,
@@ -1442,7 +1744,71 @@ export class HostedModuleCard extends OpenHouseElement {
             "builds the module's automation again, into the same automation " +
             "and the same outputs."}
       </p>
+      ${this.renderFilledIn(module)}
     </details>`;
+  }
+
+  /**
+   * The same settings, read rather than written.
+   *
+   * A card drawn for a viewer who may not write is a card they may still read:
+   * taking the values away because they cannot be changed would be hiding the
+   * module to protect it. What goes is the machinery of changing them -- the
+   * fields, the cast editors, the detach buttons, the publish switch -- because
+   * every one of those is refused by the server for that viewer, and a control
+   * that cannot do what it says is worse than no control.
+   */
+  private renderSettingsReadonly(module: HostedModule): TemplateResult {
+    return html`<details
+      class="nested"
+      data-kind="settings"
+      data-module=${module.slug}
+      data-config=${module.config}
+    >
+      <summary>Settings</summary>
+      <p class="help">
+        Kept at import. Changing one builds the module's automation again from
+        the same blueprint, which takes an administrator.
+      </p>
+      ${module.settings.map((setting) => {
+        const elsewhere = boundElsewhere(setting);
+        if (elsewhere) {
+          return html`<p class="help">
+            <code>${setting.name}</code> ${elsewhere}.
+          </p>`;
+        }
+        // The stored value, and not the draft: nothing on this card is ever
+        // typed into, which is what makes it a card rather than a form.
+        return html`<p class="help">
+          <code>${setting.name}</code>
+          &rarr; ${readValue(setting.value ?? setting.default ?? "")}
+        </p>`;
+      })}
+      ${this.renderFilledIn(module)}
+    </details>`;
+  }
+
+  /**
+   * What the module was filled in with: the blueprint's inputs, and their values.
+   *
+   * Folded into the Settings section rather than given a disclosure of its own,
+   * because it is the same subject read a second way: the settings above are the
+   * rows the person kept *settable*, and this is the whole of what the document
+   * holds, including every input answered once and fixed inside the automation.
+   * It is the record of what the module is, so it is drawn whether or not there
+   * is anything left to edit.
+   */
+  private renderFilledIn(module: HostedModule): TemplateResult | typeof nothing {
+    const filled = module.inputs.filter(
+      (row) => row.value !== undefined && row.value !== null && row.value !== "",
+    );
+    if (filled.length === 0) return nothing;
+    return html`<p class="help">Filled in with</p>
+      ${filled.map(
+        (row) => html`<p class="help">
+          <code>${row.name}</code> &rarr; ${readValue(row.value)}
+        </p>`,
+      )}`;
   }
 
   /**
@@ -1463,8 +1829,9 @@ export class HostedModuleCard extends OpenHouseElement {
     const slots = module.slots.filter((slot) => !slot.bound);
     const options = unsetOptions(module);
     if (slots.length === 0 && options.length === 0) return nothing;
-    return html`<div class="banner warn">
-      ${slots.length > 0
+    return banner(
+      "warn",
+      html`${slots.length > 0
         ? html`Waiting for ${slots.map((slot) => slot.name).join(", ")} to be
             bound in ${module.room_name}.`
         : nothing}
@@ -1476,8 +1843,8 @@ export class HostedModuleCard extends OpenHouseElement {
             ${options.length === 1 ? "it" : "them"} under Settings below.`
         : nothing}
       The automation is not created until that is, so nothing it publishes is
-      being written.
-    </div>`;
+      being written.`,
+    );
   }
 
   /**
@@ -1496,7 +1863,22 @@ export class HostedModuleCard extends OpenHouseElement {
    * lights does this one actually drive?".
    */
   private renderSlots(module: HostedModule): TemplateResult | typeof nothing {
-    if (module.slots.length === 0) return nothing;
+    if (module.slots.length === 0) {
+      // **Said, rather than left as a gap.** This is the one place the module's
+      // *whole* slot list is in hand -- the room's page passes only the rows set
+      // apart from the room's binding, and folds the rest away -- so this is the
+      // one place that can tell "its pack declares no slot" from "nothing about
+      // its slots was changed". A module with no slot of its own is a mode-only
+      // behaviour: it decides things rather than driving a device, and a card that
+      // said nothing about it would read as a section that failed to load.
+      return html`<div class="stack" style="margin-top:10px">
+        <span class="muted small">Acts on</span>
+        <p class="help" style="margin:4px 0 0">
+          nothing -- this module's pack declares no slot for it to act through,
+          so it decides things rather than driving a device.
+        </p>
+      </div>`;
+    }
     return html`<div class="stack" style="margin-top:10px">
       <span class="muted small">Acts on</span>
       ${module.slots.map((slot) => this.renderSlot(module, slot))}
@@ -1538,7 +1920,7 @@ export class HostedModuleCard extends OpenHouseElement {
                 id=${id}
                 data-slot-part=${slot.name}
                 title="Which part of this split slot the module acts through. Everything on one part acts on one device."
-                ?disabled=${this.busy || this.stale}
+                ?disabled=${this.busy || this.stale || !this.editable}
                 .value=${slot.part}
                 @change=${(event: Event) =>
                   void this.setSlotPart(
@@ -1584,7 +1966,7 @@ export class HostedModuleCard extends OpenHouseElement {
     slot: HostedSlot,
     part: string,
   ): Promise<void> {
-    if (this.stale || this.busy) return;
+    if (this.stale || this.busy || !this.editable) return;
     this.busy = true;
     this.error = null;
     this.notice = null;
@@ -1608,9 +1990,7 @@ export class HostedModuleCard extends OpenHouseElement {
       const saved =
         reply.modules.find((row) => row.slug === module.slug) ?? module;
       this.module = saved;
-      this.dispatchEvent(
-        new CustomEvent("module-changed", { bubbles: true, composed: true }),
-      );
+      this.moduleChanged();
       const where = saved.slots.find((one) => one.name === slot.name);
       const named =
         part === ""
@@ -1630,21 +2010,6 @@ export class HostedModuleCard extends OpenHouseElement {
       this.busy = false;
       this.requestUpdate();
     }
-  }
-
-  private inputsOf(module: HostedModule): TemplateResult | typeof nothing {
-    const filled = module.inputs.filter(
-      (row) => row.value !== undefined && row.value !== null && row.value !== "",
-    );
-    if (filled.length === 0) return nothing;
-    return html`<details class="nested">
-      <summary>Filled in with</summary>
-      ${filled.map(
-        (row) => html`<p class="help">
-          <code>${row.name}</code> &rarr; ${readValue(row.value)}
-        </p>`,
-      )}
-    </details>`;
   }
 }
 

@@ -80,6 +80,27 @@ export const sharedStyles = css`
     justify-content: space-between;
   }
 
+  /*
+   * A screen's header row: its title and controls, spaced apart.
+   *
+   * A class rather than the inline margin-bottom each screen used to carry, so
+   * the header sits the same distance above its content everywhere -- and so the
+   * overview's redesign has no layout of its own to keep in step.
+   */
+  .tab-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+
+  /* A row of people chips under the summary line, above the room table. */
+  .people {
+    margin-bottom: 12px;
+  }
+
   .grow {
     flex: 1;
     min-width: 0;
@@ -234,6 +255,22 @@ export const sharedStyles = css`
     color: var(--error-color, #db4437);
   }
 
+  /*
+   * A chip that stands for neither good nor bad -- a decision the engine
+   * *skipped*, a person who is away -- so it stays grey and is deliberately a
+   * class rather than nothing at all.
+   *
+   * It exists because a mapping that leaves a state's appearance as the empty
+   * string reads as "no chip", and a state that is neither an error nor a
+   * success still has to look like the chip it is rather than like a word that
+   * happened to land beside the coloured ones.
+   */
+  .chip.neutral {
+    background: var(--secondary-background-color, rgba(127, 127, 127, 0.12));
+    color: var(--secondary-text-color);
+    border: 1px solid var(--divider-color);
+  }
+
   .banner {
     border-radius: 8px;
     padding: 10px 14px;
@@ -267,6 +304,24 @@ export const sharedStyles = css`
   }
 
   .help.warn {
+    color: var(--warning-color);
+  }
+
+  /*
+   * A room's unbound required slots, kept folded away under its name.
+   *
+   * An expander rather than a sentence in the cell: the list is worth reading
+   * when a room is being fixed and is noise on a table a person is scanning, and
+   * only the rooms that have one draw it.
+   */
+  .missing {
+    margin-top: 2px;
+    font-size: var(--ha-font-size-s, 12px);
+    color: var(--secondary-text-color);
+  }
+
+  .missing > summary {
+    cursor: pointer;
     color: var(--warning-color);
   }
 
@@ -363,6 +418,14 @@ export const sharedStyles = css`
     border-bottom: 1px solid var(--divider-color);
     overflow-x: auto;
     padding: 0 8px;
+    /* Kept under the app bar while a long screen -- a house with twenty health
+       issues -- scrolls past it, so the way to another tab is always on screen.
+       Its own background is what stops the tabs from being read over the content
+       sliding beneath them. */
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    background: var(--primary-background-color);
   }
 
   .tab {
@@ -379,6 +442,20 @@ export const sharedStyles = css`
     color: var(--primary-color);
     border-bottom-color: var(--primary-color);
     font-weight: 500;
+  }
+
+  /* A tabs row inside a card is a choice *within a step* -- the source a module
+     is read from -- and not a way to move around the app. Drawn exactly as the
+     app's tab bar it read as a second navigation strip stacked in the page, and
+     because the tabs row is sticky it stuck at the same offset as the real bar
+     and overlapped it on a screen long enough to scroll. It keeps the selected
+     underline, which is the part that says what is chosen, and loses the bar and
+     the stickiness. */
+  .card .tabs {
+    position: static;
+    padding: 0;
+    margin-bottom: 12px;
+    border-bottom: none;
   }
 
   .field {
@@ -610,5 +687,127 @@ export const sharedStyles = css`
     margin: 0 0 8px;
     font-size: var(--ha-font-size-l, 20px);
     font-weight: var(--ha-font-weight-normal, 400);
+  }
+
+  /*
+   * Additions from the UI polish pass. Appended rather than woven in so the
+   * handful of rules that were edited above keep their place and their meaning
+   * in the diff.
+   */
+
+  /*
+   * The app bar: the panel's name, above the tab strip.
+   *
+   * A brand mark rather than a page title -- it holds no heading, so the
+   * screen's own h1 is the loudest thing on the page rather than the
+   * second-loudest (see renderHeader). The bottom rule is what makes it read
+   * as a bar over the strip and not as a first paragraph.
+   */
+  .app-bar {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 0 8px 8px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--divider-color);
+  }
+
+  .app-bar .brand {
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    color: var(--primary-text-color);
+  }
+
+  .app-bar p {
+    margin: 0;
+  }
+
+  /* The body under the tab strip, set off from it by the same gap everywhere. */
+  .tab-body {
+    margin-top: 16px;
+  }
+
+  /*
+   * A row of filters, each with the word for what it narrows.
+   *
+   * align-items: flex-end so a filter whose label sits above a control lines
+   * up with the next one whatever the control's height; the gap is wider than
+   * the general .row gap because a labelled control is a wider unit than a
+   * bare one.
+   */
+  .filters {
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-bottom: 12px;
+  }
+
+  .filter {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .filter .label {
+    font-size: var(--ha-font-size-s, 12px);
+    color: var(--secondary-text-color);
+  }
+
+  /*
+   * A table that may be wider than the panel, made scrollable rather than cut.
+   *
+   * The Activity log has six columns and a narrow sidebar panel has room for
+   * about three, so without this the last columns -- the outcome, and the "Why"
+   * button that opens the reason -- ran off the edge with no way back. The
+   * element also carries tabindex="0", which is what lets a keyboard reach the
+   * scroll: a scroll container is otherwise unreachable without a pointer.
+   */
+  .table-scroll {
+    overflow-x: auto;
+    max-width: 100%;
+  }
+
+  /* A cell that must not wrap -- "just now" broke onto two lines at 480px. */
+  .nowrap {
+    white-space: nowrap;
+  }
+
+  /*
+   * A health issue's title, at a card heading's size rather than a page's.
+   *
+   * It is an h2 because it is the top level of the page -- the page's own h1
+   * is "Health", so an h3 skipped a level -- and the class keeps it from
+   * growing to a section heading's size.
+   */
+  .issue-title {
+    font-size: var(--ha-font-size-m, 16px);
+    font-weight: 500;
+    margin: 0;
+  }
+
+  /*
+   * The engine's names for a fault, kept but folded away.
+   *
+   * Collapsed by default, and neutral rather than the warning colour the
+   * "missing" expander uses: an entity id and a code are things to quote, not a
+   * fault in themselves, and a card should read as the sentence it is before it
+   * reads as a log line.
+   */
+  .tech {
+    margin-top: 6px;
+    font-size: var(--ha-font-size-s, 12px);
+    color: var(--secondary-text-color);
+  }
+
+  .tech > summary {
+    cursor: pointer;
+  }
+
+  .tech > .help {
+    margin: 4px 0 0;
+    overflow-wrap: anywhere;
   }
 `;

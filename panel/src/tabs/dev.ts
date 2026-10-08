@@ -245,9 +245,10 @@ interface FormItem {
  *
  * `module` is the default because it is the one that keeps Home Assistant doing
  * the work: a source is hosted as the automation it already is, and nothing is
- * translated. `pack` is the other job -- turning a source into the engine's own
- * declarative module -- and it stays because a pack is a thing a person may
- * write by hand or derive and keep, not because importing needs it.
+ * translated. The other job translates the source into this engine's own
+ * declarative shape -- a module the house keeps, written out as a pack manifest
+ * under `config/open_house/packs/`, which is why the value is still `pack`
+ * while the button a person reads says "module".
  */
 type DevJob = "module" | "pack";
 
@@ -391,7 +392,16 @@ export class DevTab extends OpenHouseElement {
       // could show and left the button pointing at a module the server refuses.
       this.exportPack ||= this.installedNames[0] ?? "";
       this.followPlacement(this.exportPack);
-      this.installRoom ||= this.rooms[0]?.id ?? "";
+      // **Re-derived, because a room can be deleted.** The destination is
+      // remembered so a second save does not have to be re-aimed, but a room
+      // this latched to and that has since gone would leave "Save and install
+      // there" sending an id no room answers to.
+      if (
+        !this.installRoom ||
+        !this.rooms.some((room) => room.id === this.installRoom)
+      ) {
+        this.installRoom = this.rooms[0]?.id ?? "";
+      }
     } catch (error) {
       this.error = this.toError(error);
     } finally {
@@ -428,6 +438,15 @@ export class DevTab extends OpenHouseElement {
         this.required.clear();
       }
       const reading = await this.requireClient().devRead(this.kind, handle);
+      // **Pinned to the row's own key.** `ha-form` addresses its fields by
+      // index (`entity_<i>`, `value_<i>`) and both the schema and the data are
+      // built in one pass over these rows, so the row and the answer it holds
+      // are matched by position -- and a re-read that returned them in another
+      // order would land one input's answer on another input's row. Sorting by
+      // the source's own name is what makes position a function of the row
+      // rather than of whatever order the server happened to answer in.
+      reading.analysis.entities.sort((left, right) => left.key.localeCompare(right.key));
+      reading.analysis.values.sort((left, right) => left.key.localeCompare(right.key));
       this.reading = reading;
       this.adoptReading(reading.analysis);
     } catch (error) {
@@ -615,6 +634,19 @@ export class DevTab extends OpenHouseElement {
         into === null ? null : { into },
       );
       this.savedYaml = reply.saved.yaml;
+      // **The installed list is the save's own answer, and it is taken first.**
+      // The export select offers the installed modules, so a module just
+      // written to disk and not offered here is the screen contradicting the
+      // file -- which is what happened when this was read from the *second*
+      // round trip below and that call failed.
+      this.installed = reply.modules;
+      // Adopted only if it actually went into the house: the export offers
+      // installed modules, so selecting a saved-but-uninstalled one would leave
+      // the select showing nothing and the button answering "not installed".
+      if (this.installedNames.includes(reply.saved.name)) {
+        this.exportPack ||= reply.saved.name;
+        this.followPlacement(this.exportPack);
+      }
       // `into` is `null` for "Save module" and a room id -- or the empty string
       // for the whole house -- for "Save and install there". The empty string is
       // the house and is a *destination*, so the test is against `null` and not
@@ -624,15 +656,18 @@ export class DevTab extends OpenHouseElement {
         into === null
           ? `Saved ${reply.saved.file}.`
           : `Saved ${reply.saved.file} and installed it.`;
-      const sources = await client.devSources();
-      this.saved = sources.saved;
-      this.installed = reply.modules;
-      // Adopted only if it actually went into the house: the export offers
-      // installed modules, so selecting a saved-but-uninstalled one would leave
-      // the select showing nothing and the button answering "not installed".
-      if (this.installedNames.includes(reply.saved.name)) {
-        this.exportPack ||= reply.saved.name;
-        this.followPlacement(this.exportPack);
+      // **The list of saved modules is a convenience beside the export, and a
+      // fault in it must not be read as a fault in the save.** The file is
+      // already written, so letting this failure reach the outer catch would
+      // put a red error under a screen that has just said "Saved", the two
+      // contradicting each other about what is on disk.
+      try {
+        const sources = await client.devSources();
+        this.saved = sources.saved;
+      } catch {
+        this.notice =
+          `${this.notice} The list of modules you have made could not be ` +
+          "refreshed; it comes back when this tab is next opened.";
       }
     } catch (error) {
       this.error = this.toError(error);
@@ -748,20 +783,34 @@ export class DevTab extends OpenHouseElement {
   // -- render --------------------------------------------------------------
 
   override render(): TemplateResult {
+    // **Both jobs live on the one element, and the import half is not torn down
+    // when the other is shown.** `<open-house-host-module>` holds the state of
+    // an import in progress -- a source read, ten inputs answered, the outputs
+    // ticked -- and re-rendering it away on a job switch threw all of it out and
+    // rebuilt it empty. So it is kept mounted and hidden instead, the way the
+    // pack workbench's state is kept on this element and so never at risk.
     return html`<div class="layout">
-      <h1>Dev</h1>
+      <div class="row spread wrap">
+        <h1>Dev</h1>
+        ${this.renderJob()}
+      </div>
       <p class="muted">
-        Import a blueprint or an automation as a module the house runs, and turn
-        a module back into automations.
+        ${this.job === "module"
+          ? html`Import a blueprint or an automation as a module the house runs,
+              as it is: nothing is translated, and Home Assistant goes on running
+              the whole document.`
+          : html`Read a source into the engine's own declarative module, row by
+              row, or take a module back into automations.`}
       </p>
-      ${this.renderJob()}
-      ${this.job === "module"
-        ? html`<open-house-host-module
-            .hass=${this.hass}
-            .client=${this.client}
-            .admin=${this.admin}
-          ></open-house-host-module>`
-        : html`${this.errorBanner(this.error)}
+      <div style=${this.job === "module" ? "" : "display:none"}>
+        <open-house-host-module
+          .hass=${this.hass}
+          .client=${this.client}
+          .admin=${this.admin}
+        ></open-house-host-module>
+      </div>
+      ${this.job === "pack"
+        ? html`${this.errorBanner(this.error)}
             ${this.notice
               ? html`<div class="banner info">${this.notice}</div>`
               : null}
@@ -770,7 +819,8 @@ export class DevTab extends OpenHouseElement {
               : nothing}
             ${this.renderImport()}
             ${this.reading ? this.renderWorkbench() : nothing}
-            ${this.renderExport()}`}
+            ${this.renderExport()}`
+        : nothing}
     </div>`;
   }
 
@@ -778,17 +828,20 @@ export class DevTab extends OpenHouseElement {
    * The tab's two jobs, named as the two things a person may want.
    *
    * A module first, because that is the import: the source keeps being the
-   * automation it is and Home Assistant runs it. A pack second, and it is a
-   * *different* act rather than a better or worse one -- a pack is this engine's
-   * own declarative module, written or derived, and the workbench beneath this
-   * is where its rows are decided.
+   * automation it is and Home Assistant runs it. The second job is the same
+   * *module* reached the other way -- translated row by row into this engine's
+   * own declarative shape, which is the form the workbench beneath decides. It
+   * is called a module and not a pack because that is the word the person meets
+   * everywhere the thing lands: step 6 of this same screen saves "the module",
+   * the Store lists it under "Modules you made", and the House lists it under
+   * "Your modules". A pack is the catalog's, and lives in the Store's index.
    */
   private renderJob(): TemplateResult {
     return html`<div class="tabs">
       ${(
         [
           ["module", "Import as a module"],
-          ["pack", "Author a pack"],
+          ["pack", "Author a module"],
         ] as const
       ).map(
         ([job, label]) => html`<button
@@ -806,9 +859,14 @@ export class DevTab extends OpenHouseElement {
   }
 
   private renderImport(): TemplateResult {
+    // **The source-kind choice is this card's own row**, and the only one inside
+    // it: the job tabs above are on the heading line, and a `.tabs` row inside a
+    // card draws as a control rather than as a second navigation bar -- see the
+    // `.card .tabs` rule in styles.ts, which is what keeps it from reading as a
+    // duplicate of the strip above.
     return html`<section class="card">
       <h2>1. Choose a source</h2>
-      <div class="row">
+      <div class="tabs">
         ${(["automation", "blueprint", "text"] as const).map(
           (kind) => html`<button
             type="button"
@@ -928,14 +986,14 @@ export class DevTab extends OpenHouseElement {
     return html`
       ${analysis.dropped.length > 0
         ? html`<div class="banner warn">
-            <strong>Some of this source cannot go into a pack.</strong>
+            <strong>Some of this source cannot go into a module.</strong>
             <ul>
               ${analysis.dropped.map((line) => html`<li>${line}</li>`)}
             </ul>
             <p class="help">
-              A pack declares a policy, not a program: it may not branch, compute
-              or wait. Everything else still goes in, and the parts listed above
-              are simply not part of the pack.
+              A module declares a policy, not a program: it may not branch,
+              compute or wait. Everything else still goes in, and the parts
+              listed above are simply not part of the module.
             </p>
             <p class="help">
               None of this is lost: choose <em>Import as a module</em> above and
@@ -957,7 +1015,7 @@ export class DevTab extends OpenHouseElement {
       <div class="grid">
         ${this.textField("Name", this.meta.name, (value) => {
           this.meta = { ...this.meta, name: value };
-        }, "The pack's own name, lower case with underscores.")}
+        }, "The module's own name, lower case with underscores.")}
         ${this.textField("Title", this.meta.title, (value) => {
           this.meta = { ...this.meta, title: value };
         }, "What a person sees in the module list.")}
@@ -1169,7 +1227,7 @@ export class DevTab extends OpenHouseElement {
       <p class="muted">
         A setting is a length of time a behaviour waits out -- the engine's one
         way to read a number from a module. Give a behaviour something to wait
-        for in section 5 and its field appears here.
+        for in section 5, below, and its field appears here.
       </p>
       ${schema.length > 0
         ? html`<ha-form

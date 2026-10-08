@@ -6,11 +6,9 @@
  * seen -- and the room they return to still shows the counts they left.
  */
 
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { OpenHouseElement } from "../base.ts";
 import type { RoomSummary } from "../api/models.ts";
-
-import "../components/house-profile.ts";
 
 export class RoomsTab extends OpenHouseElement {
   // `selectedRoomId` and `creating` are clicks, not fetches: nothing else in
@@ -133,29 +131,20 @@ export class RoomsTab extends OpenHouseElement {
             </button>`
           : null}
       </div>
-      ${this.admin
-        ? html`<open-house-house-profile
-            .client=${this.client}
-            .hass=${this.hass}
-            .admin=${this.admin}
-            @profiles-changed=${() => void this.load()}
-          ></open-house-house-profile>`
-        : null}
       ${this.creating ? this.renderCreateForm() : null}
       ${this.rooms.length === 0
-        ? this.emptyState(
-            "No rooms",
-            "No rooms exist yet. A room is a Home Assistant area with a room type; add one to begin.",
-          )
+        ? this.error
+          ? nothing
+          : html`<p class="muted">
+              No rooms yet. A room is a Home Assistant area with a room type.
+            </p>`
         : html`<table>
             <thead>
               <tr>
                 <th>Room</th>
-                <th>Type</th>
                 <th>Slots</th>
+                <th>Type</th>
                 <th>Mode</th>
-                <th>Status</th>
-                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -193,14 +182,22 @@ export class RoomsTab extends OpenHouseElement {
           The catalog's room-type name. Leave empty for a plain room.
         </p>
       </div>
-      <button type="button" class="primary" @click=${() => void this.createRoom()}>
+      <button
+        type="button"
+        class="primary"
+        ?disabled=${this.newRoomName.trim() === ""}
+        @click=${() => void this.createRoom()}
+      >
         Create room
       </button>
     </div>`;
   }
 
   private renderRow(room: RoomSummary): TemplateResult {
-    const unfinished = room.required_unbound.length > 0;
+    // Guarded like every sibling: an older backend answers without the list, and
+    // a missing one is a room with nothing unfinished rather than a page that
+    // throws.
+    const unfinished = (room.required_unbound ?? []).length > 0;
     return html`<tr>
       <td>
         <a
@@ -214,28 +211,15 @@ export class RoomsTab extends OpenHouseElement {
         ${room.issue_count > 0
           ? html`<span class="chip warn small">${room.issue_count}</span>`
           : null}
-      </td>
-      <td class="muted">${room.type_label}</td>
-      <td>${room.bound_slots}/${room.total_slots}</td>
-      <td><span class="chip">${room.mode}</span></td>
-      <td>
         ${unfinished
-          ? html`<span class="chip warn"
+          ? html`<span class="chip warn small"
               >missing ${room.required_unbound.length}</span
             >`
-          : html`<span class="chip ok">ready</span>`}
+          : null}
       </td>
-      <td>
-        <button
-          type="button"
-          class="icon"
-          @click=${() => {
-            this.selectedRoomId = room.id;
-          }}
-        >
-          Settings
-        </button>
-      </td>
+      <td>${room.bound_slots}/${room.total_slots}</td>
+      <td class="muted">${room.type_label}</td>
+      <td><span class="chip">${room.mode}</span></td>
     </tr>`;
   }
 }

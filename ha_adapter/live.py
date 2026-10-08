@@ -51,7 +51,7 @@ from pathlib import Path
 from typing import cast
 
 from engine.behaviours import enable_key
-from engine.binding import HouseScope, RoomScope
+from engine.binding import HouseScope, RoomScope, UnknownSlotError
 from engine.decision_log import DecisionRecord
 from engine.engine import Clock, Engine
 from engine.install import InstalledSet
@@ -70,6 +70,7 @@ from .composition import (
 from .declared_units import with_declared_slots
 from .slot_parts import grow as with_slot_parts
 from .slot_parts import key_of as part_key
+from .slot_parts import record_from as recorded_slot_parts
 from .transport import HaTransport
 
 __all__ = [
@@ -348,24 +349,34 @@ class LiveSession:
         ids = [room.id for room in self.rooms]
         if len(set(ids)) != len(ids):
             raise LiveSessionError(f"two rooms share the id {ids}")
-        house = build_live_house(
-            house_name=self.house_name,
-            rooms=self.rooms,
-            modes=self.modes,
-            transport=self.transport,
-            vocabulary_root=self.root,
-            location=self.location,
-            clock=self.clock,
-            house_settings=self.house_settings,
-            house_bindings=self.house_bindings,
-            slot_parts=self.slot_parts,
-            room_settings=self.room_settings,
-            installed=self.installed,
-            module_rooms=self.module_rooms,
-            profiles=self.profiles,
-            adapter=self.adapter,
-            user_root=self.user_root,
-        )
+        # A slot the vocabulary does not carry reaches here as `UnknownSlotError`
+        # -- a house binding left on a part nobody carries any more, a room still
+        # naming a slot a pack's removal took away -- and the command layer above
+        # turns exactly one type into a refusal the panel can read
+        # (`LiveSessionError`). Left bare, this is a websocket call answering with
+        # a traceback instead of an error code, so it is translated here, at the
+        # one door every edit and every restart rebuilds through.
+        try:
+            house = build_live_house(
+                house_name=self.house_name,
+                rooms=self.rooms,
+                modes=self.modes,
+                transport=self.transport,
+                vocabulary_root=self.root,
+                location=self.location,
+                clock=self.clock,
+                house_settings=self.house_settings,
+                house_bindings=self.house_bindings,
+                slot_parts=self.slot_parts,
+                room_settings=self.room_settings,
+                installed=self.installed,
+                module_rooms=self.module_rooms,
+                profiles=self.profiles,
+                adapter=self.adapter,
+                user_root=self.user_root,
+            )
+        except UnknownSlotError as refusal:
+            raise LiveSessionError(str(refusal)) from refusal
         self.adapter = house.adapter
         self._engine = house.engine
 
@@ -853,6 +864,15 @@ class LiveSession:
         describes a house at an instant, and an instant that crossed a restart
         would describe a house that no longer exists. The engine starts fresh and
         the *configuration* survives, which is the half a person set by hand.
+
+        The house's own bindings and the parts record travel with it, and they
+        have to: both are session state that reaches the engine as wiring rather
+        than as a setting (`house_bindings`, `slot_parts`), so a document that
+        dropped them would rebuild a house whose global slots resolved to nothing
+        and whose parts had never been split. `slot_parts` is written as lists
+        because a document is JSON-shaped data, and read back through the same
+        lenient reader the store uses (`slot_parts.record_from`), so one shape
+        means one shape wherever a parts record is written down.
         """
         return {
             "version": SESSION_STATE_VERSION,
@@ -862,6 +882,10 @@ class LiveSession:
             "house_settings": dict(self.house_settings),
             "room_settings": {
                 room_id: dict(values) for room_id, values in self.room_settings.items()
+            },
+            "house_bindings": dict(self.house_bindings),
+            "slot_parts": {
+                parent: list(names) for parent, names in self.slot_parts.items()
             },
             "installed": self.installed.to_document(),
             "module_rooms": dict(self.module_rooms),
@@ -909,6 +933,17 @@ class LiveSession:
             clock=clock,
             house_settings=_mapping(state.get("house_settings"), "house_settings"),
             # Absent from a document written before the field existed, and the
+            # empty mapping is the honest reading: every role resolves from the
+            # rooms, exactly as it did then.
+            house_bindings=_strings_mapping(
+                state.get("house_bindings"), "house_bindings"
+            ),
+            # Absent from a document written before a slot could be split, and the
+            # empty record is the honest reading: no slot has parts and every role
+            # resolves as a whole. `slot_parts.record_from` is the reader the store
+            # uses for the same record, so a written-down record has one shape.
+            slot_parts=recorded_slot_parts(state.get("slot_parts")),
+            # Absent from a document written before the field existed, and the
             # empty mapping is the honest reading: no room has been tuned.
             room_settings=_room_settings(state.get("room_settings")),
             installed=InstalledSet.from_document(
@@ -916,7 +951,7 @@ class LiveSession:
             ),
             # Absent from a document written before the field existed, and the
             # empty mapping is the honest reading: nothing has been placed.
-            module_rooms=_strings_mapping(state.get("module_rooms")),
+            module_rooms=_strings_mapping(state.get("module_rooms"), "module_rooms"),
             profiles=ProfileSet.from_document(
                 _mapping(profiles, "profiles"), schema=schema
             )
@@ -1034,23 +1069,27 @@ def _room_settings(value: object) -> Mapping[str, Mapping[str, object]]:
     return settings
 
 
-def _strings_mapping(value: object) -> Mapping[str, str]:
-    """`module_rooms`: pack names to room ids, both strings.
+def _strings_mapping(value: object, field_name: str) -> Mapping[str, str]:
+    """`field_name` as a mapping of string to string, or a failure naming it.
 
+    Both `module_rooms` (pack names to room ids) and `house_bindings` (slot
+    names to entity ids) are this shape, and the two are read the same way.
     Absent is the empty mapping and not a failure, because a document written
     before the field existed has none recorded and is still a valid house --
-    `_module_room` falls back to joining the pack's slots for those. A value
-    that is not a string is a different thing: it is a document that says
-    something this build cannot read, and it is refused rather than quietly
-    dropped so a module cannot end up in a room nobody chose.
+    `_module_room` falls back to joining the pack's slots for the first, and the
+    house scope falls back to collecting the rooms for the second. A value that
+    is not a string is a different thing: it is a document that says something
+    this build cannot read, and it is refused rather than quietly dropped so a
+    module cannot end up in a room nobody chose and a slot cannot resolve to
+    something that is not an entity.
     """
-    entries = _mapping(value, "module_rooms")
+    entries = _mapping(value, field_name)
     if not all(
-        isinstance(name, str) and isinstance(room, str)
-        for name, room in entries.items()
+        isinstance(name, str) and isinstance(entry, str)
+        for name, entry in entries.items()
     ):
         raise LiveSessionError(
-            "a session state needs 'module_rooms' to map pack names to room ids"
+            f"a session state needs {field_name!r} to map names to strings"
         )
     return cast("Mapping[str, str]", entries)
 

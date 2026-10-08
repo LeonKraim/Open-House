@@ -305,10 +305,15 @@ def test_the_built_in_layer_supplies_the_log_bound() -> None:
     A falsifying implementation that placed `LOG_BOUND_KEY` in `decision_log.py`
     would leave the log's bound unanswerable -- the setting a house may set like
     any other -- and the layer stack's lowest layer empty.
+
+    The number itself is asserted because it is a *choice about a window* rather
+    than a taste: it is sized above one tick's worth of rows (see the constant,
+    which carries the measurement), and a bound that fell back under that would
+    put the engine's own acting quietly out of the panel's reach again.
     """
-    assert BUILTIN_DEFAULTS[LOG_BOUND_KEY] == 500
+    assert BUILTIN_DEFAULTS[LOG_BOUND_KEY] == 10_000
     assert _resolver().resolve(LOG_BOUND_KEY, _HOUSE) == ResolvedSetting(
-        key=LOG_BOUND_KEY, value=500, layer=Layer.BUILTIN
+        key=LOG_BOUND_KEY, value=10_000, layer=Layer.BUILTIN
     )
 
 

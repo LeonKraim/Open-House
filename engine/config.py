@@ -122,8 +122,23 @@ RATE_LIMIT_WINDOW_KEY = "engine.rate_limit.window_seconds"
 #: the units. The rate limit's defaults are a burst of sixty a minute: generous
 #: enough that no rule in this phase can reach it, which is the point -- the
 #: limit is a backstop against a misbehaving pack, not a policy.
+#:
+#: **The log's bound is sized in ticks and not in rows, because a tick is what
+#: fills it.** The engine records one row per behaviour per scope per tick, and a
+#: house of any size reaches three hundred of them -- measured at 302 in the
+#: nine-room example house, every thirty seconds. A bound of five hundred rows
+#: therefore held *under two ticks*, and the consequence was not a short history
+#: but a blind spot: the panel reads the newest rows first, so a behaviour
+#: evaluated early in a tick (its own action, `motion_lighting` among them) had
+#: already been pushed out of the window by the rest of its own tick before
+#: anyone could read it. The house would turn a light on and the Activity tab
+#: would show nothing that said so -- observed, not reasoned: a stimulus, a light
+#: that came on within five seconds, and five hundred rows of "skipped" spanning
+#: exactly the tick that did it. Ten thousand rows is roughly a third of an hour
+#: of house at that rate and a few megabytes of records, which buys a window that
+#: can hold the tick it is reading.
 BUILTIN_DEFAULTS: Mapping[str, object] = {
-    LOG_BOUND_KEY: 500,
+    LOG_BOUND_KEY: 10_000,
     PRESENCE_QUIET_TIMEOUT_KEY: 300.0,
     RATE_LIMIT_BOUND_KEY: 60,
     RATE_LIMIT_WINDOW_KEY: 60.0,

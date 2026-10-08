@@ -334,6 +334,24 @@ def test_the_first_module_of_a_house_is_the_only_one() -> None:
     ]
 
 
+def test_a_name_carried_twice_collapses_to_one() -> None:
+    """A second row of one name is dropped rather than written forward.
+
+    `put` replaces the module it is given, so a collection that somehow held two
+    rows for one name would be written out with both still in it -- and the file
+    that came back would be one `load` refuses, so the module would vanish at the
+    next start. The row that survives is the first, which is the one that was
+    there, carrying the new answers.
+    """
+    twice = (
+        _record(slug="kitchen_lights"),
+        _record(slug="kitchen_lights", title="Copy"),
+    )
+    put = module_records.put(twice, _record(slug="kitchen_lights", title="Renamed"))
+    assert [row.slug for row in put] == ["kitchen_lights"]
+    assert put[0].title == "Renamed"
+
+
 def test_a_house_with_no_modules_is_not_a_failure(tmp_path: Path) -> None:
     assert module_records.load(tmp_path) == ()
 
@@ -349,6 +367,23 @@ def test_writing_makes_the_directory_it_names(tmp_path: Path) -> None:
     root = tmp_path / "open_house"
     module_records.write(root, [_record()])
     assert (root / module_records.FILENAME).is_file()
+
+
+def test_writing_leaves_nothing_of_the_old_file_beside_it(tmp_path: Path) -> None:
+    """The write is a rename of a temporary file, not a truncate of the real one.
+
+    `write_text` empties the document before putting anything in it, so an
+    interruption anywhere inside the write leaves a `modules.json` that is empty
+    or half a module list. `load` refuses the whole of that and setup swallows the
+    refusal, so the house comes up with no modules at all and one line in the log.
+    Writing beside the file and moving it over is what makes a reader see the file
+    as it was or as it is now -- and the other half of that is the file it was
+    written to existing nowhere by the time the write has answered.
+    """
+    module_records.write(tmp_path, [_record()])
+    module_records.write(tmp_path, [_record(slug="kitchen_lights")])
+    assert [path.name for path in tmp_path.iterdir()] == [module_records.FILENAME]
+    assert [row.slug for row in module_records.load(tmp_path)] == ["kitchen_lights"]
 
 
 # --------------------------------------------------------------------------
@@ -370,6 +405,28 @@ def test_a_file_whose_modules_are_not_a_list_is_refused(tmp_path: Path) -> None:
         json.dumps({"version": 1, "modules": "no"}), encoding="utf-8"
     )
     with pytest.raises(AuthoringError, match="not a list"):
+        module_records.load(tmp_path)
+
+
+def test_a_name_carried_twice_is_refused_rather_than_half_read(tmp_path: Path) -> None:
+    """Two rows of one name is a module nobody can reach.
+
+    A module's slug is the key it is filed under, so the reader that keys by slug
+    keeps whichever row it sees last and drops the other: a person who copied a
+    block and forgot to rename it would see their edit do nothing, with nothing
+    said anywhere. A duplicate is only ever that hand edit -- the writer cannot
+    produce one -- so it is refused by the name it collided on.
+    """
+    (tmp_path / module_records.FILENAME).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "modules": [{"slug": "kitchen_lights"}, {"slug": "kitchen_lights"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(AuthoringError, match="twice"):
         module_records.load(tmp_path)
 
 

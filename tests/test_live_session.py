@@ -154,6 +154,48 @@ def test_state_round_trips_through_a_document() -> None:
     assert rebuilt.engine.house.room("hall").bindings["light_group"] == "light.other"
 
 
+def test_a_house_binding_and_a_slot_split_survive_a_document_round_trip() -> None:
+    """The two parts of the session state that are *wiring*, not settings.
+
+    A house-scope binding and a slot split both reach the engine as wiring
+    (`build_live_house`'s `house_bindings` / `slot_parts`) rather than as a value
+    in a settings layer, so a document that dropped either would rebuild a house
+    whose global slot resolved to nothing and whose parts had never been split --
+    and the round trip is exactly what a restart is. Read back through the
+    *engine* as well, because a session that recorded the split but did not grow
+    the vocabulary against it would pass a check on the fields alone.
+    """
+    session = _session()
+    session.set_house_binding("lock", "lock.front_door")
+    session.set_slot_parts({"light_group": ("a", "b")})
+
+    rebuilt = LiveSession.from_state(
+        session.to_state(), transport=_transport(), root=ROOT, location=LOCATION
+    )
+
+    assert dict(rebuilt.house_bindings) == {"lock": "lock.front_door"}
+    assert dict(rebuilt.slot_parts) == {"light_group": ("a", "b")}
+    assert rebuilt.engine.house.bindings["lock"] == "lock.front_door"
+    assert "light_group__a" in rebuilt.engine.house.vocabulary.slots
+
+
+def test_a_rebuild_a_stale_slot_would_break_is_refused_as_a_session_error() -> None:
+    """A rebuild that names a slot the vocabulary lacks is a refusal the panel can read.
+
+    `build_live_house` raises `UnknownSlotError` for a house or room binding
+    naming a slot the vocabulary does not carry -- here a house binding left on a
+    part the record has just dropped. The command layer turns one type
+    (`LiveSessionError`) into an error code and every other into a stack trace, so
+    the rebuild translates it rather than letting it escape.
+    """
+    session = _session()
+    session.set_slot_parts({"light_group": ("a", "b")})
+    session.set_house_binding("light_group__a", "light.lamp")
+
+    with pytest.raises(LiveSessionError, match="light_group__a"):
+        session.set_slot_parts({})
+
+
 def test_state_carries_the_packs_and_the_profiles() -> None:
     session = _session()
     session.set_profiles(ProfileSet([], schema=load_profile_schema(ROOT)))

@@ -101,6 +101,13 @@ __all__ = [
 #: that room, and an error would put it in the same list as a fire.
 _REPAIR_SEVERITY = "warning"
 
+#: The code on the row raised when the engine cannot answer at all. It is an
+#: error rather than a warning because the whole *picture* is missing, not one
+#: room of it, and it has no Repairs flow -- there is nothing for Home
+#: Assistant's Repairs screen to offer, since the fix is the engine and not a
+#: user's setting -- so `repairs_flow_id` is `None` on that row.
+_ENGINE_READ_FAILED = "engine_read_failed"
+
 #: Home Assistant's own severities, mapped onto the panel's three. `critical`
 #: becomes `error` rather than `info` because the panel has no fourth word for
 #: it, and of the two it could become, the lower is the safer mistranslation: a
@@ -982,14 +989,57 @@ def _friendly_names(hass: HomeAssistant) -> Mapping[str, str]:
 def health_issues(
     hass: HomeAssistant, host: OpenHouseHost
 ) -> tuple[Mapping[str, object], ...]:
-    """Every issue the Health tab shows, from the engine and from Repairs."""
+    """Every issue the Health tab shows, from the engine and from Repairs.
+
+    **The engine's two reads are wrapped, and that is this function's job and
+    not `room_summaries`'.** `room_summaries` computes the issues once and hands
+    the same tuple to every row, so a read that raised here would take the whole
+    Rooms tab down -- which is exactly what a device leaving the house used to
+    do: the engine's repair read raised out of a slot whose member was gone, and
+    the tab came back empty. The engine's own read path no longer raises for that
+    case (`engine/binding.py` reads a name the house does not hold as
+    present-and-unreadable), but the tab must not *depend* on that holding for
+    every read a later phase adds. A read that fails unexpectedly is a health
+    issue -- that is what the Health tab is for -- and it is reported as one row
+    rather than allowed to empty the screen it is meant to fill.
+    """
     issues: list[Mapping[str, object]] = []
-    for repair in host.session.engine.repairs():
-        issues.append(_repair_issue(host, repair))
-    for hazard in host.session.engine.hazards():
-        issues.append(_hazard_issue(hass, hazard, host))
+    try:
+        repairs = host.session.engine.repairs()
+    except Exception as error:  # a view model reports, it does not raise
+        issues.append(_engine_read_failed("repairs", error))
+    else:
+        issues.extend(_repair_issue(host, repair) for repair in repairs)
+    try:
+        hazards = host.session.engine.hazards()
+    except Exception as error:  # a view model reports, it does not raise
+        issues.append(_engine_read_failed("hazards", error))
+    else:
+        issues.extend(_hazard_issue(hass, hazard, host) for hazard in hazards)
     issues.extend(_registry_issues(hass))
     return tuple(issues)
+
+
+def _engine_read_failed(read: str, error: Exception) -> Mapping[str, object]:
+    """An engine read that raised, as the Health tab's one row.
+
+    A row and not a raise, for the reason `health_issues` gives: the tab exists
+    to say what is wrong with the house, and "the engine could not be read" is
+    one of those things. The message names the read and the exception rather
+    than guessing at a cause, because the person reading it is the one who has
+    to act on it and a tidied-up sentence would be a guess dressed as a
+    diagnosis. It is attributed to no room -- the failure is the whole read, not
+    one room's -- so the Rooms tab shows no room's count moving for it.
+    """
+    return {
+        "severity": "error",
+        "code": _ENGINE_READ_FAILED,
+        "title": "The house could not be read",
+        "detail": f"The engine's {read} read failed: {error}",
+        "room_id": None,
+        "entity_id": None,
+        "repairs_flow_id": None,
+    }
 
 
 def _repair_issue(host: OpenHouseHost, repair: Any) -> Mapping[str, object]:

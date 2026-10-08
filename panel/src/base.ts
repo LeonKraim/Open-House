@@ -41,6 +41,7 @@
 
 import { LitElement, html, type TemplateResult } from "lit";
 import { OpenHouseClient } from "./api/client.ts";
+import type { RefusalCode } from "./api/protocol.ts";
 import {
   asPanelError,
   type HassLike,
@@ -61,6 +62,48 @@ export interface PanelProperties {
 export interface Reloadable {
   reload(): void;
 }
+
+/**
+ * A sentence a person can act on, per error code the server sends.
+ *
+ * One key per code the server can send, plus the codes a *transport* adds
+ * (`unavailable`, and `unknown` for a thrown value that carried no code of its
+ * own), so no refusal reaches a screen as a bare `Code: ...` line.
+ *
+ * The type is the list, and that is the point of it: `Record<BannerCode, string>`
+ * with `BannerCode` built out of `REFUSALS` means a code added to the server's
+ * closed set is a *compile error* here until somebody writes the sentence for
+ * it, rather than a `Code: not_setup` line nobody noticed. `invalid_format` maps
+ * to the empty string deliberately: its message is the one the live layer wrote
+ * for a person to read ("ambient_light_sensor is required", in so many words),
+ * and a suggestion under it would be a second sentence saying less.
+ *
+ * `not_ready` is here even though the client retries it, because the sentence a
+ * person sees is the one from *after* the retry window -- the house has been
+ * away for fifteen seconds by then, and "try again" is the truthful thing to
+ * say.
+ */
+type BannerCode =
+  | RefusalCode
+  | "unavailable"
+  | "home_assistant_error"
+  | "unknown_error"
+  | "unknown";
+
+const SUGGESTIONS: Record<BannerCode, string> = {
+  unauthorized: "This action needs an administrator.",
+  not_setup: "Open House has not been set up in this house yet.",
+  not_ready: "The house is reloading; try again in a moment.",
+  not_found: "That item no longer exists; reload the panel.",
+  invalid_format: "",
+  unavailable: "Home Assistant is not reachable right now.",
+  stale_page:
+    "This page was read before the house's profiles moved; reload the panel " +
+    "to read it again.",
+  home_assistant_error: "Home Assistant refused this; its log has the details.",
+  unknown_error: "Something went wrong; Home Assistant's log has the details.",
+  unknown: "Something went wrong; Home Assistant's log has the details.",
+};
 
 export abstract class OpenHouseElement extends LitElement {
   static override properties = {
@@ -131,16 +174,25 @@ export abstract class OpenHouseElement extends LitElement {
     </div>`;
   }
 
+  /**
+   * What a person can *do* about a refusal, by the server's own code.
+   *
+   * A table rather than a chain of ternaries, and every code the server can
+   * actually send appears in it: the banner used to know three (`unauthorized`,
+   * `not_found`, `unavailable`) and print the other four as a bare `Code: ...`
+   * line, which is a word and not an answer. `stale_page` was the worst of them
+   * -- it is the one refusal whose fix is entirely local, and the screen that
+   * met it said nothing at all about reloading. `home_assistant_error` and
+   * `unknown_error` are Home Assistant's own, sent when a handler raises
+   * something nobody expected, and there the log is the only useful pointer.
+   */
   protected errorBanner(error: PanelError | null): TemplateResult {
     if (!error) return html``;
-    const suggestion =
-      error.code === "unauthorized"
-        ? "This action needs an administrator."
-        : error.code === "not_found"
-          ? "That item no longer exists; reload the panel."
-          : error.code === "unavailable"
-            ? "Home Assistant is not reachable right now."
-            : "";
+    // The code is a `string` because it comes off the wire, so the table is
+    // indexed through the cast and the `?? ""` is the door for a code this panel
+    // has never heard of -- a newer server, or a transport's own invention. A
+    // missing suggestion is a shorter banner, never a broken one.
+    const suggestion = SUGGESTIONS[error.code as BannerCode] ?? "";
     return html`<div class="banner error" role="alert">
       <strong>${error.message}</strong>
       ${suggestion ? html`<p class="help">${suggestion}</p>` : null}

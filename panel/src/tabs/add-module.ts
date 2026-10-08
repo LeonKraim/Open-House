@@ -77,6 +77,12 @@ export class AddModuleDialog extends OpenHouseElement {
 
   override updated(changed: Map<string, unknown>): void {
     if (changed.has("open") && this.open) {
+      // **The dialog is reused, so its state is not.** A room and the house
+      // both keep one `<open-house-add-module>` and only flip `.open`, so a
+      // filter typed into the last attempt would narrow this one -- and a
+      // filter that matches nothing would greet the next open with "No module
+      // matches that filter." about words nobody typed this time.
+      this.filter = "";
       void this.load();
     }
   }
@@ -235,7 +241,9 @@ export class AddModuleDialog extends OpenHouseElement {
           ? this.emptyState(
               "No modules",
               modules.length === 0
-                ? `No pack in the house or the store offers anything ${whereThe} can take yet.`
+                ? this.stored.length === 0
+                  ? `No pack in the house or the store offers anything ${whereThe} can take yet.`
+                  : "No catalog packs to add. Your own modules are above."
                 : "No module matches that filter.",
             )
           : html`<div class="stack" style="margin-top:12px">

@@ -86,7 +86,9 @@ def installed_units(
     default_priority = vocabulary.pack_policy.default_priority
     service_states = load_service_states(root)
     found: list[DeclaredBehaviour] = []
-    for name, document in _manifests(root, wanted, user_root=user_root):
+    for name, document in sorted(
+        _manifests(root, wanted, user_root=user_root), key=lambda pair: pair[0]
+    ):
         found.extend(
             declared_units(
                 name,

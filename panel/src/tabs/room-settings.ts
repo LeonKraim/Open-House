@@ -116,6 +116,11 @@ export class RoomSettings extends OpenHouseElement {
     // because of one of them, and a plain field would leave the popup undrawn.
     revision: { state: true },
     stale: { state: true },
+    // "Generate dashboard" is a click whose only feedback would otherwise be a
+    // reload that changes nothing visible: the button stays disabled and says so
+    // while the write is in flight, and a success has a line to land in.
+    dashboardBusy: { state: true },
+    dashboardNotice: { state: true },
   };
 
   declare roomId: string;
@@ -197,6 +202,10 @@ export class RoomSettings extends OpenHouseElement {
   private revision = 0;
   /** Whether the page has stopped being the live page. */
   private stale = false;
+  /** True while a dashboard is being generated, so the button can say so. */
+  private dashboardBusy = false;
+  /** Where the last dashboard was written, or `""` for none made this session. */
+  private dashboardNotice = "";
 
   constructor() {
     super();
@@ -251,11 +260,18 @@ export class RoomSettings extends OpenHouseElement {
     // and it arrives with each answer because each answer *is* a fresh reading
     // of the house -- one the page has just been brought into agreement with.
     this.revision = room.revision;
-    // A reload is the server's answer, so every draft is discarded: keeping an
+    // A reload is the server's answer, so *every* draft is discarded: keeping an
     // edit through a read that has just told us the stored value would show a
-    // form disagreeing with the engine.
+    // form disagreeing with the engine. All of them, and not only the settings
+    // ones -- a rule editor or a half-typed part name left open across a reload
+    // stands on a row the module list may no longer carry, and the same rule the
+    // House tab applies to its drafts (`house.ts` `apply`) applies here.
     this.drafts = {};
     this.dirty = {};
+    this.partDrafts = {};
+    this.ruleDrafts = {};
+    this.ruleBusy = {};
+    this.ruleFailed = {};
   }
 
   /**
@@ -363,8 +379,6 @@ export class RoomSettings extends OpenHouseElement {
     // The house is the empty room id (`HOUSE_REACH`), which is the sentinel
     // `open_house/rooms/bind` has always read as "the house's own binding".
     const client = this.requireClient();
-    // The house is the empty room id (`HOUSE_REACH`), which is the sentinel
-    // `open_house/rooms/bind` has always read as "the house's own binding".
     if (picker.house) {
       await this.mutateHouse(() =>
         picker.replace
@@ -407,7 +421,16 @@ export class RoomSettings extends OpenHouseElement {
         module.room_id,
         slot.slot,
       );
-      if (this.slotPicker && this.slotPicker.slot === slot.slot) {
+      // Matched on the whole placement and not the slot name alone: two modules
+      // may hold a slot of the same name -- one in this room, one in the house --
+      // and a pending fetch for one must not populate the other's picker with a
+      // candidate list ranked for a different room.
+      if (
+        this.slotPicker &&
+        this.slotPicker.pack === module.pack &&
+        this.slotPicker.roomId === module.room_id &&
+        this.slotPicker.slot === slot.slot
+      ) {
         this.slotPicker = {
           ...this.slotPicker,
           includes: candidates.map((candidate) => candidate.entity_id),
@@ -434,7 +457,14 @@ export class RoomSettings extends OpenHouseElement {
   private async chooseSlot(entityId: string): Promise<void> {
     const picker = this.slotPicker;
     if (!picker) return;
-    await this.writeSlot(picker.pack, picker.slot, entityId, undefined);
+    const module = this.moduleFor(picker.pack, picker.roomId);
+    if (!module) {
+      this.error = this.toError(
+        new Error(`The module ${picker.pack} is no longer in this room.`),
+      );
+      return;
+    }
+    await this.writeSlot(module, picker.slot, entityId, undefined);
   }
 
   /**
@@ -447,16 +477,16 @@ export class RoomSettings extends OpenHouseElement {
    * it clears the device and leaves a name alone, because a name is not what
    * the picker is choosing.
    */
-  private async resetSlot(pack: string, slot: ModuleSlot): Promise<void> {
-    await this.writeSlot(pack, slot.slot, null, null);
+  private async resetSlot(module: InstalledModule, slot: ModuleSlot): Promise<void> {
+    await this.writeSlot(module, slot.slot, null, null);
   }
 
   private async renameSlot(
-    pack: string,
+    module: InstalledModule,
     slot: ModuleSlot,
     label: string,
   ): Promise<void> {
-    await this.writeSlot(pack, slot.slot, undefined, label);
+    await this.writeSlot(module, slot.slot, undefined, label);
   }
 
   /**
@@ -471,11 +501,11 @@ export class RoomSettings extends OpenHouseElement {
    * a role a module is on says nothing about the device it was pointed at.
    */
   private async partSlot(
-    pack: string,
+    module: InstalledModule,
     slot: ModuleSlot,
     part: string,
   ): Promise<void> {
-    await this.writeSlot(pack, slot.slot, undefined, undefined, part);
+    await this.writeSlot(module, slot.slot, undefined, undefined, part);
   }
 
   /**
@@ -500,8 +530,14 @@ export class RoomSettings extends OpenHouseElement {
   ): Promise<void> {
     await this.mutateHouse(async () => {
       await this.requireClient().setSlotParts(slot, action, name, newName);
+      // This slot's drafts only, matched as the exact key or a `slot/part` key
+      // and never a bare prefix: `light` is the new-part field for the `light`
+      // slot and `light_group` is another slot's, and `startsWith("light")` would
+      // clear the second while clearing the first.
       this.partDrafts = Object.fromEntries(
-        Object.entries(this.partDrafts).filter(([key]) => !key.startsWith(slot)),
+        Object.entries(this.partDrafts).filter(
+          ([key]) => key !== slot && !key.startsWith(`${slot}/`),
+        ),
       );
     });
   }
@@ -536,22 +572,31 @@ export class RoomSettings extends OpenHouseElement {
    * person who does mean it.
    */
   private async writeSlot(
-    pack: string,
+    module: InstalledModule,
     slot: string,
     entityId: string | null | undefined,
     label: string | null | undefined,
     part?: string,
   ): Promise<void> {
-    const module = this.room?.modules.find((entry) => entry.pack === pack);
-    const row = module?.slots.find((entry) => entry.slot === slot);
-    if (!module || !row) return;
+    const row = module.slots.find((entry) => entry.slot === slot);
+    if (!row) {
+      // A row the module's own listing no longer carries: the card is stale, so
+      // say so rather than swallow the click -- a control that does nothing reads
+      // as the panel being broken.
+      this.error = this.toError(
+        new Error(
+          `The ${module.pack} module has no slot called ${slot} here any more.`,
+        ),
+      );
+      return;
+    }
     this.busy = true;
     this.error = null;
     this.requestUpdate();
     try {
       await this.requireClient().setModuleSlot(
         module.room_id,
-        pack,
+        module.pack,
         slot,
         entityId === undefined ? (row.overridden ? row.entity_id : null) : entityId,
         label === undefined ? (row.named ? row.label : null) : label,
@@ -567,14 +612,40 @@ export class RoomSettings extends OpenHouseElement {
     }
   }
 
-  /** The draft key for one module's slot: the rule is per module, per slot. */
-  private ruleKey(pack: string, slot: string): string {
-    return `${pack}:${slot}`;
+  /**
+   * A module as a card addresses it: the pack *and* where it is installed.
+   *
+   * A pack alone is not unique in one room's listing. The same pack can be
+   * installed into this room and into the house, and both placements appear in
+   * `room.modules` because this room binds the roles both act through -- so
+   * `find(pack)` returns one of them and a write keyed by the pack alone lands on
+   * whichever came first, in the wrong `room_id`, while the two cards share one
+   * settings draft. The key that identifies a *placement* is the room it is in
+   * together with the pack.
+   */
+  private moduleKey(module: InstalledModule): string {
+    return `${module.room_id}|${module.pack}`;
+  }
+
+  /** The module placed at one pack and room, or `undefined` when it is gone. */
+  private moduleFor(pack: string, roomId: string): InstalledModule | undefined {
+    return this.room?.modules.find(
+      (entry) => entry.pack === pack && entry.room_id === roomId,
+    );
+  }
+
+  /** The draft key for one module's slot: the rule is per placement, per slot. */
+  private ruleKey(module: InstalledModule, slot: string): string {
+    return `${this.moduleKey(module)}:${slot}`;
   }
 
   /** Hold a rule draft while it is being written, and open or close the row. */
-  private editRule(pack: string, slot: ModuleSlot, draft: SlotRuleDraft): void {
-    const key = this.ruleKey(pack, slot.slot);
+  private editRule(
+    module: InstalledModule,
+    slot: ModuleSlot,
+    draft: SlotRuleDraft,
+  ): void {
+    const key = this.ruleKey(module, slot.slot);
     if (draft.kind === "") {
       // No kind is "nothing is being written here", which closes the row rather
       // than recording an empty draft: the difference between a row a person has
@@ -604,22 +675,25 @@ export class RoomSettings extends OpenHouseElement {
    * never-set row are the same state rather than two.
    */
   private async setRule(
-    pack: string,
+    module: InstalledModule,
     slot: ModuleSlot,
     rule: SlotRuleDraft | null,
   ): Promise<void> {
-    const module = this.room?.modules.find((entry) => entry.pack === pack);
-    if (!module) return;
-    const key = this.ruleKey(pack, slot.slot);
+    const key = this.ruleKey(module, slot.slot);
     this.ruleBusy = { ...this.ruleBusy, [key]: true };
     this.ruleFailed = { ...this.ruleFailed, [key]: "" };
     try {
-      await this.requireClient().setModuleSlotRule(module.room_id, pack, slot.slot, {
-        kind: rule?.kind ?? "",
-        value: rule?.value ?? null,
-        when: rule?.when ?? [],
-        device: rule?.device ?? null,
-      });
+      await this.requireClient().setModuleSlotRule(
+        module.room_id,
+        module.pack,
+        slot.slot,
+        {
+          kind: rule?.kind ?? "",
+          value: rule?.value ?? null,
+          when: rule?.when ?? [],
+          device: rule?.device ?? null,
+        },
+      );
       // The row closes on a successful write, because what it was showing is now
       // the saved rule and the row draws that instead -- leaving the editor open
       // would put the same rule on the screen twice, once as a draft and once as
@@ -651,10 +725,11 @@ export class RoomSettings extends OpenHouseElement {
    *
    * The command takes a map of values and writes each key it is given, so
    * sending one card's keys leaves the other cards' settings untouched -- which
-   * is what makes the card the unit a person saves rather than the page.
+   * is what makes the card the unit a person saves rather than the page. `key`
+   * is that card's placement (`moduleKey`), or `""` for the leftovers card.
    */
-  private async saveModule(pack: string): Promise<void> {
-    const values = this.drafts[pack];
+  private async saveModule(key: string): Promise<void> {
+    const values = this.drafts[key];
     if (values === undefined) return;
     this.busy = true;
     this.error = null;
@@ -684,8 +759,8 @@ export class RoomSettings extends OpenHouseElement {
     return html`
       <div ?inert=${this.stale} @page-stale=${() => this.goStale()}>
         ${this.errorBanner(this.error)} ${this.renderHeader(room)}
-        ${this.renderGlobalBindings(room)} ${this.renderProfiles(room)}
-        ${this.renderBindings(room)} ${this.renderModules(room)}
+        ${this.renderProfiles(room)} ${this.renderBindings(room)}
+        ${this.renderModules(room)}
         ${this.renderHosted()}
         <open-house-add-module
           .client=${this.client}
@@ -729,14 +804,19 @@ export class RoomSettings extends OpenHouseElement {
                 <button
                   type="button"
                   class="primary"
-                  @click=${() => {
-                    this.renaming = false;
-                    void this.mutate(() =>
-                      this.requireClient().updateRoom(this.roomId, this.renameValue),
-                    );
-                  }}
+                  ?disabled=${this.busy}
+                  @click=${() => void this.renameRoom()}
                 >
                   Save
+                </button>
+                <button
+                  type="button"
+                  ?disabled=${this.busy}
+                  @click=${() => {
+                    this.renaming = false;
+                  }}
+                >
+                  Cancel
                 </button>
               </div>`
             : html`<h1>
@@ -758,16 +838,29 @@ export class RoomSettings extends OpenHouseElement {
             ${room.type_label || room.type} &middot;
             <span class="chip">mode ${room.mode}</span>
           </p>
+          ${this.dashboardNotice
+            ? html`<p class="help" role="status">${this.dashboardNotice}</p>`
+            : null}
         </div>
       </div>
       <div class="row">
-        <button
-          type="button"
-          class="secondary"
-          @click=${() => void this.generateDashboard()}
-        >
-          Generate dashboard
-        </button>
+        <!-- "Generate dashboard" is a rare, one-shot action, so it hides in an
+             overflow rather than standing beside "Add module to room" -- the two
+             are not equals and the everyday control should be the plain one. -->
+        <details class="reach">
+          <summary title="More room actions" aria-label="More room actions"
+            >More</summary
+          >
+          <div class="reach-menu">
+            <button
+              type="button"
+              ?disabled=${this.dashboardBusy}
+              @click=${() => void this.generateDashboard()}
+            >
+              ${this.dashboardBusy ? "Generating dashboard..." : "Generate dashboard"}
+            </button>
+          </div>
+        </details>
         ${this.admin
           ? html`<button
               type="button"
@@ -783,13 +876,58 @@ export class RoomSettings extends OpenHouseElement {
     </div>`;
   }
 
+  /**
+   * Rename the room, and leave the field open until the server has taken it.
+   *
+   * Not `mutate`: that clears the picker and reloads, and the editor has to stay
+   * on screen while the answer is outstanding. Clearing `renaming` *before* the
+   * write lost a typed name irrecoverably when the server refused it, with no
+   * Cancel to fall back to -- so the field closes on success only, and a refusal
+   * shows its sentence with the name still in the box.
+   */
+  private async renameRoom(): Promise<void> {
+    this.busy = true;
+    this.error = null;
+    this.requestUpdate();
+    try {
+      const renamed = await this.requireClient().updateRoom(
+        this.roomId,
+        this.renameValue,
+      );
+      this.apply(renamed);
+      this.renaming = false;
+    } catch (error) {
+      if (this.toError(error).code === REFUSALS.stalePage) this.goStale();
+      else this.error = this.toError(error);
+    } finally {
+      this.busy = false;
+      this.requestUpdate();
+    }
+  }
+
+  /**
+   * Write a dashboard for this room, and say what happened.
+   *
+   * The write is not silent: it takes a moment, so the button says so while it
+   * is in flight, a success names the path it landed on, and a refusal is shown
+   * where every other refusal on this page is. Without the three, clicking it
+   * read as the panel having done nothing at all.
+   */
   private async generateDashboard(): Promise<void> {
     this.error = null;
+    this.dashboardNotice = "";
+    this.dashboardBusy = true;
+    this.requestUpdate();
     try {
-      await this.requireClient().generateDashboard(this.roomId);
+      const reply = await this.requireClient().generateDashboard(this.roomId);
+      this.dashboardNotice = `Dashboard ${
+        reply.created ? "created" : "updated"
+      } at ${reply.url_path}.`;
     } catch (error) {
-      this.error = this.toError(error);
+      if (this.toError(error).code === REFUSALS.stalePage) this.goStale();
+      else this.error = this.toError(error);
     } finally {
+      this.dashboardBusy = false;
       this.requestUpdate();
     }
   }
@@ -819,11 +957,17 @@ export class RoomSettings extends OpenHouseElement {
             ?disabled=${!this.admin || this.busy}
             @change=${(event: Event) => {
               const name = (event.target as HTMLSelectElement).value;
+              // The "no profile" entry is a state to show, not one to choose: an
+              // axis nobody has put a profile on has nothing to activate.
+              if (name === "") return;
               void this.mutate(() =>
                 this.requireClient().activateProfile(this.roomId, axis.id, name),
               );
             }}
           >
+            ${active
+              ? null
+              : html`<option value="" ?selected=${true}>No profile</option>`}
             ${axis.profiles.map(
               (profile) => html`<option
                 value=${profile.name}
@@ -841,9 +985,11 @@ export class RoomSettings extends OpenHouseElement {
     const bound = room.bindings.filter((binding) => binding.entity_id !== null);
     return html`<div class="card">
       <h2>Devices</h2>
-      <p class="help">
-        Every slot the installed modules can act through. ${bound.length} of
-        ${room.bindings.length} are bound.
+      <p
+        class="help"
+        title=${"Every slot the installed modules can act through, then the roles the whole house answers underneath -- a room that binds a role itself keeps its own device."}
+      >
+        ${bound.length} of ${room.bindings.length} are bound.
       </p>
       <table>
         <thead>
@@ -861,6 +1007,7 @@ export class RoomSettings extends OpenHouseElement {
         </tbody>
       </table>
       ${this.picker && !this.picker.house ? this.renderPicker() : null}
+      ${this.renderGlobalBindings(room)}
     </div>`;
   }
 
@@ -876,15 +1023,20 @@ export class RoomSettings extends OpenHouseElement {
    * The "This room" column is the fact a person needs before wondering why their
    * lights did not move: a room that bound the role itself answers for itself,
    * and the global binding stands *behind* it rather than over it. Which is also
-   * the reason this section is not the room's binding table with more rows in it.
+   * the reason this is drawn as its own labelled sub-section rather than as the
+   * room's binding table with more rows in it -- the two are different subjects
+   * and the label is what keeps them apart.
    */
-  private renderGlobalBindings(room: RoomDetail): TemplateResult | typeof nothing {
+  private renderGlobalBindings(
+    room: RoomDetail,
+  ): TemplateResult | typeof nothing {
     if (room.global_bindings.length === 0) return nothing;
-    return html`<div class="card">
-      <h2>Whole house</h2>
-      <p class="help">
-        Roles the whole house answers. A room that binds the role itself keeps its
-        own device; every other room uses what is set here.
+    return html`<h3 style="margin-top:16px">Whole house</h3>
+      <p
+        class="help"
+        title=${"Roles the whole house answers. A room that binds the role itself keeps its own device; every other room uses what is set here."}
+      >
+        Roles the whole house answers, below this room's own bindings.
       </p>
       <table>
         <thead>
@@ -900,8 +1052,7 @@ export class RoomSettings extends OpenHouseElement {
           ${room.global_bindings.map((row) => this.renderGlobalBinding(row))}
         </tbody>
       </table>
-      ${this.picker && this.picker.house ? this.renderPicker() : null}
-    </div>`;
+      ${this.picker && this.picker.house ? this.renderPicker() : null}`;
   }
 
   private renderGlobalBinding(binding: GlobalBinding): TemplateResult {
@@ -1206,7 +1357,7 @@ export class RoomSettings extends OpenHouseElement {
 
   /** What a module points one of its own slots at, so the control opens there. */
   private moduleSlotValue(picker: ModuleSlotPickerState): string | null {
-    const module = this.room?.modules.find((entry) => entry.pack === picker.pack);
+    const module = this.moduleFor(picker.pack, picker.roomId);
     return module?.slots.find((entry) => entry.slot === picker.slot)?.entity_id ??
       null;
   }
@@ -1215,7 +1366,14 @@ export class RoomSettings extends OpenHouseElement {
   private async clearSlot(): Promise<void> {
     const picker = this.slotPicker;
     if (!picker) return;
-    await this.writeSlot(picker.pack, picker.slot, null, undefined);
+    const module = this.moduleFor(picker.pack, picker.roomId);
+    if (!module) {
+      this.error = this.toError(
+        new Error(`The module ${picker.pack} is no longer in this room.`),
+      );
+      return;
+    }
+    await this.writeSlot(module, picker.slot, null, undefined);
   }
 
   /** The slot's human name, so the picker says which device it is asking for. */
@@ -1242,26 +1400,76 @@ export class RoomSettings extends OpenHouseElement {
     const schema = withoutReachRoles(
       schemaForKeys(room.options_schema, module.option_keys ?? []),
     );
-    const draft = { ...room.options, ...(this.drafts[module.pack] ?? {}) };
-    const isDirty = this.dirty[module.pack] === true;
-    // `data-pack` is what makes one card addressable as *this* module's, the
-    // same hook the add-module dialog's card carries: a room draws a card per
-    // module it holds and the list re-orders as packs are installed and
-    // removed, so a reader that counted cards would follow the wrong one.
-    return html`<div class="card" data-pack=${module.pack}>
+    // The card addresses its drafts by *placement*, not by pack: the same pack
+    // may be in this room and in the house at once and both cards are drawn here,
+    // so a key of the pack alone would have them share one draft and one Save.
+    const key = this.moduleKey(module);
+    const draft = { ...room.options, ...(this.drafts[key] ?? {}) };
+    const isDirty = this.dirty[key] === true;
+    const inThisRoom = module.room_id === this.roomId;
+    const allSlots = module.slots ?? [];
+    // The slots the module actually changed -- a device of its own, a name, a
+    // part, a rule -- are the rows worth the space; every other row is the
+    // room's binding the module merely reaches through, and folds away. Nothing
+    // is dropped: the unchanged ones are one expand away (`slotDevices`).
+    const changed = allSlots.filter(
+      (slot) =>
+        slot.overridden ||
+        slot.named ||
+        slot.part !== null ||
+        slot.rule_kind !== null,
+    );
+    const untouched = allSlots.filter((slot) => !changed.includes(slot));
+    const slotOptions = {
+      house: module.house,
+      disabled: this.busy || !this.admin,
+      onPick: (slot: ModuleSlot) => void this.openSlotPicker(module, slot),
+      onReset: (slot: ModuleSlot) => void this.resetSlot(module, slot),
+      onRename: (slot: ModuleSlot, label: string) =>
+        void this.renameSlot(module, slot, label),
+      onPart: (slot: ModuleSlot, part: string) =>
+        void this.partSlot(module, slot, part),
+      // "Set it to", on a slot row (`components/slot-devices.ts`): the same four
+      // kinds a module's input rows offer, held by the slot. The draft is read
+      // from the row the server sent, so a slot that already holds a rule opens
+      // showing its kind rather than empty. Keyed by placement, like every other
+      // per-module draft on this page.
+      hass: this.hass,
+      pack: module.pack,
+      moduleTitle: module.name || module.pack,
+      roomId: module.room_id,
+      roomName: this.room?.name ?? "",
+      rule: (slot: ModuleSlot) =>
+        this.ruleDrafts[this.ruleKey(module, slot.slot)] ?? null,
+      ruleBusy: (slot: ModuleSlot) =>
+        this.ruleBusy[this.ruleKey(module, slot.slot)] === true,
+      ruleFailed: (slot: ModuleSlot) =>
+        this.ruleFailed[this.ruleKey(module, slot.slot)] ?? "",
+      onRuleDraft: (slot: ModuleSlot, next: SlotRuleDraft) =>
+        this.editRule(module, slot, next),
+      onRuleSave: (slot: ModuleSlot, next: SlotRuleDraft) =>
+        void this.setRule(module, slot, next),
+      onRuleClear: (slot: ModuleSlot) => void this.setRule(module, slot, null),
+      onDetached: () => void this.detached(),
+    };
+    // `data-module` is what makes one card addressable as *this* placement's --
+    // a room draws a card per module it holds, two of them may share a pack, and
+    // an unkeyed list re-binds the card at a position to whatever module is there
+    // now. `data-pack` is kept beside it for readers that name a pack.
+    return html`<div class="card" data-pack=${module.pack} data-module=${key}>
       ${suppressionBanner(module)}
       <div class="row spread wrap">
         <div class="stack">
           <h3>${module.name || module.pack}</h3>
           <p class="muted small">
-            ${module.room_id === this.roomId
+            ${inThisRoom
               ? null
               : html`<span
                   class="chip"
                   title=${`Installed in ${
-                    module.room_id === "" ? "the whole house" : module.room_id
+                    module.room_id === "" ? "the whole house" : this.roomName(module.room_id)
                   }, and it reaches this room because this room binds the roles it acts through.`}
-                  >in ${module.room_id === "" ? "the house" : module.room_id}</span
+                  >in ${module.room_id === "" ? "the house" : this.roomName(module.room_id)}</span
                 >`}
             v${module.version}
             ${module.satisfiable
@@ -1271,7 +1479,7 @@ export class RoomSettings extends OpenHouseElement {
                 >`}
           </p>
         </div>
-        ${this.admin && module.room_id === this.roomId
+        ${this.admin && inThisRoom
           ? html`<div class="row">
               <button
                 type="button"
@@ -1283,7 +1491,7 @@ export class RoomSettings extends OpenHouseElement {
                 @click=${() =>
                   void this.mutate(async () => {
                     await this.requireClient().setModuleEnabled(
-                      this.roomId,
+                      module.room_id,
                       module.pack,
                       !module.enabled,
                     );
@@ -1299,7 +1507,7 @@ export class RoomSettings extends OpenHouseElement {
                 @click=${() =>
                   void this.mutate(async () => {
                     await this.requireClient().uninstallModule(
-                      this.roomId,
+                      module.room_id,
                       module.pack,
                     );
                     return this.requireClient().room(this.roomId);
@@ -1311,128 +1519,131 @@ export class RoomSettings extends OpenHouseElement {
           : null}
       </div>
 
-      ${module.behaviours.length === 0
-        ? null
-        : html`<div class="stack" style="margin-top:10px">
-            <span class="muted small">Does this:</span>
-            ${module.behaviours.map((behaviour) => {
-              const ready = module.satisfiable || behaviour.enabled;
-              return html`<div class="stack">
-                <div class="row wrap">
-                  <label class="toggle">
-                    <input
-                      type="checkbox"
-                      .checked=${behaviour.enabled}
-                      ?disabled=${this.busy || !ready || !this.admin}
-                      title=${!ready
-                        ? `Bind ${module.missing_slots.join(", ")} in this room first.`
-                        : ""}
-                      @change=${() =>
-                        void this.mutate(async () => {
-                          await this.requireClient().setModuleBehaviourEnabled(
-                            this.roomId,
-                            module.pack,
-                            behaviour.id,
-                            !behaviour.enabled,
-                          );
-                          return this.requireClient().room(this.roomId);
-                        })}
-                    />
-                    <span>${behaviour.label || behaviour.id}</span>
-                  </label>
-                  ${this.renderReach(module, behaviour)}
-                  ${priorityControl({
-                    behaviour,
-                    disabled: this.busy || !this.admin,
-                    onSet: (priority) =>
-                      void this.setPriority(module, behaviour, priority),
-                    onReset: () =>
-                      void this.setPriority(
-                        module,
-                        behaviour,
-                        behaviour.default_priority,
-                      ),
-                  })}
-                </div>
-                ${behaviour.description
-                  ? html`<p class="help" style="margin:0 0 0 2px">
-                      ${behaviour.description}
-                    </p>`
+      <details>
+        <summary class="muted small">
+          ${module.behaviours.length} behaviour${
+            module.behaviours.length === 1 ? "" : "s"
+          } &middot; ${allSlots.length} device${allSlots.length === 1 ? "" : "s"}${schema
+            ? " &middot; settings"
+            : ""}
+        </summary>
+        ${module.behaviours.length === 0
+          ? null
+          : html`<div class="stack" style="margin-top:10px">
+              <span class="muted small">Does this:</span>
+              ${module.behaviours.map((behaviour) => {
+                const ready = module.satisfiable || behaviour.enabled;
+                return html`<div class="stack">
+                  <div class="row wrap">
+                    <label class="toggle">
+                      <input
+                        type="checkbox"
+                        .checked=${behaviour.enabled}
+                        ?disabled=${this.busy || !ready || !this.admin}
+                        title=${!ready
+                          ? `Bind ${module.missing_slots.join(", ")} in this room first.`
+                          : ""}
+                        @change=${() =>
+                          void this.mutate(async () => {
+                            await this.requireClient().setModuleBehaviourEnabled(
+                              module.room_id,
+                              module.pack,
+                              behaviour.id,
+                              !behaviour.enabled,
+                            );
+                            return this.requireClient().room(this.roomId);
+                          })}
+                      />
+                      <span>${behaviour.label || behaviour.id}</span>
+                    </label>
+                    ${this.renderReach(module, behaviour)}
+                    ${priorityControl({
+                      behaviour,
+                      disabled: this.busy || !this.admin,
+                      onSet: (priority) =>
+                        void this.setPriority(module, behaviour, priority),
+                      onReset: () =>
+                        void this.setPriority(
+                          module,
+                          behaviour,
+                          behaviour.default_priority,
+                        ),
+                    })}
+                  </div>
+                  ${behaviour.description
+                    ? html`<p class="help" style="margin:0 0 0 2px">
+                        ${behaviour.description}
+                      </p>`
+                    : null}
+                </div>`;
+              })}
+            </div>`}
+        ${slotDevices({ ...slotOptions, slots: changed })}
+        ${untouched.length === 0
+          ? null
+          : html`<details style="margin-top:8px">
+              <summary class="muted small">
+                ${untouched.length} more slot${untouched.length === 1 ? "" : "s"} on
+                the room's own binding
+              </summary>
+              ${slotDevices({ ...slotOptions, slots: untouched })}
+            </details>`}
+        ${schema === null
+          ? null
+          : html`<div style="margin-top:10px">
+              <div class="row spread">
+                <span class="muted small">Settings</span>
+                ${this.admin && isDirty
+                  ? html`<div class="row">
+                      <button
+                        type="button"
+                        ?disabled=${this.busy}
+                        @click=${() => {
+                          const { [key]: _dropped, ...rest } = this.drafts;
+                          this.drafts = rest;
+                          this.dirty = { ...this.dirty, [key]: false };
+                        }}
+                      >
+                        Discard
+                      </button>
+                      <button
+                        type="button"
+                        class="primary"
+                        ?disabled=${this.busy}
+                        @click=${() => void this.saveModule(key)}
+                      >
+                        Save
+                      </button>
+                    </div>`
                   : null}
-              </div>`;
-            })}
-          </div>`}
-      ${slotDevices({
-        // `?? []` for the same reason `option_keys` has it: a backend older
-        // than this field answers without it, and a module whose devices are
-        // unknown is one with no rows to draw, not a page that throws.
-        slots: module.slots ?? [],
-        house: module.house,
-        disabled: this.busy || !this.admin,
-        onPick: (slot) => void this.openSlotPicker(module, slot),
-        onReset: (slot) => void this.resetSlot(module.pack, slot),
-        onRename: (slot, label) => void this.renameSlot(module.pack, slot, label),
-        onPart: (slot, part) => void this.partSlot(module.pack, slot, part),
-        // "Set it to", on a slot row (`components/slot-devices.ts`): the same
-        // four kinds a module's input rows offer, held by the slot. The draft is
-        // read from the row the server sent, so a slot that already holds a rule
-        // opens showing its kind rather than empty.
-        hass: this.hass,
-        pack: module.pack,
-        moduleTitle: module.name || module.pack,
-        roomId: module.room_id,
-        roomName: this.room?.name ?? "",
-        rule: (slot) => this.ruleDrafts[this.ruleKey(module.pack, slot.slot)] ?? null,
-        ruleBusy: (slot) => this.ruleBusy[this.ruleKey(module.pack, slot.slot)] === true,
-        ruleFailed: (slot) => this.ruleFailed[this.ruleKey(module.pack, slot.slot)] ?? "",
-        onRuleDraft: (slot, draft) => this.editRule(module.pack, slot, draft),
-        onRuleSave: (slot, draft) => void this.setRule(module.pack, slot, draft),
-        onRuleClear: (slot) => void this.setRule(module.pack, slot, null),
-        onDetached: () => void this.detached(),
-      })}
-      ${schema === null
-        ? null
-        : html`<div style="margin-top:10px">
-            <div class="row spread">
-              <span class="muted small">Settings</span>
-              ${this.admin && isDirty
-                ? html`<div class="row">
-                    <button
-                      type="button"
-                      ?disabled=${this.busy}
-                      @click=${() => {
-                        const { [module.pack]: _dropped, ...rest } = this.drafts;
-                        this.drafts = rest;
-                        this.dirty = { ...this.dirty, [module.pack]: false };
-                      }}
-                    >
-                      Discard
-                    </button>
-                    <button
-                      type="button"
-                      class="primary"
-                      ?disabled=${this.busy}
-                      @click=${() => void this.saveModule(module.pack)}
-                    >
-                      Save
-                    </button>
-                  </div>`
-                : null}
-            </div>
-            <open-house-schema-form
-              .schema=${schema}
-              .values=${draft}
-              .readonly=${!this.admin}
-              @value-changed=${(event: CustomEvent<Record<string, unknown>>) => {
-                this.drafts = {
-                  ...this.drafts,
-                  [module.pack]: event.detail,
-                };
-                this.dirty = { ...this.dirty, [module.pack]: true };
-              }}
-            ></open-house-schema-form>
-          </div>`}
+              </div>
+              <open-house-schema-form
+                .schema=${schema}
+                .values=${draft}
+                .readonly=${!this.admin}
+                @value-changed=${(event: CustomEvent<Record<string, unknown>>) => {
+                  this.drafts = {
+                    ...this.drafts,
+                    [key]: event.detail,
+                  };
+                  this.dirty = { ...this.dirty, [key]: true };
+                }}
+              ></open-house-schema-form>
+            </div>`}
+      </details>
     </div>`;
+  }
+
+  /**
+   * A room's display name, for the surfaces a module's placement is named on.
+   *
+   * The chip beside a module installed elsewhere names the room it sits in; every
+   * other surface in the panel shows that room's name, so a card that printed the
+   * id would be the one place a person reads `living_room` instead of "Living
+   * room". Falls back to the id when the room list does not carry it.
+   */
+  private roomName(roomId: string): string {
+    return this.rooms.find((room) => room.id === roomId)?.name ?? roomId;
   }
 
   /**
@@ -1531,6 +1742,12 @@ export class RoomSettings extends OpenHouseElement {
    * The page is re-read whole rather than through `mutate`, because a tick can
    * change which rooms a card's atoms reach, and the card is drawn from the
    * server's answer.
+   *
+   * Both writes name the module by *its own* placement and never this page's
+   * room: the card is drawn here for every module that reaches this room,
+   * including ones installed elsewhere, and a scope write sent with this room's
+   * id would land on whichever module in this room shares the pack -- or on none
+   * at all -- while the atom the person ticked is somewhere else.
    */
   private async setReach(
     module: InstalledModule,
@@ -1545,7 +1762,7 @@ export class RoomSettings extends OpenHouseElement {
       const client = this.requireClient();
       if (place === HOUSE_REACH) {
         await client.setModuleBehaviourScope(
-          this.roomId,
+          module.room_id,
           module.pack,
           behaviour.id,
           on ? "house" : "room",
@@ -1578,6 +1795,10 @@ export class RoomSettings extends OpenHouseElement {
    * over one light. The room page is reloaded through `mutate`, which is the
    * same path a reach tick takes and the reason the atom's Reset button appears
    * on the row that was just ranked.
+   *
+   * The write names the module's *own* placement, not this page's room: a module
+   * installed in the house reaches every room's page, and a rank sent with this
+   * room's id would either miss it or rank a different module sharing its pack.
    */
   private async setPriority(
     module: InstalledModule,
@@ -1586,7 +1807,7 @@ export class RoomSettings extends OpenHouseElement {
   ): Promise<void> {
     await this.mutate(async () => {
       await this.requireClient().setModuleBehaviourPriority(
-        this.roomId,
+        module.room_id,
         module.pack,
         behaviour.id,
         priority,
@@ -1610,13 +1831,11 @@ export class RoomSettings extends OpenHouseElement {
       return this.renderModuleCard(module, room);
     });
     return html`<h2 style="margin-bottom:8px">Modules</h2>
-      <p class="help">
-        The modules this room's devices are wired into. Each one's switches and
-        its settings are here together, because they are the same thing: the
-        behaviour is what it does and the settings are how it does it. A module
-        installed in another room is drawn here too when this room binds the
-        roles it acts through, because this room is where its settings are read
-        -- the chip beside its name says where it lives.
+      <p
+        class="help"
+        title=${"A card's switches and its settings are together because they are the same thing: the behaviour is what it does and the settings are how it does it. A module installed elsewhere is drawn here too when this room binds the roles it acts through; the chip beside its name says where it lives."}
+      >
+        The modules this room's devices are wired into.
       </p>
       ${room.modules.length === 0
         ? html`<div class="card">
@@ -1637,20 +1856,22 @@ export class RoomSettings extends OpenHouseElement {
    * visible nowhere in that room would be a module a person could put somewhere
    * and not take back. Nothing is drawn when the room has none, since the list
    * above already speaks for the room's modules.
+   *
+   * The list is keyed by slug: a rebuild moves a module to the end of the house's
+   * own list, and an unkeyed list re-binds the card at that position to whatever
+   * module is there now -- taking the notice a save just wrote with it, and
+   * re-drawing a module nobody touched.
    */
   private renderHosted(): TemplateResult | typeof nothing {
     if (this.hosted.length === 0) return nothing;
     return html`<h2 style="margin-top:24px;margin-bottom:8px">Your modules</h2>
-      <p class="help">
-        Modules from your store that you have added to this room. Each has its
-        own automation and its own copy of the answers you gave when you defined
-        it, so editing it here changes it here only.
+      <p
+        class="help"
+        title=${"Each module has its own automation and its own copy of the answers you gave when you defined it, so editing it here changes this here only."}
+      >
+        Modules from your store added to this room.
       </p>
       <div class="stack">
-      // Keyed by slug: a rebuild moves a module to the end of the house's own
-      // list, and an unkeyed list re-binds the card at that position to whatever
-      // module is there now -- taking the notice a save just wrote with it, and
-      // re-drawing a module nobody touched.
         ${repeat(
           this.hosted,
           (module) => module.slug,

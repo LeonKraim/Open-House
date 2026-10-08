@@ -17,16 +17,26 @@ import type {
   BindingSuggestion,
   Capabilities,
   DecisionLogEntry,
+  DevAnalysis,
+  DevSaved,
+  DevSlot,
+  DevSource,
   HealthIssue,
   HostedModule,
   HouseOverview,
   HouseScope,
   InstalledModule,
+  ModuleBinding,
+  ModuleCandidate,
+  ModuleEditSeed,
+  ModuleInputRow,
   ModuleInstallReply,
   ModuleOffer,
   ModuleOfferRow,
+  ModuleReadReply,
   ModuleSlot,
   ModuleSlotRuleKind,
+  ModuleSlotWord,
   ProfileRef,
   RoomDetail,
   RoomSummary,
@@ -132,12 +142,43 @@ let profilesRevision = 0;
 function guardStale(payload: Record<string, unknown>): void {
   const sent = payload.revision;
   if (typeof sent !== "number" || sent === profilesRevision) return;
-  throw {
-    code: REFUSALS.stalePage,
-    message:
-      "This page was read before the house's profiles moved, so its answers " +
+  throw refuse(
+    REFUSALS.stalePage,
+    "This page was read before the house's profiles moved, so its answers " +
       "belong to a profile that is no longer in force.",
-  };
+  );
+}
+
+/**
+ * A refusal in the shape the client reads: a code, and a sentence for a person.
+ *
+ * The mock threw bare `Error`s for the input a *server* would refuse -- a room
+ * that is not there, a profile already held -- and the client maps a plain
+ * `Error` to the code `unknown`, so the panel rendered "Something went wrong"
+ * over a message the fixture had written out in full for exactly that case.
+ * `guardStale` above and the refusals below both go through here now, so a
+ * refusal the mock makes is a refusal the panel draws as one.
+ */
+function refuse(code: string, message: string): unknown {
+  return { code, message };
+}
+
+/** A name as the id the panel will address it by: lower case, underscores. */
+function slugOf(text: string): string {
+  const slug = text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return slug === "" ? "room" : slug;
+}
+
+/** A room type as a person reads it: `living_room` -> `Living room`. */
+function labelOf(type: string): string {
+  const words = type.split("_").filter((word) => word !== "");
+  if (words.length === 0) return "";
+  return [words[0]!.charAt(0).toUpperCase() + words[0]!.slice(1), ...words.slice(1)].join(
+    " ",
+  );
 }
 
 /** Every profile as the panel's row, newest state included. */
@@ -170,12 +211,12 @@ function profileRef(document: Record<string, unknown>): ProfileRef {
 /** The profile documents a file holds, in either of the two accepted forms. */
 function profileDocuments(document: unknown): Record<string, unknown>[] {
   if (typeof document !== "object" || document === null) {
-    throw new Error("the document is not an object");
+    throw refuse(REFUSALS.invalidFormat, "the document is not an object");
   }
   const held = (document as Record<string, unknown>).profiles;
   if (held === undefined) return [document as Record<string, unknown>];
   if (!Array.isArray(held)) {
-    throw new Error("the document's 'profiles' is not a list");
+    throw refuse(REFUSALS.invalidFormat, "the document's 'profiles' is not a list");
   }
   return held as Record<string, unknown>[];
 }
@@ -478,6 +519,39 @@ const OFFERS: ModuleOffer[] = [
     behaviours: [{ id: "vacuum_button", label: "Vacuum button", priority: null }],
   },
 ];
+
+/**
+ * The parts each slot has been split into, this session.
+ *
+ * One record for the whole house, which is where the server keeps it: a part is
+ * a role's half and the split is the *house's*, so every room's page draws the
+ * same halves and only the devices differ. Seeded with two so the controls are on
+ * screen in `npm run dev`, and written by `slotSetParts`.
+ *
+ * **Declared up here, above the first fixture that reads them, and that is not
+ * tidiness.** `HOUSE_SCOPE` below is a `const` initialised at module evaluation
+ * and it asks `partRows` for its slot rows; `partRows` is a function declaration
+ * and therefore hoisted, but `SLOT_PARTS` is a `const` like `HOUSE_SCOPE` and was
+ * declared *after* it. Reading it from inside a fixture that runs first threw
+ * `Cannot access 'SLOT_PARTS' before initialization` at import time -- so the
+ * whole mock module failed to load, and it failed for every caller: `mockHass()`
+ * was never reached, and no test had ever imported the file to notice.
+ */
+const SLOT_PARTS: Record<string, string[]> = {
+  light_group: ["a", "b"],
+  ceiling_light: ["left", "right"],
+};
+
+/** Which part of a split slot one module is on, by override key. */
+const SLOT_MEMBER: Record<string, string> = {};
+
+/** What each part is bound to, by the part's own key (`light_group__a`). */
+const SLOT_PART_BINDINGS: Record<string, string | null> = {
+  "light_group__a": "light.kitchen_lights",
+  "light_group__b": null,
+  "ceiling_light__left": "light.bedroom_left",
+  "ceiling_light__right": null,
+};
 
 /**
  * The house's own page, for the House tab.
@@ -1004,6 +1078,170 @@ const STORE: StoreEntry[] = [
 ];
 
 /**
+ * The Dev tab's fixtures: what may be imported, and the reading of one source.
+ *
+ * The mock has no document parser -- the server's whole authoring stack sits
+ * behind `dev/read`, and re-implementing it here would be a second one that
+ * could disagree with it. So the reading is of a *fixed* document: the rows are
+ * the same shape the server sends, the choices a person makes travel in
+ * `dev/save`'s payload, and the verdict that matters is `dev/save`'s. What this
+ * buys is the thing the mock exists for -- a screen with every row on it.
+ */
+const DEV_AUTOMATIONS: DevSource[] = [
+  {
+    key: "automation.hallway_motion",
+    name: "Hallway motion",
+    description: "The hall light on when motion is seen after dark.",
+  },
+];
+
+const DEV_BLUEPRINTS: DevSource[] = [
+  {
+    key: "homeassistant/motion_light.yaml",
+    name: "Motion-activated Light",
+    description: "Turn on a light when motion is detected.",
+    source_url: "https://www.home-assistant.io/blueprints/motion_light/",
+    domain: "light",
+  },
+];
+
+/** The reading of that fixed source, field for field with `pack_authoring.analyse`. */
+const DEV_ANALYSIS: DevAnalysis = {
+  title: "Hallway motion",
+  description: "The hall light on when motion is seen after dark.",
+  blueprint: false,
+  entities: [
+    {
+      key: "motion",
+      label: "Motion",
+      entity_id: "binary_sensor.kitchen_motion",
+      domain: "binary_sensor",
+      count: 2,
+      optional: false,
+      places: ["trigger", "condition"],
+      suggested_slot: "motion_sensor",
+    },
+    {
+      key: "light",
+      label: "Light",
+      entity_id: "light.kitchen",
+      domain: "light",
+      count: 1,
+      optional: false,
+      places: ["action"],
+      suggested_slot: "ceiling_light",
+    },
+  ],
+  values: [
+    {
+      key: "delay",
+      label: "Delay",
+      kind: "duration",
+      default: 120,
+      description: "How long the light stays on.",
+      minimum: null,
+      maximum: null,
+      unit: "seconds",
+      choices: [],
+      places: ["action"],
+    },
+  ],
+  services: [
+    {
+      key: "turn_on",
+      service: "light.turn_on",
+      supported: true,
+      acts_on: ["light"],
+      data_keys: ["brightness_pct"],
+      where: "action",
+      depth: 0,
+    },
+  ],
+  triggers: ["state"],
+  conditions: [],
+  dropped: [],
+};
+
+/** The two vocabularies a decision is made against, sent with the reading. */
+const DEV_SLOTS: DevSlot[] = [
+  { name: "ceiling_light", domains: ["light"], suggested: true },
+  { name: "motion_sensor", domains: ["binary_sensor"], suggested: true },
+  { name: "ambient_light_sensor", domains: ["sensor"], suggested: false },
+];
+
+const DEV_SERVICES: string[] = ["light.turn_on", "light.turn_off", "switch.turn_on"];
+
+/** The inputs a hosted module's read offers, as the import screen's rows. */
+const MODULE_INPUTS: ModuleInputRow[] = [
+  {
+    name: "motion",
+    title: "Motion",
+    description: "The sensor the module watches.",
+    default: "binary_sensor.kitchen_motion",
+    has_default: true,
+    multiple: false,
+    bound: true,
+    value: "binary_sensor.kitchen_motion",
+    satisfied: true,
+    // A trigger's `entity_id` is matched against real entities rather than
+    // rendered, which is why `in_trigger` is the flag the cast picker reads.
+    in_trigger: true,
+    selector: "entity",
+    options: [],
+  },
+  {
+    name: "brightness",
+    title: "Brightness",
+    description: "How bright the light comes on.",
+    default: 60,
+    has_default: true,
+    multiple: false,
+    bound: false,
+    value: 60,
+    satisfied: true,
+    in_trigger: false,
+    selector: "number",
+    options: [],
+  },
+];
+
+/** What the fixed source could publish, as the tick-list on the import screen. */
+const MODULE_CANDIDATES: ModuleCandidate[] = [
+  {
+    name: "brightness",
+    kind: "variable",
+    value_kind: "number",
+    expression: "{{ brightness }}",
+    branch_only: false,
+    suggested_key: "brightness",
+  },
+  {
+    name: "light",
+    kind: "entity",
+    value_kind: "string",
+    expression: "{{ states('light.kitchen') }}",
+    branch_only: false,
+    suggested_key: "light_state",
+  },
+];
+
+/** The house's slot words, as a dropdown offers them. */
+const SLOT_WORDS: ModuleSlotWord[] = [
+  { name: "ambient_light_sensor", label: "Ambient light sensor", house_scope: false },
+  { name: "ceiling_light", label: "Ceiling light", house_scope: false },
+  { name: "motion_sensor", label: "Motion sensor", house_scope: false },
+];
+
+/** The licence codes a module may be saved under (`module_definitions.LICENCES`). */
+const LICENCES: string[] = [
+  "public_domain",
+  "mit",
+  "apache_2_0",
+  "cc_by_nc_sa",
+  "no_licence",
+];
+
+/**
  * The modules this mock house made, as the Store tab's local half shows them.
  *
  * Two deliberately opposite rows: one that reaches through a slot and so would
@@ -1333,30 +1571,6 @@ const SLOT_OVERRIDES: Record<
   { entity_id: string | null; label: string | null }
 > = {};
 
-/**
- * The parts each slot has been split into, this session.
- *
- * One record for the whole house, which is where the server keeps it: a part is
- * a role's half and the split is the *house's*, so every room's page draws the
- * same halves and only the devices differ. Seeded with two so the controls are on
- * screen in `npm run dev`, and written by `slotSetParts`.
- */
-const SLOT_PARTS: Record<string, string[]> = {
-  light_group: ["a", "b"],
-  ceiling_light: ["left", "right"],
-};
-
-/** Which part of a split slot one module is on, by override key. */
-const SLOT_MEMBER: Record<string, string> = {};
-
-/** What each part is bound to, by the part's own key (`light_group__a`). */
-const SLOT_PART_BINDINGS: Record<string, string | null> = {
-  "light_group__a": "light.kitchen_lights",
-  "light_group__b": null,
-  "ceiling_light__left": "light.bedroom_left",
-  "ceiling_light__right": null,
-};
-
 /** The key a part of a slot binds under, which is what a module names. */
 function partKey(slot: string, part: string): string {
   return `${slot}__${part}`;
@@ -1521,7 +1735,13 @@ function roomBound(roomId: string, slot: string): string | null {
 }
 
 function roomDetail(id: string): RoomDetail {
-  const summary = ROOMS.find((room) => room.id === id) ?? ROOMS[0]!;
+  // An unknown room is `not_found` and not the first room in the fixture. This
+  // fell back to `ROOMS[0]`, so a *deleted* room, or a mistyped one, answered
+  // with the Kitchen's page under the name that was asked for -- which is the
+  // one way a mock can be worse than silent: the screen renders a room that does
+  // not exist and looks entirely right doing it.
+  const summary = ROOMS.find((room) => room.id === id);
+  if (summary === undefined) throw refuse(REFUSALS.notFound, `no room ${id}`);
   // Only the room's own modules' settings, keyed the way the server keys them.
   const packs = installed.filter((module) => module.room_id === summary.id);
   return {
@@ -1601,9 +1821,53 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
       return { rooms: ROOMS };
     case COMMANDS.roomGet:
       return roomDetail(String(payload.room_id));
-    case COMMANDS.roomCreate:
-    case COMMANDS.roomUpdate:
-      return roomDetail(String(payload.room_id));
+    case COMMANDS.roomCreate: {
+      // A *new* room, and not the first one the fixture holds. This used to be
+      // `return roomDetail(String(payload.room_id))` beside `roomUpdate`, and a
+      // create sends no `room_id` at all -- the id is the server's to mint from
+      // the name -- so the reply was the Kitchen's page whatever was typed, the
+      // room a person made never appeared in `rooms/list`, and every later
+      // command that addressed it by its real id fell back to the Kitchen too.
+      // The id is slugged from the name the way the server's area id is, because
+      // the panel addresses the room by it from here on.
+      const name = String(payload.name ?? "");
+      const id = slugOf(name);
+      ROOMS.push({
+        id,
+        name,
+        type: String(payload.room_type ?? ""),
+        type_label: labelOf(String(payload.room_type ?? "")),
+        bound_slots: 0,
+        total_slots: 3,
+        // A room nobody has bound anything in is a room the engine cannot act
+        // in, which is exactly what the fixture's own rows show.
+        required_unbound: ["ceiling_light", "motion_sensor"],
+        mode: "home",
+        active_profiles: {},
+        occupied: false,
+        auto_lighting: false,
+        issue_count: 0,
+      });
+      return roomDetail(id);
+    }
+    case COMMANDS.roomUpdate: {
+      // The rename only. The mock answered the page for a room id it was never
+      // sent (`roomUpdate` sends `room_id` and `name`), so renaming a room left
+      // the old name on screen and the row in `rooms/list` unchanged.
+      const room = ROOMS.find((entry) => entry.id === String(payload.room_id));
+      if (room === undefined) throw refuse(REFUSALS.notFound, `no room ${String(payload.room_id)}`);
+      if (typeof payload.name === "string" && payload.name !== "") room.name = payload.name;
+      return roomDetail(room.id);
+    }
+    case COMMANDS.roomDelete: {
+      // The room goes and the area stays, which is the server's rule and the
+      // whole reason this answers the id rather than the house: the panel drops
+      // the room from its list and leaves Home Assistant's layout alone.
+      const at = ROOMS.findIndex((entry) => entry.id === String(payload.room_id));
+      if (at === -1) throw refuse(REFUSALS.notFound, `no room ${String(payload.room_id)}`);
+      ROOMS.splice(at, 1);
+      return { room_id: String(payload.room_id) };
+    }
     case COMMANDS.roomBind:
     case COMMANDS.roomReplace:
     case COMMANDS.roomUnbind: {
@@ -1876,7 +2140,7 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
     case COMMANDS.profileActivateHouse: {
       const name = String(payload.profile);
       if (PROFILE_DOCUMENTS[name]?.kind !== "house") {
-        throw new Error(`the profile ${name} is not a house profile`);
+        throw refuse(REFUSALS.notFound, `the profile ${name} is not a house profile`);
       }
       houseProfile = name;
       // The house moved, so every page rendered before this is stale -- which is
@@ -1890,10 +2154,66 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
       houseProfile = null;
       profilesRevision += 1;
       return { profiles: profileRows() };
+    case COMMANDS.profileCapture: {
+      // A profile made *out of* the house: what it is on and set to, named. The
+      // mock's house is a fixture, so the document records what a person can see
+      // rather than a whole inventory -- enough for the list to grow a row and
+      // for the house to go on it, which is the whole of what the screen draws.
+      //
+      // Capture puts the house on the new profile as part of taking it, so this
+      // is `activate_house` by another door: the revision moves here for the same
+      // reason it moves there, and a page rendered before it is stale.
+      const name = slugOf(String(payload.name ?? ""));
+      if (PROFILE_DOCUMENTS[name] !== undefined) {
+        throw refuse(
+          REFUSALS.invalidFormat,
+          `this house already holds a profile called ${name}`,
+        );
+      }
+      PROFILE_DOCUMENTS[name] = {
+        name,
+        kind: "house",
+        description: `What this house was on and set to on ${new Date().toISOString().slice(0, 10)}.`,
+        selections: {},
+      };
+      houseProfile = name;
+      profilesRevision += 1;
+      return { profiles: profileRows() };
+    }
+    case COMMANDS.profileRename: {
+      const from = String(payload.profile);
+      const to = slugOf(String(payload.to ?? ""));
+      const held = PROFILE_DOCUMENTS[from];
+      if (held === undefined) throw refuse(REFUSALS.notFound, `no profile called ${from}`);
+      // A rename and not a remove-and-add: every selection that named the
+      // profile moves with it, which is why the active set and the house's own
+      // pointer are rewritten rather than left naming a document that is gone.
+      delete PROFILE_DOCUMENTS[from];
+      PROFILE_DOCUMENTS[to] = { ...held, name: to };
+      if (ACTIVE_PROFILE_NAMES.delete(from)) ACTIVE_PROFILE_NAMES.add(to);
+      if (houseProfile === from) houseProfile = to;
+      return { profiles: profileRows() };
+    }
+    case COMMANDS.profileRemove: {
+      const name = String(payload.profile);
+      if (PROFILE_DOCUMENTS[name] === undefined) {
+        throw refuse(REFUSALS.notFound, `no profile called ${name}`);
+      }
+      delete PROFILE_DOCUMENTS[name];
+      // Removing takes every selection that named it off with it, and a house
+      // profile in force is released -- and a release is a house move, so the
+      // revision moves exactly as it does for `deactivate_house`.
+      ACTIVE_PROFILE_NAMES.delete(name);
+      if (houseProfile === name) {
+        houseProfile = null;
+        profilesRevision += 1;
+      }
+      return { profiles: profileRows() };
+    }
     case COMMANDS.profileExport: {
       const wanted = payload.profile === undefined ? null : String(payload.profile);
       if (wanted !== null && PROFILE_DOCUMENTS[wanted] === undefined) {
-        throw new Error(`the profile ${wanted} is not held by this house`);
+        throw refuse(REFUSALS.notFound, `the profile ${wanted} is not held by this house`);
       }
       return {
         document:
@@ -1909,7 +2229,8 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
         .map((entry) => String((entry as Record<string, unknown>).name))
         .filter((name) => PROFILE_DOCUMENTS[name] !== undefined);
       if (conflicts.length > 0 && !replace) {
-        throw new Error(
+        throw refuse(
+          REFUSALS.invalidFormat,
           `this house already holds ${conflicts.join(", ")}; import again with replace`,
         );
       }
@@ -1925,8 +2246,18 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
     }
     case COMMANDS.storeIndex:
       return { entries: STORE, generated_at: new Date().toISOString(), cached: false };
-    case COMMANDS.storeInstall:
-      return { installed: MODULES[0] };
+    case COMMANDS.storeInstall: {
+      // The pack the Store asked for, installed into the house, by the same road
+      // `modules/install` takes -- so the two cannot disagree about what an
+      // install produces. This used to answer `MODULES[0]` whatever button was
+      // pressed, so every pack in the Store installed "Motion lighting" and the
+      // one that was actually installed was nowhere in the house.
+      const landed = answer(COMMANDS.moduleInstall, {
+        room_id: "",
+        pack: String(payload.pack),
+      }) as ModuleInstallReply;
+      return { installed: landed.installed };
+    }
     case COMMANDS.modulesStore: {
       // The verdict is the placement's, as the server's is: the same module can
       // be missing a device in one room and not in another, so the rows are
@@ -1951,6 +2282,177 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
     }
     case COMMANDS.modulesHosted:
       return { modules: HOSTED_MODULES };
+    case COMMANDS.modulesRead: {
+      // The import screen's one read: what the document asks for, what it could
+      // publish, and what the house already has to fill those inputs. The mock
+      // has no document parser -- the server's whole authoring stack is behind
+      // this -- so it answers with the reading of a *fixed* source, which is
+      // what a fixture is for: the screen renders its tables, the bindings a
+      // person makes travel in the payload, and the next command
+      // (`modules/host`) is what has to be honest about the result.
+      //
+      // Naming a `module` reads that module instead, and the reply then also
+      // carries its own document and every answer given about it -- which is
+      // what the card's Edit opens on.
+      const module = typeof payload.module === "string" ? payload.module : "";
+      const hosted = module === "" ? undefined : HOSTED_MODULES.find((row) => row.slug === module);
+      if (module !== "" && hosted === undefined) {
+        throw refuse(
+          REFUSALS.invalidFormat,
+          `this house hosts no module called ${module}, so there is nothing to edit`,
+        );
+      }
+      const definition = hosted?.definition ?? "";
+      const stored = STORED_MODULES.find((row) => row.slug === definition);
+      if (hosted === undefined) {
+        return {
+          source: {
+            title: "Evening lighting",
+            description: "Warm the lights down as the room's light level falls.",
+            blueprint: STORED_MODULES[0]!.blueprint,
+            inputs: MODULE_INPUTS.length,
+          },
+          inputs: MODULE_INPUTS,
+          candidates: MODULE_CANDIDATES,
+          slots: SLOT_WORDS,
+          rooms: roomsOf(ROOMS),
+          licences: LICENCES,
+          hosted: HOSTED_MODULES,
+        } satisfies ModuleReadReply;
+      }
+      // A module carries its own document, so the screen is handed *that* rather
+      // than anything the panel sent: a copy taken on the way out would be a
+      // second version of the module.
+      const installs = HOSTED_MODULES.filter(
+        (row) => row.definition !== "" && row.definition === hosted.definition,
+      ).map((row) => ({
+        slug: row.slug,
+        room_id: row.room_id,
+        room_name: row.room_name,
+      }));
+      return {
+        source: {
+          title: hosted.title,
+          description: stored?.description ?? "",
+          blueprint: hosted.blueprint,
+          inputs: hosted.settings.length,
+        },
+        inputs: hosted.settings.map((setting) => ({ ...setting })),
+        candidates: MODULE_CANDIDATES,
+        slots: SLOT_WORDS,
+        rooms: roomsOf(ROOMS),
+        licences: LICENCES,
+        hosted: HOSTED_MODULES,
+        text: `# ${hosted.title}\n`,
+        editing: {
+          module: hosted.slug,
+          definition,
+          text: `# ${hosted.title}\n`,
+          title: hosted.title,
+          description: stored?.description ?? "",
+          author: stored?.author ?? "",
+          version: stored?.version ?? "1.0.0",
+          licence: stored?.licence ?? "no_licence",
+          blueprint: hosted.blueprint,
+          bindings: {},
+          settings: hosted.settings.map((setting) => setting.name),
+          casts: hosted.derived,
+          // The *names* off the definition and the *ids* from the installation:
+          // which inputs a module answers by a flow is the module's, and the id
+          // belongs to the Node-RED that installed it.
+          flows: Object.fromEntries(
+            Object.entries(hosted.flows).map(([name, flow]) => [name, flow.flow_id]),
+          ),
+          scripts: Object.fromEntries(
+            Object.entries(hosted.scripts).map(([name, script]) => [name, script.script_id]),
+          ),
+          // The mock's outputs carry only the key, where the server keeps the
+          // input's own name *and* the key the person chose; the key is what the
+          // row is addressed by, so it stands in for both here.
+          picks: hosted.outputs.map((output) => ({ name: output.key, key: output.key })),
+          installs:
+            installs.length > 0
+              ? installs
+              : [{ slug: hosted.slug, room_id: hosted.room_id, room_name: hosted.room_name }],
+        } satisfies ModuleEditSeed,
+      } satisfies ModuleReadReply;
+    }
+    case COMMANDS.modulesHost: {
+      // Hosting a source is what makes a module exist, and the reply is the house
+      // it landed in. The mock builds the module from what it was sent rather
+      // than from a document it cannot parse: the slots the person answered, the
+      // settings they kept, and the outputs they ticked -- which together *are*
+      // the module, because a module is its answers.
+      const title = String(payload.title ?? "");
+      const slug = slugOf(title);
+      const roomId = String(payload.room_id ?? "");
+      const roomName =
+        roomId === ""
+          ? "the whole house"
+          : (ROOMS.find((room) => room.id === roomId)?.name ?? roomId);
+      const bindings = (payload.bindings ?? {}) as Record<string, ModuleBinding>;
+      const outputs = Array.isArray(payload.outputs)
+        ? (payload.outputs as { name?: unknown; key?: unknown }[])
+        : [];
+      const settings = Array.isArray(payload.settings) ? (payload.settings as unknown[]) : [];
+      const hosted: HostedModule = {
+        slug,
+        title,
+        blueprint: typeof payload.key === "string" ? payload.key : "",
+        // A document hosted directly has no definition behind it, which is not a
+        // deficiency -- it is a module the house runs without offering.
+        definition: "",
+        room_id: roomId,
+        room_name: roomName,
+        // One row per input answered with a *slot*, which is what a room binds:
+        // the module reaches the device through the role, not through the id.
+        slots: Object.entries(bindings)
+          .filter(([, binding]) => binding.kind === "slot")
+          .map(([name, binding]) => ({
+            name: String(binding.slot ?? name),
+            input: name,
+            scope: binding.scope === "house" ? "house" : "room",
+            part: String(binding.part ?? ""),
+            bound: roomBound(roomId, String(binding.slot ?? name)) ?? "",
+            bound_name: "",
+            parts: [],
+          })),
+        automation_id: `automation.${slug}`,
+        // Waiting for anything the mock cannot resolve, which is the state the
+        // card is most needed for: a module hosted with no device in the room is
+        // hosted and idle, not absent.
+        config: "Default",
+        configs: ["Default"],
+        derived: {},
+        flows: Object.fromEntries(
+          (Array.isArray(payload.flows) ? (payload.flows as unknown[]) : []).map((name) => [
+            String(name),
+            { flow_id: "", entity_id: `sensor.open_house_flow_${slug}_${String(name)}` },
+          ]),
+        ),
+        scripts: Object.fromEntries(
+          Object.entries((payload.scripts ?? {}) as Record<string, string>).map(
+            ([name, script]) => [name, { script_id: script }],
+          ),
+        ),
+        inputs: Object.entries(bindings)
+          .filter(([, binding]) => binding.kind === "literal")
+          .map(([name, binding]) => ({ name, value: binding.value })),
+        settings: MODULE_INPUTS.filter((row) => settings.includes(row.name)),
+        outputs: outputs.map((output) => {
+          const key = String(output.key ?? "");
+          return {
+            key,
+            kind: "string",
+            expression: "",
+            entity_id: `sensor.open_house_${slug}_${key}`,
+            value: null,
+          };
+        }),
+      };
+      HOSTED_MODULES.push(hosted);
+      return { module: slug, modules: HOSTED_MODULES };
+    }
     case COMMANDS.modulesSettings: {
       // The settings a card can change are the module's own rows, so a save
       // writes what it was given back onto the row and answers with the list --
@@ -2021,7 +2523,10 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
           if (at !== -1) module.outputs.splice(at, 1);
         }
       }
-      return { module: slug, modules: HOSTED_MODULES };
+      // The store comes back too, because publishing rewrites the definition
+      // behind the module exactly as an edit does -- a screen listing what the
+      // house offers is stale otherwise, and the client's own type says so.
+      return { module: slug, modules: HOSTED_MODULES, store: STORED_MODULES };
     }
     case COMMANDS.modulesConfigSwitch: {
       guardStale(payload);
@@ -2100,8 +2605,159 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
       if (at !== -1) HOSTED_MODULES.splice(at, 1);
       return { module: slug, modules: HOSTED_MODULES };
     }
-    case COMMANDS.modulesDefine:
-      return { module: String(payload.title ?? "module"), store: STORED_MODULES };
+    case COMMANDS.modulesEdit: {
+      // The one module command whose subject is the module rather than a copy of
+      // it: the definition behind it is rewritten and every room running it is
+      // built again. The mock has no definitions to rewrite, so it records what
+      // the screen would read back -- the module's own name and document -- and
+      // answers with the whole house and the store, which is what the client's
+      // type asks for and what makes either listing redraw from one reply.
+      const slug = String(payload.module);
+      const module = HOSTED_MODULES.find((row) => row.slug === slug);
+      if (module === undefined) {
+        throw refuse(
+          REFUSALS.invalidFormat,
+          `this house hosts no module called ${slug}, so there is nothing to edit`,
+        );
+      }
+      // **Required, unlike the title above.** These six are the module's
+      // answers, and there is no reading of an absent one that is not a reading
+      // of an empty one -- a caller who left one out would silently take every
+      // answer away from a module installed in five rooms. The server's schema
+      // says `vol.Required` for exactly this reason; the client's type said
+      // "optional" and sent nothing, so the refusal arrived as `invalid_format`
+      // with a sentence about a field the caller could not have known it owed.
+      for (const field of ["bindings", "outputs", "settings", "casts", "flows", "scripts"]) {
+        if (!(field in payload)) {
+          throw refuse(REFUSALS.invalidFormat, `${field} is required to edit a module`);
+        }
+      }
+      const title = String(payload.title ?? module.title);
+      module.title = title;
+      module.blueprint = typeof payload.key === "string" ? payload.key : module.blueprint;
+      // The store row it was made from follows the module, because that is where
+      // the next install reads its name from.
+      const stored = STORED_MODULES.find((offer) => offer.slug === module.definition);
+      if (stored !== undefined) stored.title = title;
+      return { module: slug, modules: HOSTED_MODULES, store: STORED_MODULES };
+    }
+    case COMMANDS.modulesDetach: {
+      // Give one row's logic a module of its own, and point the row at it. The
+      // row is named either way round (`input` or `slot`), and what changes is
+      // where its value comes from: the new module computes it, and the row
+      // reads the output.
+      const slug = String(payload.module);
+      const source = HOSTED_MODULES.find((row) => row.slug === slug);
+      if (source === undefined) {
+        throw refuse(REFUSALS.notFound, `this house hosts no module called ${slug}`);
+      }
+      const row = typeof payload.input === "string" ? payload.input : String(payload.slot ?? "");
+      const title = String(payload.title ?? "") || `${source.title} (${row})`;
+      const newSlug = slugOf(title);
+      const key = row === "" ? "on" : row;
+      const roomId = String(payload.room_id ?? "");
+      const roomName =
+        roomId === ""
+          ? "the whole house"
+          : (ROOMS.find((entry) => entry.id === roomId)?.name ?? roomId);
+      HOSTED_MODULES.push({
+        slug: newSlug,
+        title,
+        blueprint: "",
+        definition: "",
+        room_id: roomId,
+        room_name: roomName,
+        slots: [],
+        automation_id: `automation.${newSlug}`,
+        config: "Default",
+        configs: ["Default"],
+        derived: {},
+        flows: {},
+        scripts: {},
+        inputs: [],
+        settings: [],
+        outputs: [
+          {
+            key,
+            kind: "string",
+            expression: "",
+            entity_id: `sensor.open_house_${newSlug}_${key}`,
+            value: null,
+          },
+        ],
+      });
+      // The row it left now *reads* that output rather than holding its own
+      // logic, which is the whole of what a detach changes and what the row's
+      // own published-key chip draws.
+      const setting = source.settings.find((entry) => entry.name === row);
+      if (setting !== undefined) setting.published_key = key;
+      return {
+        module: newSlug,
+        title,
+        room_id: roomId,
+        key,
+        // What will start it. The mock has no rule to read a trigger off, and a
+        // module that never runs says so rather than inventing one.
+        watched: Array.isArray(payload.trigger)
+          ? (payload.trigger as unknown[]).map(String)
+          : [],
+        // The module the rule came from, and the row it left: the same shape the
+        // input path answers with, so a screen holding either goes stale the same
+        // way.
+        source: slug,
+        modules: HOSTED_MODULES,
+      };
+    }
+    case COMMANDS.modulesDefine: {
+      // The definition is *written to the store*, and the row it made is what the
+      // reply names. This used to answer the title with the store unchanged, so a
+      // module a person had just defined appeared in no list anywhere: the screen
+      // said "saved" over a store that had not moved, and the next install of it
+      // fell back to a fixture.
+      const title = String(payload.title ?? "module");
+      const slug = slugOf(title);
+      const bindings = (payload.bindings ?? {}) as Record<string, ModuleBinding>;
+      const at = STORED_MODULES.findIndex((offer) => offer.slug === slug);
+      if (at !== -1 && payload.replace !== true) {
+        // The server refuses to overwrite a definition nobody asked to replace,
+        // for the reason an import does: re-importing a blueprint somebody has
+        // edited is an update, and overwriting a module they authored is a
+        // decision.
+        throw refuse(
+          REFUSALS.invalidFormat,
+          `this house already offers a module called ${slug}; define it again with replace`,
+        );
+      }
+      const row: ModuleOfferRow = {
+        slug,
+        title,
+        description: String(payload.description ?? ""),
+        author: String(payload.author ?? ""),
+        version: String(payload.version ?? "1.0.0"),
+        licence: String(payload.licence ?? "no_licence"),
+        // The document a person picked, by key, as its provenance -- the same
+        // path the row keeps for a blueprint.
+        blueprint: typeof payload.key === "string" ? payload.key : "",
+        // A definition is pinned when it names this house's *devices*: an input
+        // answered with an entity cannot travel, which is the one thing the
+        // sender of a file knows and the receiver cannot see.
+        pinned: Object.values(bindings).some((binding) => binding.kind === "entity"),
+        // The roles it reaches through, which is what an installing room binds.
+        slots: Object.values(bindings)
+          .filter((binding) => binding.kind === "slot" && binding.slot !== undefined)
+          .map((binding) => String(binding.slot)),
+        flows: Array.isArray(payload.flows) ? (payload.flows as string[]).map(String) : [],
+        scripts: Object.keys((payload.scripts ?? {}) as Record<string, string>),
+        missing_slots: [],
+        // A define never installs, so a definition that replaces another keeps
+        // the placements the old one had: those are rooms running it, and they
+        // are not this command's to touch.
+        deployed: at === -1 ? [] : STORED_MODULES[at]!.deployed,
+      };
+      if (at === -1) STORED_MODULES.push(row);
+      else STORED_MODULES.splice(at, 1, row);
+      return { module: slug, store: STORED_MODULES };
+    }
     case COMMANDS.modulesDeploy: {
       const slug = String(payload.module);
       const roomId = String(payload.room_id ?? "");
@@ -2151,7 +2807,11 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
           outputs: [],
         });
       }
-      return { module: slug, modules: MODULES, store: STORED_MODULES };
+      // The *hosted* list, not `MODULES`: what comes back is what the house is
+      // running, and this command has just added one to it. Answering with the
+      // installed-pack fixture made deploying a module look like it had replaced
+      // the house's packs with the fixture's.
+      return { module: slug, modules: HOSTED_MODULES, store: STORED_MODULES };
     }
     case COMMANDS.modulesRemove: {
       const slug = String(payload.module);
@@ -2173,13 +2833,134 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
       const document = payload.document as { definition?: ModuleOfferRow } | undefined;
       const arrived = document?.definition;
       if (!arrived?.slug) {
-        throw new Error("this is not a module");
+        throw refuse(REFUSALS.invalidFormat, "this is not a module");
       }
       const at = STORED_MODULES.findIndex((offer) => offer.slug === arrived.slug);
       const replaced = at !== -1;
       if (replaced) STORED_MODULES.splice(at, 1, { ...arrived, deployed: [] });
       else STORED_MODULES.push({ ...arrived, deployed: [] });
       return { imported: arrived.slug, replaced, store: STORED_MODULES };
+    }
+    case COMMANDS.devSources:
+      // The one Dev command answerable with no house, which is why it is a
+      // fixture rather than a page: a person can see what their automations
+      // would become before they have finished setting the house up.
+      return {
+        automations: DEV_AUTOMATIONS,
+        blueprints: DEV_BLUEPRINTS,
+        // Read off the *store*, because that is where a saved module lives: a
+        // mock whose `saved` list did not grow when `dev/save` ran would say a
+        // save went nowhere.
+        saved: STORED_MODULES.map((offer) => ({
+          name: offer.slug,
+          title: offer.title,
+          description: offer.description,
+          version: offer.version,
+          // The mock has no manifest to count atoms from, so it counts what it
+          // does know: the roles the definition reaches through.
+          behaviours: offer.slots.length,
+          options: 0,
+          file: `${offer.slug}.yaml`,
+        })),
+      };
+    case COMMANDS.devRead:
+      // The reading, and the two vocabularies a decision is made against --
+      // which come *with* the reading rather than from a second command, so a
+      // screen renders one table from one reply.
+      return { analysis: DEV_ANALYSIS, slots: DEV_SLOTS, services: DEV_SERVICES };
+    case COMMANDS.devSave: {
+      // The file is written and the verdict is about the file: the mock writes
+      // the module into the store under the plan's own name, which is what makes
+      // the Dev tab's saved list and the store agree afterwards.
+      const plan = (payload.plan ?? {}) as { name?: unknown; title?: unknown; behaviours?: unknown };
+      const name = slugOf(String(plan.name ?? "module"));
+      const title =
+        typeof plan.title === "string" && plan.title !== "" ? plan.title : name;
+      const behaviours = Array.isArray(plan.behaviours) ? plan.behaviours.length : 0;
+      const saved: DevSaved & { yaml: string } = {
+        name,
+        title,
+        description: "",
+        version: "1.0.0",
+        behaviours,
+        options: 0,
+        file: `${name}.yaml`,
+        yaml: `# ${title}\n`,
+      };
+      const at = STORED_MODULES.findIndex((offer) => offer.slug === name);
+      const row: ModuleOfferRow = {
+        slug: name,
+        title,
+        description: "",
+        author: "",
+        version: "1.0.0",
+        licence: "no_licence",
+        blueprint: typeof payload.key === "string" ? payload.key : "",
+        pinned: false,
+        slots: [],
+        flows: [],
+        scripts: [],
+        missing_slots: [],
+        deployed: [],
+      };
+      if (at === -1) STORED_MODULES.push(row);
+      else STORED_MODULES.splice(at, 1, { ...row, deployed: STORED_MODULES[at]!.deployed });
+      // "Save and install there" installs in the same call, and a refusal to
+      // install leaves the file alone -- so the write above stands and only the
+      // placement does not happen. The mock has nothing that refuses a
+      // placement, so it always places.
+      if (payload.install === true) {
+        answer(COMMANDS.moduleInstall, {
+          room_id: String(payload.room_id ?? ""),
+          pack: name,
+        });
+      }
+      return { saved, modules: installed.map(withReach) };
+    }
+    case COMMANDS.devInstall: {
+      // The module is named by pack name and read from the file, so what installs
+      // is what is on disk. The mock has no disk, so a name it has never been
+      // given is the one refusal it can make honestly -- an install of something
+      // nobody authored is a `not_found`, not an empty list.
+      const name = String(payload.name);
+      if (!STORED_MODULES.some((offer) => offer.slug === name)) {
+        throw refuse(REFUSALS.notFound, `no authored module is called ${name}`);
+      }
+      answer(COMMANDS.moduleInstall, {
+        room_id: String(payload.room_id ?? ""),
+        pack: name,
+      });
+      return { modules: installed.map(withReach) };
+    }
+    case COMMANDS.devExport: {
+      // One installed module's behaviours as the automations that would do the
+      // same. The automations name the entities the *room* holds, which is the
+      // whole difference between an export and a copy of the manifest -- so the
+      // mock reads the room's own bindings and writes them into the document.
+      const pack = String(payload.pack);
+      const record = installed.find((module) => module.pack === pack);
+      if (record === undefined) {
+        throw refuse(REFUSALS.notFound, `no module called ${pack} is installed`);
+      }
+      const roomId = typeof payload.room_id === "string" ? payload.room_id : record.room_id;
+      const target = roomBound(roomId, "ceiling_light");
+      const automations = [
+        {
+          alias: record.name,
+          trigger: [{ platform: "state", entity_id: roomBound(roomId, "motion_sensor") }],
+          action: target === null ? [] : [{ service: "light.turn_on", target: { entity_id: target } }],
+        },
+      ];
+      // A role this room fills nothing for is named as a target that names
+      // nothing, which is Home Assistant's "every entity of that domain" -- so
+      // the YAML is correct and silent about why it would do nothing, and this
+      // is the why.
+      return {
+        pack,
+        automations,
+        yaml: automations.map((automation) => `alias: ${automation.alias}\n`).join("---\n"),
+        unresolved: target === null ? ["ceiling_light"] : [],
+      };
     }
     case COMMANDS.activityList:
       return { entries: ACTIVITY };
@@ -2205,7 +2986,15 @@ class MockConnection implements HaConnection {
     SUBSCRIBERS.add(listener);
     // Push one entry soon after subscribing, so the live stream is visible
     // without anything actually happening.
-    setTimeout(() => {
+    //
+    // The timer is held and cleared on unsubscribe, because a subscription a
+    // screen has *dropped* is a subscription that must not deliver: the panel
+    // unsubscribes when its element disconnects, and a timer that survived that
+    // fired one more event into a callback pointing at a removed element -- the
+    // one thing the real connection cannot do, and so the one thing the mock
+    // must not teach.
+    let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      timer = null;
       listener({
         kind: "entry",
         entry: {
@@ -2218,6 +3007,10 @@ class MockConnection implements HaConnection {
     }, 1500);
     return () => {
       SUBSCRIBERS.delete(listener);
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
     };
   }
 }

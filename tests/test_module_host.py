@@ -729,6 +729,57 @@ def test_a_variable_set_in_a_parallel_branch_is_published_in_its_branch() -> Non
     assert _published(published["action"][0]["parallel"]["one"]) == 1
 
 
+def test_a_name_defined_twice_is_published_once_in_the_inner_scope() -> None:
+    """The innermost list that defines a name, and only that one.
+
+    A blueprint may set a variable at the top of its actions and set it again
+    inside a branch -- a default and then the branch's own answer. Both lists
+    define the name, so both used to qualify, and every qualifying list got a
+    publisher: the branch's wrote the branch's value and the top level's wrote the
+    default *after* the branch had closed, over the top of it. The publisher a
+    person configured an output for was therefore the one whose value could never
+    be read, and the reading was always the default.
+
+    Only the innermost list gets one now, which is the sentence `_scope_lists`
+    has always claimed. Two sibling branches both keep theirs -- neither is inside
+    the other, and either may be the one that ran -- which the `if`/`else` test
+    above pins.
+    """
+    document = {
+        "alias": "twice",
+        "action": [
+            {"variables": {"wanted": 1}},
+            {
+                "choose": [
+                    {
+                        "conditions": [
+                            {
+                                "condition": "state",
+                                "entity_id": "light.a",
+                                "state": "on",
+                            }
+                        ],
+                        "sequence": [{"variables": {"wanted": 2}}],
+                    }
+                ]
+            },
+        ],
+    }
+    output = module_host.Output(
+        key="wanted", expression="wanted", kind="number", variables=("wanted",)
+    )
+    published = module_host.publish_actions(document, [output], module="twice_module")
+    # The `choose` is the second action -- the first is the top-level assignment.
+    assert _published(published["action"][1]["choose"][0]["sequence"]) == 1
+    # And not as a direct child of the top level, whose copy of the name would be
+    # written over the branch's once the branch had closed.
+    assert not [
+        step
+        for step in published["action"]
+        if isinstance(step, dict) and step.get("service") == module_host.PUBLISH_SERVICE
+    ]
+
+
 # --------------------------------------------------------------------------
 # The corpus, which is what "any blueprint" has to mean
 # --------------------------------------------------------------------------

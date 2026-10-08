@@ -120,9 +120,15 @@ try {
       // A light slot, on a light, with nothing deciding it yet -- so the rule this
       // walk writes is its first, and the device it moves to is one the walk
       // chose rather than a leftover of somebody else's.
+      //
+      // The *bound entity's* domain is the evidence that the slot takes a light,
+      // and it is the only evidence available here: `accepts_domains` is `()` on
+      // this command deliberately (`live_modules._slot_rows` says why -- the
+      // vocabulary projection keeps only the facts a rule reads). Asking for it
+      // anyway is how this walk came to find no target in a house full of them,
+      // and to report that as nothing to test rather than as its own mistake.
       if (!entity.startsWith('light.')) continue
       if (row.rule_kind !== null) continue
-      if (!(row.accepts_domains ?? []).includes('light')) continue
       picked = { pack: module.pack, room: module.room_id, slot: row.slot, entity }
       break
     }
@@ -154,8 +160,8 @@ try {
     { timeout: 30000 },
   )
   const marked = await readAll(
-    ([slot, entity]) => {
-      const hits = window.__deepAll(`[data-slot-rule="${slot}"]`).filter((el) => {
+    ([slot, entity, wanted]) => {
+      const holds = (el) => {
         let box = el
         for (let n = el; n; n = n.parentElement) {
           if (window.__deepAll('code', n).length > 0) {
@@ -164,9 +170,21 @@ try {
           }
         }
         return window.__deepText(box).includes(entity)
-      })
-      // Exactly one: a slot name repeats across modules, and a row chosen from two
-      // would be a click on one module that the walk then read off another.
+      }
+      // **Inside the module's own card**, because the page draws the same slot
+      // twice: once in the room's Devices table and once on the card for every
+      // module that reaches it (`tabs/room-settings.ts`), and both rows carry the
+      // device. The rule the walk writes belongs on the card's row -- that is the
+      // one addressed by the module -- so the card is searched first and the room
+      // table is only a fallback for a page that does not draw cards.
+      const cards = window.__deepAll(`[data-pack="${wanted}"]`)
+      const inCard = cards.flatMap((card) =>
+        window.__deepAll(`[data-slot-rule="${slot}"]`, card),
+      )
+      const hits = (inCard.length > 0 ? inCard : window.__deepAll(`[data-slot-rule="${slot}"]`))
+        .filter(holds)
+      // Exactly one: a row chosen from two would be a click on one module that the
+      // walk then read off another, and a slot name repeats across modules.
       if (hits.length !== 1) return { count: hits.length }
       const el = hits[0]
       el.setAttribute('data-walk-target', '1')
@@ -181,7 +199,7 @@ try {
           .slice(0, 160),
       }
     },
-    [picked.slot, picked.entity],
+    [picked.slot, picked.entity, picked.pack],
   )
   ok(
     'the module has a slot row on the page, bound to that device',
@@ -225,7 +243,19 @@ try {
     (rowNow.kind ?? '') === '',
     `kind=${JSON.stringify(rowNow.kind)}, row=${rowNow.device?.slice(0, 90)}`,
   )
-  await page.selectOption('[data-walk-target]', 'template')
+  // Dispatched rather than handed to `page.selectOption`: the walk's row lives in
+  // a shadow root, and Playwright's selector engine reads the light DOM only -- it
+  // waits out its timeout on a locator that will never match. The event is the one
+  // the select emits when a person chooses, and everything after it is read back
+  // off the page.
+  const chose = await readAll(() => {
+    const el = window.__deepAll('[data-walk-target]')[0]
+    if (!el) return false
+    el.value = 'template'
+    el.dispatchEvent(new Event('change', { bubbles: true }))
+    return true
+  })
+  if (!chose) throw new Error('the walk has lost the row it marked')
   await page.waitForFunction(
     () => window.__deepAll('[data-slot-rule-form]').length > 0,
     undefined,

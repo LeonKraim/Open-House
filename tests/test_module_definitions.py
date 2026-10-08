@@ -319,6 +319,12 @@ def test_an_install_s_answers_do_not_drop_the_definition_s_own() -> None:
         module = ""
         key = ""
         slot = ""
+        # `scope` and `part` narrow *which device* a slot answer resolves to, so
+        # `with_answers` carries them through with the rest -- it reads all six
+        # fields off whatever it is handed, and a stand-in missing one fails on
+        # the attribute rather than on the answer.
+        scope = ""
+        part = ""
 
     merged = definition.with_answers(
         bindings={"brightness_pct": _Binding()}, settings=None
@@ -329,6 +335,8 @@ def test_an_install_s_answers_do_not_drop_the_definition_s_own() -> None:
         "module": "",
         "key": "",
         "slot": "",
+        "scope": "",
+        "part": "",
     }
     assert merged.bindings["lights"]["slot"] == "ceiling_light"
 

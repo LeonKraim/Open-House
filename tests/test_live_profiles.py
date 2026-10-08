@@ -576,6 +576,50 @@ def test_a_house_put_back_on_a_taken_profile_is_set_where_a_person_would_set_it(
     assert session.profiles.house_profile == "tuesday"
 
 
+def test_a_taken_profile_puts_a_room_s_lighting_permission_back() -> None:
+    """A room's auto-lighting is a setting, so a taken profile restores it.
+
+    Falsified by the pair that banked it and then dropped it: the snapshot wrote
+    each room whole -- `auto_lighting` and all -- and the restore read only the
+    settings map and the bindings, so a house put back on its own profile kept
+    whatever the switch had since been moved to. "The house as it was", with one
+    switch still on a position nobody chose, is the quiet gap a person finds by
+    staring at the switch; it comes back through `set_room_auto_lighting`, the
+    same door the switch uses, so the restored house is one a person can go on
+    setting.
+    """
+    session = _session()
+    session.set_room_auto_lighting(room_id("hall"), on=False)
+    capture(session, name="tuesday", description="Tuesday morning.")
+
+    # The switch is moved while the profile is off the house.
+    session.set_room_auto_lighting(room_id("hall"), on=True)
+
+    activate_house(session, profile="tuesday")
+
+    restored = {room.id: room for room in session.rooms}[room_id("hall")]
+    assert restored.auto_lighting is False
+
+
+def test_a_taken_profile_does_not_bank_a_room_s_mode() -> None:
+    """A mode is a moment, so it is not written into a room's row either.
+
+    The house's own mode is already deliberately left out of a snapshot
+    (`capture` says why), and a room's row is that same one house mode -- a
+    room's mode select sets the house's, not its own. So the field is dropped
+    rather than banked and ignored: a profile that carried a mode it would never
+    put back would be one whose contents disagreed with its own restore, which is
+    exactly the half-captured state a person cannot see from either end.
+    """
+    session = _session()
+    taken = capture(session, name="tuesday", description="Tuesday morning.")
+
+    rows = taken.setup["rooms"]
+    assert isinstance(rows, list)
+    assert rows, "the snapshot carries no rooms, so this check reads nothing"
+    assert all("mode" not in row for row in rows)
+
+
 def test_a_slot_rule_is_captured_and_put_back_with_the_room_it_was_set_in() -> None:
     """**A rule is a room setting, so a profile that drops it is a silent un-ruling.**
 
@@ -705,6 +749,38 @@ def test_a_snapshot_puts_back_the_packs_the_rooms_and_the_placements() -> None:
     assert sorted(session.installed.packs) == ["motion_pack"]
     assert dict(session.module_rooms) == {"motion_pack": "hall"}
     assert dict(session.house_bindings) == {"lock": "lock.front_door"}
+
+
+def test_a_split_slot_and_a_house_binding_on_a_part_are_put_back() -> None:
+    """**A part is a vocabulary word, so its binding needs the record restored first.**
+
+    A snapshot carries the house's bindings, and one of them may be a *part* of a
+    split slot -- the global device for a half of a role. Restoring that binding
+    against the session's current record is what the two orders decide: with the
+    parts record still a version behind, `set_house_binding` refuses a part the
+    vocabulary does not carry, and the refusal lands *partway through* the
+    restore, after the packs and settings have already been put back. So the parts
+    come back before the bindings, and this asserts the whole restore lands.
+    """
+    session = _session()
+    session.set_slot_parts({"light_group": ("a", "b")})
+    session.set_house_binding("light_group__a", "light.lamp")
+    capture(session, name="tuesday", description="Tuesday morning.")
+
+    # The house moves on: the part comes off. The binding must be taken off first,
+    # because a record cannot drop a part something still names (`part_bound_in`),
+    # which leaves exactly the state a restore has to survive.
+    session.set_house_binding("light_group__a", None)
+    session.set_slot_parts({})
+    assert dict(session.slot_parts) == {}
+    assert dict(session.house_bindings) == {}
+
+    activate_house(session, profile="tuesday")
+
+    assert dict(session.slot_parts) == {"light_group": ("a", "b")}
+    assert dict(session.house_bindings) == {"light_group__a": "light.lamp"}
+    # The part is a vocabulary word the restore grew, so the engine carries it too.
+    assert "light_group__a" in session.engine.house.vocabulary.slots
 
 
 def test_a_snapshot_of_a_room_this_house_no_longer_has_is_skipped() -> None:

@@ -323,10 +323,15 @@ class Engine:
         The engine's half of the HA integration's Repairs: a room whose motion
         sensor has gone unavailable can no longer be read, and "unavailable is not
         off" means the house must say so rather than let the silence pass for a
-        clear room. Derived from the port on each call rather than stored, because
-        it is a fact about the devices and not about the engine's state -- a
-        repair that persisted after the sensor came back would train a person to
-        ignore repairs (`custom_components/open_house/repairs.py`).
+        clear room. A sensor that is *gone* -- the device a person bound and then
+        removed from the house -- is at least as much a repair, and the same read
+        reaches it: `SlotRead.views` returns an absent member as a present-but-
+        unreadable view (`engine.binding._absent`), so it is reported here rather
+        than raising out of this scan and taking the Rooms tab with it. Derived
+        from the port on each call rather than stored, because it is a fact about
+        the devices and not about the engine's state -- a repair that persisted
+        after the sensor came back would train a person to ignore repairs
+        (`custom_components/open_house/repairs.py`).
         """
         repairs: list[Repair] = []
         for room in self._house.rooms:
@@ -737,7 +742,10 @@ class Engine:
             binding = resolve_slot(
                 self._house,
                 scope,
-                _slot_key(slot, _slot_part(self._settings, unit.module, scope, slot)),
+                _slot_key(
+                    slot,
+                    _slot_part(self._settings, self._house, unit.module, scope, slot),
+                ),
                 own=_slot_override(self._settings, unit.module, scope, slot),
             )
             if binding.is_empty:
@@ -1178,7 +1186,11 @@ def _slot_override(
 
 
 def _slot_part(
-    settings: ConfigResolver, pack: str | None, scope: Scope, slot: str
+    settings: ConfigResolver,
+    house: House,
+    pack: str | None,
+    scope: Scope,
+    slot: str,
 ) -> str | None:
     """Which part of a split slot `pack` acts through, or `None` for the slot itself.
 
@@ -1199,14 +1211,29 @@ def _slot_part(
     than the part did, so the override is the last word (`Binding.__init__`'s
     `own=`), exactly as it is for an unsplit slot.
 
-    A part name that is not a non-empty string is read as no part at all -- the
-    same safe reading `_slot_override` makes, and the whole of why a hand-edited
-    file cannot make a slot resolve to nothing.
+    **A part the record no longer carries resolves to the slot itself.** The
+    vocabulary is grown from the parts record (`ha_adapter.slot_parts.grow`), so
+    "the key is not one the house's vocabulary defines" *is* "the record does not
+    carry this part" -- a name left behind by a removal, or written into the file
+    by hand. Without this check that name folds into a slot key `resolve_slot`
+    refuses outright (`UnknownSlotError`), and nothing between this reader and
+    `Engine.tick` catches it: one stale row would crash every tick for the whole
+    house, forever, where the panel (`live_modules.slot_parts_of`) had already
+    learned to drop it. The fallback is the honest answer and the safe one -- the
+    module acts on the role until the part exists again -- and it means a
+    hand-edited file cannot make a slot resolve to nothing, whether the name it
+    carries is junk or merely no longer a part. A part name that is not a non-empty
+    string at all is the same reading `_slot_override` makes.
     """
     if pack is None:
         return None
     value = settings.resolve_or(option_key(pack, slot_part_key(slot)), scope, "").value
-    return value if isinstance(value, str) and value else None
+    if not (isinstance(value, str) and value):
+        return None
+    # The record decides, and the vocabulary is its projection: a part whose key
+    # the house no longer carries is a part that has been removed (`_slot_key` is
+    # the same join the record writes under, so the two cannot disagree).
+    return value if _slot_key(slot, value) in house.vocabulary.slots else None
 
 
 def _slot_key(slot: str, part: str | None) -> str:
@@ -1319,7 +1346,14 @@ class _Evaluation(BehaviourContext):
     def _key(self, slot: str) -> str:
         """The key `slot` resolves under for this module: the role's, or its part's."""
         return _slot_key(
-            slot, _slot_part(self._engine.settings, self._pack, self._scope, slot)
+            slot,
+            _slot_part(
+                self._engine.settings,
+                self._engine.house,
+                self._pack,
+                self._scope,
+                slot,
+            ),
         )
 
     def _own(self, slot: str) -> str | None:

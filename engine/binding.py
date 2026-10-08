@@ -21,6 +21,16 @@ normative and are the reason this module is more than a dictionary lookup:
   (`engine-core`). Resolution therefore reports emptiness and the flag; it does
   not raise, because "why did nothing happen" is answered by a record the engine
   writes, not by an exception nobody catches.
+- **A bound name with no device behind it is a state too, and a different one.**
+  A binding keeps the *name* of the device a person chose, so removing that
+  device from the house -- which the product supports, and which the mock house
+  does on every restart -- leaves the name bound while the device is gone. A read
+  of such a member does not raise either (`SlotRead.views`): the member reads as
+  present-and-unreadable (`_absent`), which is neither unbound nor off, so the
+  two paths that read every room's slots -- the tick and `Engine.repairs` --
+  survive it, and the reading stays honest about what it could not see. The slot
+  layer's `MISSING` (`ha_adapter.live_modules`) is the same distinction from the
+  panel's side.
 - **A read over a slot carries its reduction.** "Any motion" and "all motion" are
   different questions with no safe default between them, so a read names its
   reduction and a read that names none cannot be constructed (`design.md` D4).
@@ -37,14 +47,16 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, cast
 
 import jsonschema
 
+from engine.adapter import ChangeOrigin, EntityView, UnknownEntityError
 from engine.vocabulary import Vocabulary
 
 if TYPE_CHECKING:
-    from engine.adapter import EntityView, HouseAdapter
+    from engine.adapter import HouseAdapter
 
 
 class BindingError(Exception):
@@ -122,6 +134,45 @@ class Reduction(StrEnum):
     ALL = "all"
 
 
+#: The state a member of a slot reads as when the house does not hold it -- the
+#: device a person bound and then removed from Home Assistant, whose *name* the
+#: binding keeps while the device is gone. It is not `"off"`, and stating why is
+#: the whole of the reading: a member that is not there is not a member that is
+#: off, and the two must not collapse, or a gate over a deleted motion sensor
+#: would read the room as empty. It is a state no entity reports, which is what
+#: lets `holds` recognise it without also reading availability -- availability is
+#: the *predicate's* question, because an unavailable member is one the house
+#: still holds and may still satisfy a state test (`away_shutdown._is_on` reads
+#: the last state a lamp was left in). `ha_adapter.live_modules` carries the same
+#: distinction as its `MISSING` status; this is the engine's half of it.
+_MISSING = "missing"
+
+#: The attributes an absent member carries. Empty, because there is no device to
+#: read one from; frozen, so a reader cannot mistake it for a live attribute set.
+_NO_ATTRIBUTES: Mapping[str, object] = MappingProxyType({})
+
+
+def _absent(entity_id: str) -> EntityView:
+    """The view a member the house does not hold reads as.
+
+    Present enough to be *named* -- so a repair can say which device is gone and
+    the reduction over the read can see the member it could not read -- and
+    unreadable enough that nothing treats its silence as a reading: `available`
+    is `False`, and `state` is `_MISSING` rather than a fabricated `"off"`. The
+    origin is `world`, because the change that produced this reading was a device
+    leaving the house and not the engine's or a user's; override detection reads
+    `last_origin`, and a fabricated `user` here would suppress the very behaviour
+    that noticed the device was gone.
+    """
+    return EntityView(
+        entity_id=entity_id,
+        state=_MISSING,
+        attributes=_NO_ATTRIBUTES,
+        available=False,
+        last_origin=ChangeOrigin.WORLD,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SlotRead:
     """One read of a slot: the members, and the reduction the read carries.
@@ -142,8 +193,26 @@ class SlotRead:
         read is the observable form of an optional slot that was left unbound,
         and the fallback a behaviour builds on it (`first-behaviours`) is written
         against exactly this value.
+
+        A member the house no longer holds is *also* read rather than raised on
+        (`_absent`), and that is the shape this method exists to fix: the binding
+        keeps the name a person gave it, so a name with no device behind it is an
+        ordinary fact of a house somebody edits -- the mock house produces it
+        every time the fleet restarts -- and the port refuses a read of an entity
+        it does not hold. Raised here, that refusal took the engine's own tick and
+        `Engine.repairs` down with it, because both read this over every room's
+        `motion_sensor` on every iteration: one deleted device stopped the house
+        deciding anything, and emptied the Rooms tab. The absent member reads as
+        present-and-unreadable -- named, not available, neither on nor off -- so
+        the two paths that must not raise do not, and the reading stays truthful.
         """
-        return tuple(adapter.read_entity(entity_id) for entity_id in self.entities)
+        found: list[EntityView] = []
+        for entity_id in self.entities:
+            try:
+                found.append(adapter.read_entity(entity_id))
+            except UnknownEntityError:
+                found.append(_absent(entity_id))
+        return tuple(found)
 
     def holds(
         self, adapter: HouseAdapter, predicate: Callable[[EntityView], bool]
@@ -155,8 +224,20 @@ class SlotRead:
         usual readings of "at least one" and "every". A behaviour that must tell
         "unbound" apart from "all satisfied" reads `entities`, which is the
         distinction the optional-slot fallback is built on.
+
+        A member the house does not hold (`_absent`) satisfies nothing, under
+        either reduction, and the guarantee is structural rather than left to each
+        predicate to remember: `ALL` over a slot whose every member is gone is
+        false -- "everything is fine" is exactly what an absent member must not be
+        able to say -- while an absent member never makes `ANY` true on its own.
+        This is *not* read off availability, which is deliberately the predicate's
+        to judge: an unavailable member is one the house still holds and may still
+        satisfy a state test, so only a member that is gone is forced false.
         """
-        verdicts = tuple(predicate(view) for view in self.views(adapter))
+        verdicts = tuple(
+            False if view.state == _MISSING else predicate(view)
+            for view in self.views(adapter)
+        )
         if self.reduction is Reduction.ALL:
             return all(verdicts)
         return any(verdicts)

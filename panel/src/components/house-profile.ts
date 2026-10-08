@@ -165,76 +165,87 @@ export class OpenHouseHouseProfile extends OpenHouseElement {
     );
   }
 
+  /**
+   * The control: the profile the house is on, and the way to change it.
+   *
+   * A card, because that is what every other block on the two pages that draw
+   * this control is, and because the row it used to be read as part of whatever
+   * sat above it. The label says *what the dropdown selects* -- a house profile
+   * -- where it used to say the scope ("Whole house"), which named the reach of
+   * the change and not the thing being chosen. The sentence under the dropdown
+   * says what is in force, and when nothing is, says what taking one would do,
+   * so the control explains itself to somebody who has never used profiles.
+   */
   protected override render(): TemplateResult {
     const profiles = this.houseProfiles;
-    return html`<div
-      class="row spread wrap"
-      style="margin-bottom:12px"
-      data-house-profile
-    >
-      <div class="field">
-        <div class="label-row">
-          <span class="label">Whole house</span>
+    const inForce = this.active === "";
+    const active = profiles.find((one) => one.name === this.active);
+    return html`<div class="card" data-house-profile>
+      <div class="row spread wrap">
+        <div class="field grow">
+          <div class="label-row">
+            <label class="label" for="house-profile">House profile</label>
+          </div>
+          <select
+            id="house-profile"
+            ?disabled=${!this.admin || this.busy}
+            @change=${(event: Event) =>
+              void this.put((event.target as HTMLSelectElement).value)}
+          >
+            <option value="" ?selected=${inForce}>
+              No profile: every room on its own
+            </option>
+            ${profiles.map(
+              (one) => html`<option value=${one.name} ?selected=${one.active}>
+                ${one.label}
+              </option>`,
+            )}
+          </select>
+          <p class="help">
+            ${inForce
+              ? "Every room is on its own profile. Putting the house on one " +
+                "sets all of them at once."
+              : (active?.description ??
+                "This profile sets every room at once.")}
+          </p>
         </div>
-        <select
-          id="house-profile"
-          aria-label="House profile"
-          ?disabled=${!this.admin || this.busy}
-          @change=${(event: Event) =>
-            void this.put((event.target as HTMLSelectElement).value)}
-        >
-          <option value="" ?selected=${this.active === ""}>
-            No profile: every room on its own
-          </option>
-          ${profiles.map(
-            (one) => html`<option value=${one.name} ?selected=${one.active}>
-              ${one.label}
-            </option>`,
-          )}
-        </select>
-      </div>
-      <div class="row">
-        ${this.active === ""
-          ? nothing
-          : html`<p class="help">
-              ${profiles.find((one) => one.name === this.active)?.description ??
-              ""}
-            </p>`}
-        <button
-          type="button"
-          id="house-profile-new"
-          ?disabled=${!this.admin || this.busy}
-          @click=${() => {
-            this.typed = "";
-            this.naming = true;
-          }}
-        >
-          Take a profile from this house
-        </button>
-        ${this.active === ""
-          ? nothing
-          : html`
-              <button
-                type="button"
-                id="house-profile-rename"
-                ?disabled=${!this.admin || this.busy}
-                @click=${() => {
-                  this.typed = "";
-                  this.renaming = this.active;
-                }}
-              >
-                Rename
-              </button>
-              <button
-                type="button"
-                id="house-profile-delete"
-                class="danger"
-                ?disabled=${!this.admin || this.busy}
-                @click=${() => void this.drop(this.active)}
-              >
-                Delete
-              </button>
-            `}
+        <div class="row wrap">
+          <button
+            type="button"
+            id="house-profile-new"
+            ?disabled=${!this.admin || this.busy}
+            @click=${() => {
+              this.typed = "";
+              this.naming = true;
+            }}
+          >
+            Take a profile from this house
+          </button>
+          ${inForce
+            ? nothing
+            : html`
+                <button
+                  type="button"
+                  id="house-profile-rename"
+                  ?disabled=${!this.admin || this.busy}
+                  @click=${() => {
+                    this.typed = "";
+                    this.renaming = this.active;
+                  }}
+                >
+                  Rename
+                </button>
+                <button
+                  type="button"
+                  id="house-profile-delete"
+                  class="danger"
+                  ?disabled=${!this.admin || this.busy}
+                  @click=${() => void this.drop(this.active)}
+                >
+                  Delete
+                </button>
+              `}
+        </div>
       </div>
       ${this.error ? this.errorBanner(this.error) : nothing}
       ${this.naming ? this.renderNaming() : nothing}

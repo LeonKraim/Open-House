@@ -1291,13 +1291,31 @@ def _scope_lists(
     branch closed), and walking inward would append too early; this returns the
     lists a publisher may be safely appended to, one per defining list.
     """
-    found: list[list[Any]] = []
-    remaining = set(names)
-    for sequence in _all_sequences(document):
-        defined = _defined_in(sequence)
-        if remaining and remaining <= defined:
-            found.append(sequence)
-    return tuple(found)
+    if not names:
+        return ()
+    found = [
+        sequence
+        for sequence in _all_sequences(document)
+        if set(names) <= _defined_in(sequence)
+    ]
+    # Innermost *only*, which is the whole of the sentence above: a qualifying
+    # list that has another qualifying list inside it is an outer scope, and a
+    # publisher appended there would run once the branch had closed -- over the
+    # value the branch had just published. So the name a branch redefines, which
+    # the automation also sets at the top level, got two publishers and the
+    # top-level one always won, leaving the branch's value observable never.
+    # Two *sibling* branches both qualify and both keep theirs, which is the case
+    # the caller's docstring defends: either may be the one that ran.
+    return tuple(
+        one
+        for one in found
+        if not any(other is not one and _holds(one, other) for other in found)
+    )
+
+
+def _holds(outer: object, inner: list[Any]) -> bool:
+    """Whether `inner` is one of the action lists nested inside `outer`."""
+    return any(one is inner for one in _all_sequences(outer))
 
 
 def _all_sequences(node: object) -> Iterable[list[Any]]:

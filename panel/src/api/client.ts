@@ -55,22 +55,18 @@ interface ListResponse<T> {
 }
 
 /**
- * How long to wait before asking again, in order, with no entry for the last
- * attempt. Spread rather than fixed because the reload that causes this is
- * short in the common case and occasionally not short at all; the total is
- * under three seconds, which is inside the time a person reads a screen.
- */
-/**
  * How long to keep asking while a reload takes the house away, in delay-per-gap.
  *
  * **Measured, not guessed, and widened once already.** The first list stopped
- * after 2.75s in total, which is shorter than the thing it was waiting for: one
- * integration reload of this house took 8s (a part rename at 15:05:29, the
- * house back at 15:05:37), so a page that wrote and then read was spending its
- * whole budget inside a single window and drawing the reload as a failure --
- * which is the stale page, seen from underneath. These five gaps cover ~15s,
- * which is longer than a reload of this integration has been observed to take
- * and still bounded, because the window is a reload and not an absence.
+ * after 2.75s in total -- "the total is under three seconds, which is inside the
+ * time a person reads a screen", said the comment above it -- which is shorter
+ * than the thing it was waiting for: one integration reload of this house took
+ * 8s (a part rename at 15:05:29, the house back at 15:05:37), so a page that
+ * wrote and then read was spending its whole budget inside a single window and
+ * drawing the reload as a failure -- which is the stale page, seen from
+ * underneath. These five gaps cover ~15s, which is longer than a reload of this
+ * integration has been observed to take and still bounded, because the window is
+ * a reload and not an absence.
  *
  * The cost is real and is the trade being made: a house that is *never* coming
  * back now takes 15s to say so. That case is `not_setup` -- no entry at all --
@@ -627,7 +623,21 @@ export class OpenHouseClient {
 
   // -- activity and health -------------------------------------------------
 
-  async activity(limit = 100): Promise<DecisionLogEntry[]> {
+  /**
+   * The decision log, newest first.
+   *
+   * The default window is wide on purpose, and the number is not a screenful.
+   * The engine records one row per behaviour per scope per tick and a real house
+   * reaches about three hundred of them -- so a window of a hundred rows is a
+   * slice of one tick, and the outcome filter, which filters what was *read*,
+   * then has almost nothing to filter. A person asking "why did the house turn
+   * that light on" was reading the tail of the very tick that did it and seeing
+   * only the rows that came after the answer. A thousand rows covers several
+   * ticks in the example house and at least one in a house many times its size,
+   * which is the smallest window that can be relied on to contain the decision;
+   * the tab's own filters are what make that much log readable.
+   */
+  async activity(limit = 1000): Promise<DecisionLogEntry[]> {
     const response = await this.call<ListResponse<DecisionLogEntry>>(
       COMMANDS.activityList,
       { limit },
@@ -882,12 +892,25 @@ export class OpenHouseClient {
       author?: string;
       version?: string;
       licence?: string;
-      bindings?: Record<string, ModuleBinding>;
-      outputs?: { name: string; key: string }[];
-      settings?: string[];
-      casts?: Record<string, unknown>;
-      flows?: string[];
-      scripts?: Record<string, string>;
+      /**
+       * **Required, and the six below are the only fields here that are.**
+       *
+       * They are the module's own answers, and there is no reading of an absent
+       * one that is not a reading of an empty one: the server takes a missing
+       * `bindings` as "this module now answers nothing", rebuilds every room
+       * running it that way and says nothing. The server's schema makes them
+       * `vol.Required` for exactly that reason, and this type used to say
+       * "optional" -- so a caller who left one out sent nothing at all and got
+       * back a `invalid_format` refusal naming a field the type had told them
+       * they did not owe. The title above is different: a title nobody sent is a
+       * title the module already has.
+       */
+      bindings: Record<string, ModuleBinding>;
+      outputs: { name: string; key: string }[];
+      settings: string[];
+      casts: Record<string, unknown>;
+      flows: string[];
+      scripts: Record<string, string>;
     },
   ): Promise<{
     module: string;

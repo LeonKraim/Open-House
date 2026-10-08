@@ -583,7 +583,12 @@ class OpenHouseHost:
             type=room_type or _FALLBACK_ROOM_TYPE,
             bindings=dict(bindings),
         )
-        self.session.set_rooms((*self.session.rooms, engine_room))
+        # Off the event loop for the reason `async_remove_room` gives: composing
+        # the house reads the registry, every pack manifest and the service
+        # catalog from disk, which is not work to do with the loop stopped.
+        await self.hass.async_add_executor_job(
+            self.session.set_rooms, (*self.session.rooms, engine_room)
+        )
         # `self.rooms` was built once, at setup, out of the entry's subentries,
         # and the subentry added just above is not in it yet -- the entry's own
         # map is only rebuilt when the reload lands. So the room is recorded here
@@ -603,17 +608,53 @@ class OpenHouseHost:
         return await self._async_refresh_room(engine_room.id)
 
     async def async_remove_room(self, room_id: str) -> None:
-        """Delete a room's subentry and drop it from the session."""
+        """Delete a room's subentry, if nothing is placed in it, and drop it.
+
+        **Refused while the room still holds modules, rather than emptying it.**
+        A room is where modules are *placed*: each record keeps the `room_id` it
+        was put in, and the room's own settings (`session.room_settings`) keep what
+        a person switched on there and how they tuned a pack. `set_rooms` prunes
+        the settings, and the record would keep a `room_id` no room answers to --
+        so deleting the room out from under its modules is one of two things, and
+        only one of them is honest. The other is to uninstall them on the way out,
+        and that destroys work nobody asked to lose: a module's answers, its casts,
+        its flows are the person's authoring, and a profile's whole point is that
+        a house can be *put on* again -- emptying the room would make a delete into
+        an edit of every profile that ever named it, silently. So the room is the
+        person's to clear, and the refusal names what is in the way so they can.
+        """
+        from . import modules as module_hosting
+
         room = self.require_room(room_id)
         if len(self.session.rooms) <= 1:
             raise ValueError("a house needs at least one room")
+        placed = [
+            record.slug
+            for record in await module_hosting.async_records(self.hass)
+            if record.room_id == room_id
+        ]
+        if placed:
+            raise ValueError(
+                f"the room {room.name!r} still holds "
+                f"{', '.join(repr(slug) for slug in placed)}; move or unhost "
+                "them before removing the room"
+            )
         if not self.hass.config_entries.async_remove_subentry(
             self.entry, room.subentry_id
         ):
             raise ValueError(f"Home Assistant refused to remove {room.area_id!r}")
-        self.session.set_rooms(
-            tuple(other for other in self.session.rooms if other.id != room_id)
-        )
+        # Off the event loop, because `set_rooms` *composes the house again*:
+        # it reads the registry index, every installed pack's manifest and
+        # `catalog/services.yaml` off the disk. Done inline that is Home
+        # Assistant's own loop stopped for the length of those reads, once per
+        # room deleted -- and the loop is where every other integration, every
+        # entity update and every other panel request runs, so what it costs is
+        # not this call's latency but the whole house's. Home Assistant says so
+        # itself ("Detected blocking call to read_text ... inside the event
+        # loop"), and the reason to fix it rather than live with it is that the
+        # reads grow with the number of packs installed.
+        remaining = tuple(other for other in self.session.rooms if other.id != room_id)
+        await self.hass.async_add_executor_job(self.session.set_rooms, remaining)
         self.rooms.pop(room_id, None)
 
     async def async_rename_room(self, room_id: str, name: str) -> RoomRef:

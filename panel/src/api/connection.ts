@@ -108,11 +108,20 @@ export function sendMessage<T>(
   );
 }
 
-/** Whether the `hass` object can carry a command at all. */
+/**
+ * Whether the `hass` object can carry a command at all.
+ *
+ * The same test `sendMessage` makes, and deliberately not a stricter one: this
+ * answered `true` for a `hass` whose `connection` was present-but-null while
+ * `sendMessage` read the very same object as no connection at all. The panel
+ * uses this to decide whether to build a client and draw its screens, so the two
+ * disagreeing is a panel that renders everything and then fails every command
+ * with `unavailable`.
+ */
 export function isConnected(hass: HassLike | undefined): boolean {
   return (
     hass !== undefined &&
-    (typeof hass.callWS === "function" || hass.connection !== undefined)
+    (typeof hass.callWS === "function" || Boolean(hass.connection))
   );
 }
 

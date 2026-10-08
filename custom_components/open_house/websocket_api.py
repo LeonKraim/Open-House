@@ -38,6 +38,7 @@ error field would be one every screen would have to remember to check.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from functools import partial
 from pathlib import Path
@@ -69,6 +70,8 @@ from .const import DOMAIN, ENGINE_API_FALLBACK, VERSION
 from .host import OpenHouseHost, single_host
 
 __all__ = ["async_register_websocket_api"]
+
+_LOGGER = logging.getLogger(__name__)
 
 
 # -- The command names ------------------------------------------------------
@@ -173,8 +176,13 @@ DATA_REGISTERED = f"{__package__}_websocket_registered"
 #: The most activity rows one request may ask for. The engine's log is bounded
 #: anyway (`engine/decision_log.py`), so this is not protecting memory: it is
 #: stopping a request from asking for a window so large that building the JSON is
-#: itself the delay a person sees.
-_ACTIVITY_LIMIT = 500
+#: itself the delay a person sees. It is sized against the *engine's own* rate of
+#: writing rather than picked round: a tick records one row per behaviour per
+#: scope and reaches about three hundred of them in a real house, so a window
+#: narrower than a tick or two is a window that cannot be relied on to contain
+#: the decision a person opened the tab to read -- see `LOG_BOUND_KEY` in
+#: `engine/config.py` for what that cost when the window held under two ticks.
+_ACTIVITY_LIMIT = 2_000
 
 
 def _admin(handler: Any) -> Any:
@@ -281,6 +289,46 @@ def _stale(
     return True
 
 
+#: How every refusal that means "the thing you named is not in this house" begins.
+#:
+#: `LiveSessionError` carries a sentence and nothing else -- no code, no field --
+#: so the two kinds of refusal it spans have to be told apart by that sentence,
+#: and this is the shape the live layers write the *missing* kind in. Every such
+#: refusal, and where it is raised:
+#:
+#:   * `there is no room <id> in this house`   -- `live.py:322`
+#:   * `there is no slot <name> in this house` -- `live.py:456`
+#:   * `there is no house slot <name> in this house` -- `live.py:478`
+#:   * `there is no module <pack> in this house` -- `live_modules.py`, raised from
+#:     `set_enabled`, `set_behaviour_enabled`, `set_behaviour_scope`,
+#:     `set_behaviour_priority`, `set_slot`, `set_slot_rule`, `set_option`
+#:   * `there is no entity <id> in this house, so ...` -- `live_modules.py`,
+#:     from `set_slot` and `set_slot_rule`
+#:   * `there is no option <key> in <where>`   -- `live_profiles.py:185`
+#:
+#: A single leading phrase rather than a growing list of substrings, because the
+#: three that were here before (`no room`, `no slot`, `no option`) missed the two
+#: commonest ones -- a module and an entity -- and one of them did not even match
+#: its own case: `there is no house slot` contains no `no slot`. Matching the
+#: phrase the whole family is written with is what makes "a named thing is
+#: missing" recognisable by rule rather than by remembering to add a fourth
+#: substring the day a fifth producer is written.
+_MISSING = "there is no "
+
+
+def _missing(refusal: Exception) -> bool:
+    """Whether a refusal is the live layer saying a thing it was named is not here.
+
+    The distinction is the panel's, not this module's: `not_found` is "that item
+    no longer exists; reload the panel" and `invalid_format` is a value refused on
+    its merits, kept in the form so a person can fix it. A slot rule set on a pack
+    the house no longer holds is the first of those -- the row the person is
+    looking at was drawn from a house that has moved on -- so it has to read as
+    missing rather than as a bad value. See `_MISSING` for the family.
+    """
+    return str(refusal).startswith(_MISSING)
+
+
 def _error(
     connection: websocket_api.ActiveConnection, msg: dict[str, Any], refusal: Exception
 ) -> None:
@@ -294,8 +342,84 @@ def _error(
     already wrote for a person to read.
     """
     text = str(refusal)
-    missing = "no room" in text or "no slot" in text or "no option" in text
-    connection.send_error(msg["id"], NOT_FOUND if missing else INVALID_FORMAT, text)
+    connection.send_error(
+        msg["id"], NOT_FOUND if _missing(refusal) else INVALID_FORMAT, text
+    )
+
+
+# -- The two things that follow a write that has landed ----------------------
+#
+# Every mutating handler here changes the session through `ha_adapter.live_*` and
+# then does one of two follow-ups: writes the house down (`host.async_save`, for
+# the state Home Assistant has no home for), or settles a slot (write down *and*
+# build again the modules that reach it, `host.async_slot_changed`). Both are the
+# *consequence* of the change, not the change: by the time either runs the session
+# already reads back the new value.
+#
+# So a follow-up that fails must not be reported as a failed write. The panel
+# renders `views`'s shapes field by field and reads no warning field, so a note
+# threaded through a reply would be a field no screen draws -- which leaves the
+# log, the one place that can be said today. These two helpers say it, and the
+# handlers call them rather than reaching for `async_save`/`async_slot_changed`
+# themselves so the rule is written once.
+
+
+def _unsaved(refusal: Exception) -> None:
+    """Note a house that could not be written down. See the section above."""
+    _LOGGER.warning(
+        "a change was made to the house and could not be written to the store, "
+        "so it is live now but will not survive a restart: %s",
+        refusal,
+    )
+
+
+def _unsettled(where: str, refusal: Exception) -> None:
+    """Note a rebuild that could not follow a change that landed. See above.
+
+    The rebuild's own failure is the interesting one -- a module whose record has
+    lost its document, an automation Home Assistant will not accept -- and it is
+    a fact about the *house*, not about the edit: the device the slot names is
+    written and the next read shows it, while the automation that should act on
+    it was not rewritten. `where` names the slot and room it was about, because
+    the refusal's own sentence is about a module and a reader needs both.
+    """
+    _LOGGER.warning(
+        "a change was made to %s and the modules it moves could not be built again: %s",
+        where,
+        refusal,
+    )
+
+
+async def _saved(host: OpenHouseHost) -> None:
+    """Write the house down; a failure to is noted, never raised. See above.
+
+    The save is the host's own (`host.async_save`), and this must not call
+    itself. It did: one line reading `await _saved(host)`, so every write went
+    ~1000 coroutine frames deep and raised `RecursionError`, which the `except`
+    below caught at the frame above and reported as a store that refused the
+    house. Every caller believed it had saved, every screen read back the new
+    value from the live session, and no mutation in the whole panel reached the
+    store -- a house that survived until the next restart and no longer.
+    """
+    try:
+        await host.async_save()
+    except Exception as refusal:
+        _unsaved(refusal)
+
+
+async def _rebuilt(host: OpenHouseHost, room_id: str, slot: str) -> None:
+    """Settle a slot after it moved; a failure to is noted, never raised.
+
+    The save and the rebuild are one call (`host.async_slot_changed`) because a
+    caller that did one without the other would leave the running house and the
+    saved one describing two different slots -- so both are guarded here rather
+    than each at its own site. Either half failing is a follow-up that could not
+    happen, which is why neither is raised. See the section above.
+    """
+    try:
+        await host.async_slot_changed(room_id, slot)
+    except Exception as refusal:
+        _unsettled(f"{slot!r} in {room_id!r}", refusal)
 
 
 # -- Registration -----------------------------------------------------------
@@ -507,6 +631,12 @@ async def ws_room_delete(
     except ValueError as refusal:
         connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
         return
+    # The room is gone from the session, but the state that had no Home Assistant
+    # home is not: what a person switched on in that room and how they tuned a pack
+    # there live in the store, and the store is only written by this call. Left
+    # unsaved, a restart would read the deleted room's settings back out of a file
+    # that still names a room nothing answers to.
+    await _saved(host)
     connection.send_result(msg["id"], {"room_id": msg["room_id"]})
 
 
@@ -708,7 +838,7 @@ async def ws_room_options_set(
     except LiveSessionError as refusal:
         _error(connection, msg, refusal)
         return
-    await host.async_save()
+    await _saved(host)
     connection.send_result(msg["id"], {"schema": schema, "values": dict(values)})
 
 
@@ -786,7 +916,7 @@ async def ws_module_install(
     except LiveSessionError as refusal:
         _error(connection, msg, refusal)
         return
-    await host.async_save()
+    await _saved(host)
     installed = _installed(host, msg["pack"])
     if installed is None:
         connection.send_error(
@@ -838,7 +968,7 @@ async def ws_module_uninstall(
     except LiveSessionError as refusal:
         _error(connection, msg, refusal)
         return
-    await host.async_save()
+    await _saved(host)
     if msg["room_id"] == HOUSE:
         connection.send_result(
             msg["id"],
@@ -883,7 +1013,7 @@ async def ws_module_set_enabled(
     except LiveSessionError as refusal:
         _error(connection, msg, refusal)
         return
-    await host.async_save()
+    await _saved(host)
     installed = _installed(host, msg["pack"])
     if installed is None:
         connection.send_error(msg["id"], NOT_FOUND, f"no pack called {msg['pack']!r}")
@@ -927,7 +1057,7 @@ async def ws_module_set_behaviour_enabled(
     except LiveSessionError as refusal:
         _error(connection, msg, refusal)
         return
-    await host.async_save()
+    await _saved(host)
     installed = _installed(host, msg["pack"])
     if installed is None:
         connection.send_error(msg["id"], NOT_FOUND, f"no pack called {msg['pack']!r}")
@@ -972,7 +1102,7 @@ async def ws_module_set_behaviour_scope(
     except LiveSessionError as refusal:
         _error(connection, msg, refusal)
         return
-    await host.async_save()
+    await _saved(host)
     installed = _installed(host, msg["pack"])
     if installed is None:
         connection.send_error(msg["id"], NOT_FOUND, f"no pack called {msg['pack']!r}")
@@ -1021,7 +1151,7 @@ async def ws_module_set_behaviour_priority(
     except LiveSessionError as refusal:
         _error(connection, msg, refusal)
         return
-    await host.async_save()
+    await _saved(host)
     installed = _installed(host, msg["pack"])
     if installed is None:
         connection.send_error(msg["id"], NOT_FOUND, f"no pack called {msg['pack']!r}")
@@ -1077,6 +1207,17 @@ async def ws_module_set_slot(
     host = _host_or_error(connection, msg)
     if host is None:
         return
+    # **Read before the write.** The reply is the module's row, and a `pack` the
+    # house does not hold is a `not_found` -- but asking *after* the write means
+    # a corner nobody can reach on purpose (the pack gone between the check and
+    # the reply) would refuse a slot override that has already landed. Asked
+    # first, the refusal precedes the write and the two cannot disagree. The
+    # value read is a row of the installed list, which `set_slot` does not add to
+    # or take from, so this is the same row the write is about.
+    installed = _installed(host, msg["pack"])
+    if installed is None:
+        connection.send_error(msg["id"], NOT_FOUND, f"no pack called {msg['pack']!r}")
+        return
     try:
         live_modules.set_slot(
             host.session,
@@ -1090,11 +1231,7 @@ async def ws_module_set_slot(
     except LiveSessionError as refusal:
         _error(connection, msg, refusal)
         return
-    await host.async_slot_changed(msg["room_id"], msg["slot"])
-    installed = _installed(host, msg["pack"])
-    if installed is None:
-        connection.send_error(msg["id"], NOT_FOUND, f"no pack called {msg['pack']!r}")
-        return
+    await _rebuilt(host, msg["room_id"], msg["slot"])
     connection.send_result(msg["id"], installed)
 
 
@@ -1154,6 +1291,13 @@ async def ws_module_set_slot_rule(
     host = _host_or_error(connection, msg)
     if host is None:
         return
+    # Read before the write, for the reason `ws_module_set_slot` gives: a
+    # `not_found` for a pack this house does not hold has to precede the write it
+    # would otherwise be refusing after the fact.
+    installed = _installed(host, msg["pack"])
+    if installed is None:
+        connection.send_error(msg["id"], NOT_FOUND, f"no pack called {msg['pack']!r}")
+        return
     try:
         live_modules.set_slot_rule(
             host.session,
@@ -1172,12 +1316,10 @@ async def ws_module_set_slot_rule(
     # device override away from the person (`set_slot_rule`), so the modules
     # reaching this slot have to be built again now -- on the room's binding --
     # rather than left acting on a device the rule has not decided about yet. The
-    # watcher's first evaluation then moves them, seconds later at the most.
-    await host.async_slot_changed(msg["room_id"], msg["slot"])
-    installed = _installed(host, msg["pack"])
-    if installed is None:
-        connection.send_error(msg["id"], NOT_FOUND, f"no pack called {msg['pack']!r}")
-        return
+    # watcher's first evaluation then moves them, seconds later at the most. The
+    # rebuild is a follow-up (`_rebuilt`), so its failure is noted rather than
+    # reported as the rule not having been written.
+    await _rebuilt(host, msg["room_id"], msg["slot"])
     connection.send_result(msg["id"], installed)
 
 
@@ -1340,7 +1482,7 @@ async def ws_profile_activate(
     except LiveSessionError as refusal:
         _error(connection, msg, refusal)
         return
-    await host.async_save()
+    await _saved(host)
     _detail(connection, msg, hass, host, msg["room_id"])
 
 
@@ -1370,13 +1512,31 @@ async def ws_profile_activate_house(
         return
     try:
         live_profiles.activate_house(host.session, profile=msg["profile"])
-        held = host.session.profiles.profile(msg["profile"])
-        if held.snapshot:
-            await host.async_restore_setup(held)
     except LiveSessionError as refusal:
         _error(connection, msg, refusal)
         return
-    await host.async_save()
+    held = host.session.profiles.profile(msg["profile"])
+    if held.snapshot:
+        # The profile is on; putting its house back is the follow-up, and its
+        # failure is noted rather than raised for the reason `_bind` gives: by
+        # the time this runs the session has already been put on the profile, so
+        # that has landed and the answer has to say so. It refused the *whole*
+        # call before, which meant a panel was told the activation failed while
+        # the house was already on the new profile -- and the panel, taking the
+        # error at its word, drew no refresh, so its own screen still showed the
+        # *old* profile in force. Both halves of that are wrong at once: the
+        # person sees an error and an unchanged screen over a house that has
+        # changed.
+        #
+        # The refusal is real and worth reading -- a snapshot names the parts and
+        # devices the house had when it was taken, and a part since removed is
+        # not in this house to bind -- so it is written to the log with the
+        # profile it was about.
+        try:
+            await host.async_restore_setup(held)
+        except Exception as refusal:
+            _unsettled(f"the profile {msg['profile']!r}", refusal)
+    await _saved(host)
     connection.send_result(
         msg["id"], {"profiles": list(live_profiles.profiles(host.session))}
     )
@@ -1426,7 +1586,7 @@ async def ws_profile_capture(
     except LiveSessionError as refusal:
         _error(connection, msg, refusal)
         return
-    await host.async_save()
+    await _saved(host)
     connection.send_result(
         msg["id"], {"profiles": list(live_profiles.profiles(host.session))}
     )
@@ -1455,11 +1615,22 @@ async def ws_profile_rename(
         return
     try:
         host.session.profiles.rename(msg["profile"], _profile_name(msg["to"]))
+    except LiveSessionError as refusal:
+        # **The name is read inside this call, and it refuses in the session's
+        # words, not the profile set's.** `_profile_name` raises `LiveSessionError`
+        # -- the *other* sibling `_as_session_error` exists to join to
+        # `ProfileError` -- and catching only `ProfileError` let it through: a
+        # `to` of `"!!!"` reached the panel as `ERR_UNKNOWN_ERROR` with a stack
+        # trace instead of the sentence `_profile_name` wrote for a person to
+        # read. Both types are caught now, the name's own refusal reported as it
+        # was written and the set's run through `_as_session_error` as before.
+        _error(connection, msg, refusal)
+        return
     except ProfileError as refusal:
         _error(connection, msg, _as_session_error(refusal))
         return
     host.reload_session()
-    await host.async_save()
+    await _saved(host)
     connection.send_result(
         msg["id"], {"profiles": list(live_profiles.profiles(host.session))}
     )
@@ -1490,7 +1661,7 @@ async def ws_profile_remove(
         _error(connection, msg, _as_session_error(refusal))
         return
     host.reload_session()
-    await host.async_save()
+    await _saved(host)
     connection.send_result(
         msg["id"], {"profiles": list(live_profiles.profiles(host.session))}
     )
@@ -1543,7 +1714,7 @@ async def ws_profile_deactivate_house(
     if host is None:
         return
     live_profiles.deactivate_house(host.session)
-    await host.async_save()
+    await _saved(host)
     connection.send_result(
         msg["id"], {"profiles": list(live_profiles.profiles(host.session))}
     )
@@ -1607,7 +1778,7 @@ async def ws_profile_import(
     except LiveSessionError as refusal:
         _error(connection, msg, refusal)
         return
-    await host.async_save()
+    await _saved(host)
     connection.send_result(msg["id"], result)
 
 
@@ -1688,7 +1859,7 @@ async def ws_store_install(
     except LiveSessionError as refusal:
         _error(connection, msg, refusal)
         return
-    await host.async_save()
+    await _saved(host)
     installed = _installed(host, msg["pack"])
     if installed is None:
         connection.send_error(
@@ -2392,7 +2563,7 @@ async def ws_modules_host(
     except modules.ModuleHostError as refusal:
         connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
         return
-    await host.async_save()
+    await _saved(host)
     listing = await _hosted(hass, host)
     connection.send_result(
         msg["id"], {"module": record.slug, "modules": listing["modules"]}
@@ -2467,7 +2638,7 @@ async def ws_modules_settings(
     except modules.ModuleHostError as refusal:
         connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
         return
-    await host.async_save()
+    await _saved(host)
     listing = await _hosted(hass, host)
     connection.send_result(
         msg["id"], {"module": record.slug, "modules": listing["modules"]}
@@ -2586,7 +2757,19 @@ async def ws_modules_detach(
     except modules.ModuleHostError as refusal:
         connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
         return
-    await host.async_save()
+    except LiveSessionError as refusal:
+        # **A slot detach writes through two layers and either can refuse.**
+        # `modules.async_detach_slot` raises `ModuleHostError`, but the two
+        # session writes that finish the job (`_detach_slot`: the rule cleared,
+        # the slot pointed at the new module) are `live_modules.set_slot_rule`
+        # and `set_slot`, and those raise `LiveSessionError`. Catching only the
+        # first let a half-applied detach -- the module made, the rule still on
+        # the row -- leave the handler as a raw 500 with no sentence in it. This
+        # one goes through `_error` rather than a fixed code, because a session
+        # refusal already says in its own words which of the two kinds it is.
+        _error(connection, msg, refusal)
+        return
+    await _saved(host)
     listing = await _hosted(hass, host)
     connection.send_result(msg["id"], {**answer, "modules": listing["modules"]})
 
@@ -2637,7 +2820,9 @@ async def _detach_slot(
     # The two session writes that finish it, and no `await` between them: the rule
     # goes, and the slot reads the new module's output instead. Both are writes to
     # the recorded layer, so both survive a rebuild and both take effect on the
-    # next one -- which `async_slot_changed` below is what asks for.
+    # next one -- which the rebuild below is what asks for. It is a follow-up
+    # (`_rebuilt`), so a house that will not build again is noted, not reported as
+    # a detach that did not happen.
     key = record.outputs[0].key if record.outputs else ""
     live_modules.set_slot_rule(
         host.session, room_id=source_room, pack=module, slot=slot
@@ -2653,7 +2838,7 @@ async def _detach_slot(
             entity_id=module_host.output_entity_id(record.slug, key),
             label=None,
         )
-    await host.async_slot_changed(source_room, slot)
+    await _rebuilt(host, source_room, slot)
     return {
         "module": record.slug,
         "title": record.title,
@@ -2765,7 +2950,7 @@ async def ws_modules_edit(
     except modules.ModuleHostError as refusal:
         connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
         return
-    await host.async_save()
+    await _saved(host)
     listing = await _hosted(hass, host)
     connection.send_result(
         msg["id"],
@@ -2776,7 +2961,7 @@ async def ws_modules_edit(
             # what the house offers is stale in a way a screen listing what it
             # runs is not, and answering with both is what lets either redraw
             # from the reply it already has.
-            "store": await _offered(hass, host),
+            "store": await _offered_or_empty(hass, host),
         },
     )
 
@@ -2835,7 +3020,7 @@ async def ws_modules_publish(
     except modules.ModuleHostError as refusal:
         connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
         return
-    await host.async_save()
+    await _saved(host)
     listing = await _hosted(hass, host)
     connection.send_result(
         msg["id"],
@@ -2846,7 +3031,7 @@ async def ws_modules_publish(
             # whether this module is one the house *offers* can change what a
             # screen lists, and answering with both lets either redraw from the
             # reply it already holds.
-            "store": await _offered(hass, host),
+            "store": await _offered_or_empty(hass, host),
         },
     )
 
@@ -2892,7 +3077,7 @@ async def ws_modules_config_switch(
     except modules.ModuleHostError as refusal:
         connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
         return
-    await host.async_save()
+    await _saved(host)
     listing = await _hosted(hass, host)
     connection.send_result(
         msg["id"], {"module": record.slug, "modules": listing["modules"]}
@@ -2927,7 +3112,7 @@ async def ws_modules_config_add(
     except modules.ModuleHostError as refusal:
         connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
         return
-    await host.async_save()
+    await _saved(host)
     listing = await _hosted(hass, host)
     connection.send_result(
         msg["id"], {"module": record.slug, "modules": listing["modules"]}
@@ -2962,7 +3147,7 @@ async def ws_modules_config_rename(
     except modules.ModuleHostError as refusal:
         connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
         return
-    await host.async_save()
+    await _saved(host)
     listing = await _hosted(hass, host)
     connection.send_result(
         msg["id"], {"module": record.slug, "modules": listing["modules"]}
@@ -2997,7 +3182,7 @@ async def ws_modules_config_remove(
     except modules.ModuleHostError as refusal:
         connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
         return
-    await host.async_save()
+    await _saved(host)
     listing = await _hosted(hass, host)
     connection.send_result(
         msg["id"], {"module": record.slug, "modules": listing["modules"]}
@@ -3144,7 +3329,7 @@ async def ws_modules_define(
         return
     connection.send_result(
         msg["id"],
-        {"module": definition.slug, "store": await _offered(hass, host)},
+        {"module": definition.slug, "store": await _offered_or_empty(hass, host)},
     )
 
 
@@ -3215,14 +3400,14 @@ async def ws_modules_deploy(
     except modules.ModuleHostError as refusal:
         connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
         return
-    await host.async_save()
+    await _saved(host)
     listing = await _hosted(hass, host)
     connection.send_result(
         msg["id"],
         {
             "module": record.slug,
             "modules": listing["modules"],
-            "store": await _offered(hass, host),
+            "store": await _offered_or_empty(hass, host),
         },
     )
 
@@ -3259,7 +3444,7 @@ async def ws_modules_remove(
         {
             "removed": definition.slug,
             "installed": len(still),
-            "store": await _offered(hass, host),
+            "store": await _offered_or_empty(hass, host),
         },
     )
 
@@ -3295,7 +3480,7 @@ async def ws_modules_unhost(
     except modules.ModuleHostError as refusal:
         connection.send_error(msg["id"], NOT_FOUND, str(refusal))
         return
-    await host.async_save()
+    await _saved(host)
     listing = await _hosted(hass, host)
     connection.send_result(
         msg["id"],
@@ -3367,9 +3552,33 @@ async def ws_modules_import(
         {
             "imported": definition.slug,
             "replaced": replaced,
-            "store": await _offered(hass, host),
+            "store": await _offered_or_empty(hass, host),
         },
     )
+
+
+async def _offered_or_empty(
+    hass: HomeAssistant, host: OpenHouseHost
+) -> list[Mapping[str, object]]:
+    """The store rows after a change landed; a read that fails is noted, not raised.
+
+    Every handler that calls this has already made its change -- a module removed
+    from the store, a definition imported. `_offered` reads the definitions and the
+    records back, and a house whose files will not read is a fact about the screen's
+    *next* list, not about the edit: a completed removal is not unmade by it, and
+    the panel shows "That item no longer exists" for a refusal. So the note goes to
+    the log (the section above says why there is no field for it) and the rows
+    answer empty, which the next reload fills in.
+    """
+    try:
+        return await _offered(hass, host)
+    except modules.ModuleHostError as refusal:
+        _LOGGER.warning(
+            "a change was made to this house's modules and the store could not be "
+            "read back, so this reply lists none of them: %s",
+            refusal,
+        )
+        return []
 
 
 async def _offered(
@@ -3643,9 +3852,15 @@ def _module_input(
 def _selector_kind(declared: Mapping[str, Any]) -> str:
     """Which selector an input offers, named the way the screen shows it.
 
-    A `target` is reported as an entity, which is what it takes: a person binding
-    one picks a device, and the difference between the two is a difference in how
-    the value is *wrapped*, which `bind_inputs` already knows.
+    The names are the panel's, not Home Assistant's: the screen asks one question
+    of a kind -- is this a device? (`isDeviceInput`, over its `DEVICE_SELECTORS`)
+    -- and answers it by exact name, so a kind reported under any other spelling
+    reaches the panel as a text box and the input is answered as a plain setting
+    instead of with a slot. That is why every selector in the device family is
+    named for itself below rather than folded into `entity`: `entity`, `device`,
+    `area`, `floor`, `label` and `attribute` all take a device, and each is the
+    name the panel already matches. A `target` stays `target` -- it, too, takes a
+    device, and it, too, is in that set; the panel names it and so does this.
 
     The kinds the automation editor has a control for are named here, and
     anything else is `text`. That is a real beginning-of-the-list and not a
@@ -3657,10 +3872,17 @@ def _selector_kind(declared: Mapping[str, Any]) -> str:
     selector = declared.get("selector")
     if not isinstance(selector, Mapping):
         return "text"
-    if "target" in selector:
-        return "target"
     for kind in (
+        # The device family first, because it is the one the screen answers
+        # differently: each of these is a slot on a module, not a setting.
+        "target",
         "entity",
+        "device",
+        "area",
+        "floor",
+        "label",
+        "attribute",
+        # Then the plain ones, which a person fills in place.
         "number",
         "boolean",
         "select",
@@ -4247,7 +4469,7 @@ async def ws_dev_save(
             dict(module) for module in live_modules.installed_modules(host.session)
         ],
     }
-    await host.async_save()
+    await _saved(host)
     connection.send_result(msg["id"], result)
 
 
@@ -4298,7 +4520,7 @@ async def ws_dev_install(
             dict(module) for module in live_modules.installed_modules(host.session)
         ]
     }
-    await host.async_save()
+    await _saved(host)
     connection.send_result(msg["id"], result)
 
 
@@ -4455,6 +4677,15 @@ async def _bind(
     except LiveSessionError as refusal:
         _error(connection, msg, refusal)
         return
+    except modules.ModuleHostError as refusal:
+        # **The binding landed; only the rebuild behind it did not.** The session
+        # edit and the subentry write both happen inside `async_set_binding`
+        # before it rebuilds the modules that reach the slot (host.py:494-504),
+        # so a `ModuleHostError` here is the follow-up failing, not the write.
+        # Reported as a failure it would tell the person the slot was not bound
+        # when everything reads back that it was -- so it is noted and the reply
+        # is the room as it now stands, exactly as the success path answers.
+        _unsettled(f"{slot!r} in {room_id!r}", refusal)
     _detail(connection, msg, hass, host, room_id)
 
 

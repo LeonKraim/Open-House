@@ -87,18 +87,58 @@ export class SchemaForm extends LitElement {
     );
   }
 
-  private setChild(parentKey: string | null, key: string, value: unknown): void {
-    if (parentKey === null) {
-      this.emit({ ...this.values, [key]: value });
-      return;
-    }
-    const parent = (this.values[parentKey] ?? {}) as OptionsValues;
-    this.emit({ ...this.values, [parentKey]: { ...parent, [key]: value } });
+  /**
+   * A copy of `root` with `path` set to `value`, making the objects on the way.
+   *
+   * The whole chain is copied rather than the last object only, because the
+   * caller owns `values` and compares it: an edit that reused a nested object
+   * would emit an object that is the same one it was handed, and a caller with a
+   * `hasChanged` of its own would see nothing move.
+   */
+  private static assign(
+    root: OptionsValues,
+    path: string[],
+    value: unknown,
+  ): OptionsValues {
+    const copy: OptionsValues = { ...root };
+    const head = path[0];
+    // An empty path is nothing to set, and `emit` above never asks for one: it is
+    // the root, which is the whole of `values` and not a key in it.
+    if (head === undefined) return copy;
+    copy[head] =
+      path.length === 1
+        ? value
+        : SchemaForm.assign(
+            (root[head] ?? {}) as OptionsValues,
+            path.slice(1),
+            value,
+          );
+    return copy;
   }
 
-  private fieldValue(parentKey: string | null, key: string, schema: JsonSchema): unknown {
-    const parent = parentKey === null ? this.values : (this.values[parentKey] as OptionsValues | undefined);
-    const value = parent?.[key];
+  /**
+   * What sits at `path`.
+   *
+   * Walked rather than indexed once: a schema nests to whatever depth it nests
+   * to, and a field three objects deep is the case a one-level lookup gets
+   * wrong in both directions -- it reads the wrong slot and writes a value under
+   * a name that is not a field at all.
+   */
+  private valueAt(path: string[]): unknown {
+    let node: unknown = this.values;
+    for (const step of path) {
+      if (node === null || typeof node !== "object") return undefined;
+      node = (node as OptionsValues)[step];
+    }
+    return node;
+  }
+
+  private setChild(path: string[], key: string, value: unknown): void {
+    this.emit(SchemaForm.assign(this.values, [...path, key], value));
+  }
+
+  private fieldValue(path: string[], key: string, schema: JsonSchema): unknown {
+    const value = this.valueAt([...path, key]);
     return value === undefined ? defaultValue(schema) : value;
   }
 
@@ -106,36 +146,47 @@ export class SchemaForm extends LitElement {
     if (!this.schema || !this.schema.properties) {
       return html`<p class="muted">This pack declares no options.</p>`;
     }
-    return html`${this.renderObject(this.schema, null)}`;
+    return html`${this.renderObject(this.schema, [])}`;
   }
 
-  private renderObject(schema: JsonSchema, parentKey: string | null): TemplateResult {
+  /**
+   * A fieldset's worth of fields, each with the *path* it sits at.
+   *
+   * The path is the whole way down from the root and not just the enclosing
+   * key: this form recurses, so a field inside a field inside a field is an
+   * ordinary schema, and anything that remembered only the immediate parent
+   * would read and write one level up from where the field actually is.
+   */
+  private renderObject(schema: JsonSchema, path: string[]): TemplateResult {
     const order = fieldOrder(schema);
     if (order.length === 0) {
       return html`<p class="muted">This pack declares no options here.</p>`;
     }
     return html`<div class="fields">
-      ${order.map((key) => this.renderField(key, schema, parentKey))}
+      ${order.map((key) => this.renderField(key, schema, path))}
     </div>`;
   }
 
   private renderField(
     key: string,
     parent: JsonSchema,
-    parentKey: string | null,
+    path: string[],
   ): TemplateResult {
     const schema = parent.properties?.[key] ?? {};
     const required = (parent.required ?? []).includes(key);
-    const value = this.fieldValue(parentKey, key, schema);
+    const value = this.fieldValue(path, key, schema);
     const label = fieldLabel(key, schema);
-    const id = `${parentKey ?? "root"}-${key}`;
+    // Keyed by the path so the id stays what it always was for the depth-1 case
+    // (`root-dim_level`) and stops colliding for the deeper ones, which the
+    // one-level spelling spelled out to the same string.
+    const id = `${path.length === 0 ? "root" : path.join("-")}-${key}`;
     const help = schema.description
       ? html`<p class="help" id="${id}-help">${schema.description}</p>`
       : nothing;
     const missing = required && isMissing(schema, value)
       ? html`<p class="help warn">Required.</p>`
       : nothing;
-    const control = this.renderControl(key, schema, value, parentKey, id, label);
+    const control = this.renderControl(key, schema, value, path, id, label);
     return html`<div class="field" data-required=${required ? "true" : "false"}>
       <div class="label-row">
         <span class="label">${label}</span>
@@ -149,7 +200,7 @@ export class SchemaForm extends LitElement {
     key: string,
     schema: JsonSchema,
     value: unknown,
-    parentKey: string | null,
+    path: string[],
     id: string,
     label: string,
   ): TemplateResult {
@@ -160,7 +211,7 @@ export class SchemaForm extends LitElement {
       case "object":
         return html`<fieldset class="nested">
           <legend>${label}</legend>
-          ${this.renderObject(schema, key)}
+          ${this.renderObject(schema, [...path, key])}
         </fieldset>`;
       case "enum":
         return html`<select
@@ -168,7 +219,7 @@ export class SchemaForm extends LitElement {
           aria-label=${label}
           .value=${String(value ?? "")}
           @change=${(event: Event) =>
-            this.setChild(parentKey, key, (event.target as HTMLSelectElement).value)}
+            this.setChild(path, key, (event.target as HTMLSelectElement).value)}
         >
           ${(schema.enum ?? []).map(
             (option) => html`<option
@@ -194,7 +245,7 @@ export class SchemaForm extends LitElement {
                   } else {
                     next.delete(String(option));
                   }
-                  this.setChild(parentKey, key, [...next]);
+                  this.setChild(path, key, [...next]);
                 }}
               />
               <span>${humanizeKey(String(option))}</span>
@@ -209,7 +260,7 @@ export class SchemaForm extends LitElement {
             .checked=${value === true}
             aria-label=${label}
             @change=${(event: Event) =>
-              this.setChild(parentKey, key, (event.target as HTMLInputElement).checked)}
+              this.setChild(path, key, (event.target as HTMLInputElement).checked)}
           />
           <span>${value === true ? "On" : "Off"}</span>
         </label>`;
@@ -223,7 +274,7 @@ export class SchemaForm extends LitElement {
           max=${schema.maximum ?? nothing}
           @change=${(event: Event) => {
             const raw = (event.target as HTMLInputElement).value;
-            this.setChild(parentKey, key, raw === "" ? null : Number(raw));
+            this.setChild(path, key, raw === "" ? null : Number(raw));
           }}
         />`;
       case "multiline":
@@ -233,7 +284,7 @@ export class SchemaForm extends LitElement {
           .value=${String(value ?? "")}
           rows="3"
           @change=${(event: Event) =>
-            this.setChild(parentKey, key, (event.target as HTMLTextAreaElement).value)}
+            this.setChild(path, key, (event.target as HTMLTextAreaElement).value)}
         ></textarea>`;
       case "time":
         return html`<input
@@ -242,7 +293,7 @@ export class SchemaForm extends LitElement {
           aria-label=${label}
           .value=${String(value ?? "")}
           @change=${(event: Event) =>
-            this.setChild(parentKey, key, (event.target as HTMLInputElement).value)}
+            this.setChild(path, key, (event.target as HTMLInputElement).value)}
         />`;
       case "color":
         return html`<input
@@ -251,7 +302,7 @@ export class SchemaForm extends LitElement {
           aria-label=${label}
           .value=${String(value || "#000000")}
           @change=${(event: Event) =>
-            this.setChild(parentKey, key, (event.target as HTMLInputElement).value)}
+            this.setChild(path, key, (event.target as HTMLInputElement).value)}
         />`;
       case "list": {
         const items = Array.isArray(value) ? value : [];
@@ -267,7 +318,7 @@ export class SchemaForm extends LitElement {
                   const raw = (event.target as HTMLInputElement).value;
                   const next = [...items];
                   next[index] = numeric ? Number(raw) : raw;
-                  this.setChild(parentKey, key, next);
+                  this.setChild(path, key, next);
                 }}
               />
               <button
@@ -277,7 +328,7 @@ export class SchemaForm extends LitElement {
                 @click=${() => {
                   const next = [...items];
                   next.splice(index, 1);
-                  this.setChild(parentKey, key, next);
+                  this.setChild(path, key, next);
                 }}
               >Remove</button>
             </div>`,
@@ -285,7 +336,7 @@ export class SchemaForm extends LitElement {
           <button
             type="button"
             class="secondary"
-            @click=${() => this.setChild(parentKey, key, [...items, numeric ? 0 : ""])}
+            @click=${() => this.setChild(path, key, [...items, numeric ? 0 : ""])}
           >Add</button>
         </div>`;
       }

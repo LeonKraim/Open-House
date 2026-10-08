@@ -29,8 +29,10 @@ store can be tested without a Home Assistant, for the reason `module_host` gives
 from __future__ import annotations
 
 import json
+import os
 import re
-from collections.abc import Mapping, Sequence
+import tempfile
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -460,7 +462,7 @@ def load(root: Path) -> tuple[ModuleRecord, ...]:
         return ()
     if not isinstance(rows, list):
         raise AuthoringError(f"the `modules` list at {path} is not a list")
-    return tuple(_record(row, path) for row in rows)
+    return _one_each((_record(row, path) for row in rows), path)
 
 
 def from_documents(
@@ -483,7 +485,33 @@ def from_documents(
     person can go and look at.
     """
     named = path if path is not None else Path(FILENAME)
-    return tuple(_record(row, named) for row in rows)
+    return _one_each((_record(row, named) for row in rows), named)
+
+
+def _one_each(records: Iterable[ModuleRecord], path: Path) -> tuple[ModuleRecord, ...]:
+    """The records, refusing a name that is carried twice.
+
+    A module's slug is its key -- it is what its outputs are addressed by and
+    what the record is filed under -- so a file holding it twice holds a module
+    that can never be reached: the reader that keys by slug keeps the later row
+    and drops the earlier one, and the person who edited the file sees their
+    change do nothing with nothing said. Refused rather than collapsed, for the
+    reason `load` refuses a file that will not parse at all: silently forgetting
+    a module somebody made is the outcome this whole module exists to avoid, and
+    a duplicate is only ever a hand edit that copy-pasted a block.
+    """
+    found = tuple(records)
+    seen: set[str] = set()
+    for record in found:
+        if record.slug in seen:
+            raise AuthoringError(
+                f"the module records at {path} hold {record.slug!r} twice: a "
+                "module's name is the key it is filed under, so one of the two "
+                "can never be reached -- delete the row that is not meant to be "
+                "there"
+            )
+        seen.add(record.slug)
+    return found
 
 
 def write(root: Path, records: Sequence[ModuleRecord]) -> Path:
@@ -491,8 +519,16 @@ def write(root: Path, records: Sequence[ModuleRecord]) -> Path:
 
     The whole file at once rather than an append, because the collection is the
     unit a reader wants: a half-written module list is one a person's outputs
-    would be missing from. Blocking, by definition -- the caller runs it in an
-    executor, since it is reached from a websocket handler.
+    would be missing from -- which is why it is written *beside* the file and
+    moved over it rather than truncated in place. `write_text` empties the file
+    first, so a crash or a power cut anywhere inside it leaves a `modules.json`
+    that is empty or half a document; `load` refuses the whole of that, and a
+    house that refuses to load its records starts with no modules at all -- every
+    output entity gone and only a line in the log to say so. The move is what
+    makes a reader see either the file as it was or the file as it is now.
+
+    Blocking, by definition -- the caller runs it in an executor, since it is
+    reached from a websocket handler.
     """
     path = Path(root)
     path.mkdir(parents=True, exist_ok=True)
@@ -501,10 +537,33 @@ def write(root: Path, records: Sequence[ModuleRecord]) -> Path:
         "version": VERSION,
         "modules": [record.as_json() for record in records],
     }
-    target.write_text(
-        json.dumps(document, indent=2, sort_keys=False) + "\n", encoding="utf-8"
-    )
+    _replace(target, json.dumps(document, indent=2, sort_keys=False) + "\n")
     return target
+
+
+def _replace(target: Path, text: str) -> None:
+    """Put `text` in `target`, via a temporary file in the same directory.
+
+    The same directory and not the system's temporary one, because the move at
+    the end is only atomic within one filesystem -- across two it becomes a copy,
+    which is the thing being avoided. Flushed and synced before the move so the
+    bytes are on the disk before the name points at them; without that a power
+    cut can leave the new *name* over the old *content*.
+    """
+    handle, temporary = tempfile.mkstemp(
+        dir=target.parent, prefix=f".{target.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # `Path.replace` is `os.replace`: the move over the file is atomic, which
+        # is the whole point -- a reader sees the old document or the new one.
+        Path(temporary).replace(target)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
 
 
 def put(
@@ -523,10 +582,14 @@ def put(
     placed = False
     for row in records:
         if row.slug == record.slug:
-            out.append(record)
-            placed = True
-        else:
-            out.append(row)
+            # The first row of that name is the module itself; a second one is a
+            # duplicate `load` would refuse to read back, so it is dropped here
+            # rather than being written forward as a file that cannot be opened.
+            if not placed:
+                out.append(record)
+                placed = True
+            continue
+        out.append(row)
     if not placed:
         out.append(record)
     return tuple(out)

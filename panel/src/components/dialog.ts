@@ -4,8 +4,9 @@
  * Installing a module changes the house, so it opens in a modal rather than
  * expanding inline: the user should not be able to wander to another tab
  * halfway through a conflict check and come back to a form that has silently
- * moved on. The element traps Escape and a click on the backdrop, restores focus
- * to whatever opened it, and marks the rest of the page inert to assistive
+ * moved on. The element traps Escape -- the dialog on top of the others, when
+ * there is more than one -- and a click on the backdrop, restores focus to
+ * whatever opened it, and marks the rest of the page inert to assistive
  * technology while it is up.
  *
  * ## Why this one element keeps a shadow root
@@ -32,6 +33,19 @@
  */
 
 import { css, html, LitElement, type TemplateResult } from "lit";
+
+/**
+ * Every dialog that is open, in the order they were opened.
+ *
+ * Kept because each one listens on `document`: the sheet's own subtree is not
+ * where the keystroke lands when focus is inside the slotted content, so a
+ * listener per dialog is the only place that sees it -- and that makes one
+ * Escape news to *all* of them at once. A dialog opened over another (a rename
+ * over a card, a detach over the settings it came from) then closed both, taking
+ * the one underneath with it. Only the last one in this list answers, because
+ * only the last one is what a person is looking at.
+ */
+const openDialogs: OpenHouseDialog[] = [];
 
 export class OpenHouseDialog extends LitElement {
   static override properties = {
@@ -119,6 +133,15 @@ export class OpenHouseDialog extends LitElement {
 
   override disconnectedCallback(): void {
     document.removeEventListener("keydown", this.onKeyDown);
+    this.unstack();
+    // **Focus comes back even from here.** A dialog taken off the page while it
+    // is up -- the card that owns it was rebuilt, a save landed, the page moved
+    // on -- never reaches the `open === false` branch below, and the control that
+    // opened it is left holding focus over a control that is gone. Nothing is
+    // focused then, and the next keystroke goes to the document: a person who
+    // typed into a filter, opened a dialog and lost it finds their next letters
+    // landing nowhere at all.
+    if (this.open) this.restoreFocus();
     super.disconnectedCallback();
   }
 
@@ -130,6 +153,8 @@ export class OpenHouseDialog extends LitElement {
         // root node's own `activeElement` would only ever name something inside
         // it -- which the opener is not.
         this.previouslyFocused = document.activeElement as HTMLElement | null;
+        this.unstack();
+        openDialogs.push(this);
         queueMicrotask(() => {
           // `this.querySelector` reads the light tree, so this finds the
           // slotted filter input rather than the Close button here in the
@@ -139,16 +164,38 @@ export class OpenHouseDialog extends LitElement {
             ?.focus();
         });
       } else {
-        this.previouslyFocused?.focus();
-        this.previouslyFocused = null;
+        this.unstack();
+        this.restoreFocus();
       }
     }
   }
 
+  /**
+   * Put focus back where it was, if that is still somewhere.
+   *
+   * `isConnected` and not a plain call: the thing that opened this dialog is
+   * often the card the dialog itself replaced or rebuilt, and focusing an
+   * element that is no longer in the document does nothing at all -- focus
+   * lands on the body, which is the state this is here to avoid.
+   */
+  private restoreFocus(): void {
+    const target = this.previouslyFocused;
+    this.previouslyFocused = null;
+    if (target?.isConnected) target.focus();
+  }
+
+  /** Give up this dialog's place in the stack, wherever it is leaving from. */
+  private unstack(): void {
+    const at = openDialogs.indexOf(this);
+    if (at !== -1) openDialogs.splice(at, 1);
+  }
+
   private onKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === "Escape" && this.open) {
-      this.close();
-    }
+    // Only the top one: the rest are behind a backdrop, and a person pressing
+    // Escape means the thing they are looking at.
+    if (event.key !== "Escape" || !this.open) return;
+    if (openDialogs[openDialogs.length - 1] !== this) return;
+    this.close();
   };
 
   /**
