@@ -327,12 +327,17 @@ class OpenHouseHost:
           too, for the same reason one step out (`LiveSession.rebind_slot_part`):
           the room that gave the old half a device keeps that device under the new
           name, and its subentry is written so a restart agrees.
-        * *remove* is **refused while a module still names the part**, naming the
-          modules. A part is one bound device shared by everything on it, so
-          taking it away would move all of them without saying so -- and a control
-          that silently relocates three automations is worse than a control that
-          says no. The sentence names them so a person knows which rows to move
-          first.
+        * *remove* is **refused while a module still names the part**, and again
+          while a room or the house still binds it. A part is one bound device
+          shared by everything on it, so taking it away would move every module on
+          it without saying so -- and a control that silently relocates three
+          automations is worse than a control that says no. The second refusal is
+          the same rule from the device's side, and it is not redundant: a part
+          nobody's module is on is still a part something is bound to, and
+          dropping it would leave that binding naming a word the vocabulary no
+          longer carries, which the rebuild this edit triggers refuses. Both
+          sentences name what is holding the part, so a person knows which row to
+          move or unbind first.
 
         The empty `parent` is refused by `slot_parts.add`/`rename`/`remove`
         themselves where it matters, and the *unknown slot* case is not checked
@@ -377,6 +382,23 @@ class OpenHouseHost:
                         "without saying so. Put them on another part, or on the "
                         "slot's own device, first"
                     )
+                # And the same refusal from the device's side, because a part can
+                # hold a device with no module on it at all -- a person who bound
+                # both halves and has so far moved one module. A part's device is
+                # bound in a room (or by the house), so taking the part away would
+                # leave that binding naming a word the vocabulary is about to stop
+                # carrying, and the rebuild below would refuse the whole house for
+                # it. Nothing here silently unbinds anything.
+                held = self.session.part_bound_in(parent, name)
+                if held:
+                    named = ", ".join(repr(place) for place in held)
+                    raise LiveSessionError(
+                        f"the part {name!r} of {parent!r} holds a device bound in "
+                        f"{named}, so it cannot be taken away: the binding names "
+                        "this part, and taking the part away would leave it "
+                        "pointing at a role that no longer exists. Unbind the part "
+                        "first, then take it away"
+                    )
                 updated = slot_parts.remove(record, parent, name)
                 moved = ()
             else:
@@ -388,6 +410,16 @@ class OpenHouseHost:
             raise LiveSessionError(str(refusal)) from refusal
 
         self.session.set_slot_parts(updated)
+        # **The record is saved before any room is written**, and the order is the
+        # whole point. Writing a room's bindings is a config-subentry update, and
+        # Home Assistant reloads the entry for one (`__init__.async_reload_entry`)
+        # -- a reload that composes the house out of the subentries *and* the store
+        # together. A rename is the one edit here that moves both halves, so a
+        # reload landing between the two writes reads rooms naming the new part and
+        # a record that does not yet carry it, and refuses the whole house
+        # (`engine.binding._validate` for a binding no vocabulary word defines).
+        # Saved first, the half a reader can see is never the older one.
+        await self.async_save()
         # Each room that lost its binding to the rename keeps the *same device*
         # under the new name, so its subentry has to be written too -- a session
         # that agreed with the next restart and not with itself would lose the
@@ -396,7 +428,6 @@ class OpenHouseHost:
             room = self.rooms.get(placed)
             if room is not None:
                 await self._async_write_room(room, self.session.require_room(placed))
-        await self.async_save()
         for pack, placed in moved:
             await self.async_reapply_module(pack, placed)
         return self.session.slot_parts

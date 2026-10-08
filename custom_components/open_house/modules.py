@@ -1044,6 +1044,91 @@ async def async_edit(
     )
 
 
+def _published(
+    picks: Sequence[tuple[str, str]], setting: str, publish: bool
+) -> tuple[tuple[str, str], ...]:
+    """`module_definitions.published_picks`, with its refusal in this layer's words.
+
+    The rule itself is the adapter's -- it is about candidate names and output
+    keys, which is vocabulary that layer owns -- and it refuses in
+    `AuthoringError`, as everything there does. What a screen reads is a
+    `ModuleHostError`, so the two are told apart here, the same way `_async_build`
+    tells them apart everywhere else.
+    """
+    try:
+        return module_definitions.published_picks(picks, setting, publish)
+    except AuthoringError as refusal:
+        raise ModuleHostError(str(refusal)) from refusal
+
+
+async def async_publish(
+    hass: HomeAssistant,
+    entry_id: str,
+    *,
+    module: str,
+    setting: str,
+    publish: bool,
+    bound: Mapping[str, Mapping[str, str]] | None = None,
+) -> tuple[ModuleRecord, ...]:
+    """Publish one row's logic as a value any automation can read, or stop.
+
+    **This is the whole of "expose it to the rest of the house", as one act.** A
+    row answered with logic -- a template, a condition, a flow, a script -- is
+    already holding the thing worth reading, and Open House can already say so:
+    `declare_outputs` offers each of them as a candidate, and what a module
+    publishes is an ordinary entity (`sensor.open_house_<module>_<key>`). What
+    that leaves is a person who wants it having to open the whole import screen
+    again to tick one line of a list -- so this is that tick, alone, from the row
+    it belongs to.
+
+    It is an edit of the *module* and not of one copy, because a module is
+    defined once and installed many times: a value it publishes is published in
+    every room running it, or it is not the module's value at all. So both layers
+    are written here -- the definition when the module has one, the record either
+    way -- and `module_definitions.follow` decides what each installation ends up
+    with, exactly as `async_edit` does.
+
+    The key is the row's own name (see `module_definitions.published_key`) because
+    a switch has nowhere to type one: a person who wants their outputs named
+    differently is describing them, and that is the import screen.
+    """
+    record = await _hosted_record(hass, module)
+    rooms = dict(bound or {})
+    if not record.definition:
+        # A module hosted straight from a document has no second installation
+        # and nothing in the store: it *is* the module, so it is changed where
+        # it stands. Same rule as the edit path, for the same reason.
+        return await _async_rebuild_edited(
+            hass,
+            entry_id,
+            [
+                (
+                    record,
+                    replace(
+                        record,
+                        picks=_published(record.picks, setting, publish),
+                    ),
+                )
+            ],
+            rooms,
+        )
+    before = await async_definition(hass, record.definition)
+    after = replace(before, picks=_published(before.picks, setting, publish))
+    await hass.async_add_executor_job(
+        module_definitions.write, definitions_root(hass), after
+    )
+    return await _async_rebuild_edited(
+        hass,
+        entry_id,
+        [
+            (row, module_definitions.follow(before, after, row))
+            for row in await async_records(hass)
+            if row.definition == before.slug
+        ],
+        rooms,
+    )
+
+
 async def _async_rebuild_edited(
     hass: HomeAssistant,
     entry_id: str,

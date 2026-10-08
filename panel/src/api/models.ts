@@ -890,6 +890,35 @@ export interface ModuleOutput {
 }
 
 /** One module the house hosts. */
+/**
+ * One slot a hosted module reaches through, and how it resolves.
+ *
+ * `name` is the slot itself -- `light_group` -- and `bound` is the device the
+ * module *acts on*, which is the part's device when it is on a part. `input` is
+ * the module's input this slot answers, which is what a change is written back
+ * to: a slot row on the card is a row of the module's answers even though the
+ * answer is a device the room names rather than one the person picked.
+ *
+ * `parts` is the house's split of this slot (`ha_adapter.slot_parts`), one entry
+ * per part with the device that part is bound to, so a person can put this
+ * module on a part of a shared role without leaving the card. Empty for a slot
+ * nobody has split, which is every slot until somebody does.
+ */
+export interface HostedSlot {
+  name: string;
+  /** The input of the module this slot answers. */
+  input: string;
+  /** `house` for a global slot, `room` for the one the module's room binds. */
+  scope: string;
+  /** Which part of the slot this module is on, empty for the slot itself. */
+  part: string;
+  /** The device the module acts on now, or empty when nothing is bound yet. */
+  bound: string;
+  /** What Home Assistant calls that device, or empty when it has no name. */
+  bound_name: string;
+  parts: { name: string; label: string; bound: string }[];
+}
+
 export interface HostedModule {
   /** The name its outputs' entity ids carry. */
   slug: string;
@@ -914,7 +943,7 @@ export interface HostedModule {
    * has a device for it. That is what the screen has to say, because the
    * alternative reading of an idle module is that importing it did nothing.
    */
-  slots: { name: string; bound: string }[];
+  slots: HostedSlot[];
   /** The `automation.*` entity Home Assistant runs, or empty for none yet. */
   automation_id: string;
   /**
@@ -1068,6 +1097,21 @@ export interface ModuleInputRow {
   script_id?: string;
   /** That script, opened in Home Assistant's editor, or `""`. */
   script_url?: string;
+  /**
+   * What this row's own logic is **published as**, or `""` for one that is not.
+   *
+   * A row answered with logic holds a value worth reading, and publishing it puts
+   * that value at `sensor.open_house_<slug>_<key>` -- an ordinary entity, which
+   * is what makes it usable by any automation rather than only inside the module
+   * that worked it out. This is the key it was published under, which is what the
+   * switch on the row reads to know whether it is on, and what the card names in
+   * the sentence it writes under it.
+   *
+   * Keyed by the row rather than by the key: the key is what a person called the
+   * value and could be anything, while this answers "is *this* row's logic
+   * published", which is the question the switch asks.
+   */
+  published_key?: string;
 }
 
 /**
@@ -1117,6 +1161,16 @@ export interface ModuleBinding {
    * device in every room -- including a room that bound the role itself.
    */
   scope?: "room" | "house";
+  /**
+   * For a `slot` binding: which part of a split slot this module is on.
+   *
+   * A slot a person has divided into parts (`ha_adapter.slot_parts`) is several
+   * binding keys under one name, so two modules on part `a` act on one device
+   * while a third on part `b` acts on another -- and all of them are still
+   * "the slot". Absent, or empty, is the slot itself, which is what every
+   * module is on until somebody splits it.
+   */
+  part?: string;
 }
 
 /** The `modules/read` reply: the source, what it could publish, and the house. */

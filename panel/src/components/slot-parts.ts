@@ -54,6 +54,16 @@ export interface SlotPartsOptions {
   onDraft: (key: string, value: string | null) => void;
   /** Bind, or rebind, the device one half acts on. */
   onBind: (part: SlotPart) => void;
+  /**
+   * Take the device off one half, leaving the half in place.
+   *
+   * Here because a *removal* is refused while the part is bound: without this,
+   * a person who gave both halves a device and then wanted the slot whole again
+   * would have no way out -- Delete would refuse, naming a binding nothing on the
+   * page could take off. It is the same control a room's slot row draws, one row
+   * down, and it is drawn only when there is something to take off.
+   */
+  onUnbind: (part: SlotPart) => void;
   /** Split, rename or rejoin -- the three the server takes. */
   onAct: (action: SlotPartAction, name: string, newName?: string) => void;
 }
@@ -120,9 +130,13 @@ function partRow(options: SlotPartsOptions, part: SlotPart): TemplateResult {
   const key = partDraftKey(slot, part.name);
   const renaming = options.draft(key);
   const inert = busy || !admin;
-  return html`<div class="row wrap" style="align-items:center;gap:6px">
+  return html`<div
+    class="row wrap"
+    style="align-items:center;gap:6px"
+    data-slot-part-row=${part.slot}
+  >
     ${renaming === undefined
-      ? html`<span>${part.label}</span>`
+      ? html`<span data-part-name=${part.slot}>${part.label}</span>`
       : html`<input
             type="text"
             style="min-width:8rem"
@@ -154,6 +168,15 @@ function partRow(options: SlotPartsOptions, part: SlotPart): TemplateResult {
             @click=${() => options.onBind(part)}
             >${part.entity_id === null ? "Bind" : "Replace"}</button
           >
+          ${part.entity_id === null
+            ? nothing
+            : html`<button
+                type="button"
+                class="icon"
+                ?disabled=${busy}
+                @click=${() => options.onUnbind(part)}
+                >Unbind</button
+              >`}
           <button
             type="button"
             class="icon"

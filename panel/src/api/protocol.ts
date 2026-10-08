@@ -475,6 +475,20 @@ export const COMMANDS = {
   modulesEdit: "open_house/modules/edit",
 
   /**
+   * Publish one row's logic as an entity anything may read, or stop publishing
+   * it -- the switch beside a cast.
+   *
+   * `setting` is the *input* whose row the switch sits on, not an output key: the
+   * key is what the person called the value, and the input is what finds the
+   * thing being toggled. The key is the row's own name, slugged, because a switch
+   * has nowhere to type one. On, the value lands at
+   * `sensor.open_house_<module>_<key>`, which is an entity like any other and the
+   * whole point: the rest of Home Assistant can use it without knowing this
+   * integration exists. Off takes the entity away again.
+   */
+  modulesPublish: "open_house/modules/publish",
+
+  /**
    * `{}` -> `{ store: ModuleOfferRow[], rooms: { id, name }[] }`.
    *
    * The modules this house *offers*: imports that were saved as definitions

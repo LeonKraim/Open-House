@@ -629,3 +629,79 @@ def test_the_installation_keeps_its_name_its_room_and_its_automation() -> None:
     assert result.room_id == "kitchen"
     assert result.automation_id == "automation.dim_a_light_kitchen"
     assert result.definition == "dim_a_light"
+
+
+# -- Publishing a row's logic: the switch beside a cast ---------------------
+#
+# The four below are the rule from the row to the store, with no screen and no
+# Home Assistant in the way -- which is the half that can be tested here. The
+# other half (writing the definition, rebuilding every installation that never
+# moved the answer) is `modules.async_publish`, and the suite has no harness that
+# can drive it; the walk in `panel/scripts/` is what proves that end.
+
+
+def test_publishing_a_row_adds_the_pick_and_names_it_after_the_row() -> None:
+    """The switch, as data: one pick, keyed by the row's own name.
+
+    `cast:<input>` is the candidate name `module_host.output_candidates` offers
+    for a row answered with logic, so this is the same pick the import screen
+    makes when a person ticks that row's line -- which is the whole point of
+    offering it from the row as well: one decision, so the two cannot disagree.
+    """
+    assert module_definitions.published_picks((), "min_lux", True) == (
+        ("cast:min_lux", "min_lux"),
+    )
+
+
+def test_unpublishing_removes_that_pick_and_leaves_the_others() -> None:
+    """Off is the same pick coming out, and nothing else moving.
+
+    A module may publish several values, so what comes out is the one row's pick
+    rather than the list: a switch that emptied the module's outputs would take
+    away readings nobody touched.
+    """
+    picks = (("cast:min_lux", "floor"), ("input:lux_sensor", "lux"))
+    assert module_definitions.published_picks(picks, "min_lux", False) == (
+        ("input:lux_sensor", "lux"),
+    )
+
+
+def test_the_row_is_found_by_candidate_and_not_by_the_key_it_was_given() -> None:
+    """A person may rename an output, and the switch still finds its own row.
+
+    The key is theirs -- the import screen offers it as a field to fill in -- so
+    a row is matched by the candidate it came from. Matching on the key would
+    mean a value somebody renamed could no longer be switched off from the row
+    that publishes it.
+    """
+    assert (
+        module_definitions.published_picks(
+            (("cast:min_lux", "floor_level"),), "min_lux", False
+        )
+        == ()
+    )
+
+
+def test_publishing_twice_under_one_name_is_refused() -> None:
+    """Two outputs with one key are one entity, so the second is a refusal.
+
+    Refused *before* the definition is written, which is what makes the refusal
+    worth having at all: `declare_outputs` writes the same sentence, but it
+    writes it at build time, when the store already holds a module that cannot
+    be built.
+    """
+    with pytest.raises(AuthoringError):
+        module_definitions.published_picks(
+            (("input:lux_sensor", "min_lux"),), "min_lux", True
+        )
+
+
+def test_a_row_whose_name_cannot_be_a_key_is_refused() -> None:
+    """An output key is part of an entity id, so it is refused rather than made up.
+
+    A row named in a way no rule can map to a key is refused instead of being
+    slugged into something nobody could have predicted -- and would not find
+    again under the entity it landed on.
+    """
+    with pytest.raises(AuthoringError):
+        module_definitions.published_key("---")

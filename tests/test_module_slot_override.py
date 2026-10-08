@@ -509,6 +509,35 @@ def test_a_rename_moves_every_module_on_the_part_and_says_which() -> None:
     }
 
 
+def test_a_bound_part_is_named_by_the_reader_a_removal_is_refused_with() -> None:
+    """**The device's side of the removal refusal, which the modules cannot see.**
+
+    A part can hold a device with no module on it at all -- a person binds both
+    halves and has so far moved one module onto one of them -- and dropping the
+    part then would leave that room naming a key the vocabulary no longer carries.
+    The rebuild the removal itself triggers refuses the whole house for it
+    (`engine.binding._validate`), so the removal has to be refused *before* it,
+    and the refusal has to say where the device is. This is the reader that
+    answers that, and the two cases it has to get right: a part bound by a room,
+    and a part bound by the house as well.
+    """
+    session = _split_session(_transport(), VirtualClock.started_at(_AT))
+
+    # Both halves are bound in the hall, by the fixture -- and the names come back
+    # as a person reads them, because the refusal is read by a person choosing
+    # which page to go to.
+    assert session.part_bound_in("light_group", "a") == ("Hall",)
+    # A part nobody has bound is not in the way of anything.
+    session.set_slot_parts({"light_group": ("a", "b", "c")})
+    assert session.part_bound_in("light_group", "c") == ()
+
+    # And the house's own binding counts too: a global slot's device is bound once
+    # for everybody, so a part of a house role is bound somewhere the room's page
+    # cannot show.
+    session.set_house_binding("light_group__b", "light.house")
+    assert session.part_bound_in("light_group", "b") == ("Hall", "the house")
+
+
 def test_a_part_the_house_does_not_carry_is_refused_and_named() -> None:
     """A module on a part nobody created waits forever, so it is refused.
 

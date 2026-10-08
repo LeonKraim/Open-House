@@ -53,3 +53,8 @@ panel/dist/
 # The end-to-end run's screenshot: generated, written at the repository root by
 # `panel/scripts/browser-e2e.mjs`, and read by nobody.
 e2e-house.png
+
+# This run's screenshots: written by the `panel/scripts/_*.mjs` walks into
+# `shots/` while a session is looking at the house, and read by nobody after.
+# The same rule `e2e-house.png` follows -- generated, not authored.
+shots/

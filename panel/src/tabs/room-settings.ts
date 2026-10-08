@@ -996,9 +996,25 @@ export class RoomSettings extends OpenHouseElement {
       draft: (key) => this.partDrafts[key],
       onDraft: (key, value) => this.editPart(key, value),
       onBind: (part) => void this.openPicker(part.slot, part.entity_id !== null),
+      onUnbind: (part) => void this.unbindPart(part.slot),
       onAct: (action, name, newName) =>
         void this.setPart(binding.slot, action, name, newName ?? ""),
     });
+  }
+
+  /**
+   * Take the device off one of the room's parts, leaving the part in place.
+   *
+   * The way out of the refusal `Delete` gives while a part is bound: a removal is
+   * refused rather than silently unbinding, so the page that draws the refusal has
+   * to offer the control that clears it. It writes the room's binding for the
+   * part's own key -- a part is bound once for a room, which is what makes two
+   * modules on one part one device.
+   */
+  private unbindPart(slot: string): Promise<void> {
+    return this.mutate(() =>
+      this.requireClient().unbind(this.roomId, slot, this.revision),
+    );
   }
 
   /**

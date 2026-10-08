@@ -297,6 +297,7 @@ REVISION_COMMANDS = frozenset(
         "ROOM_OPTIONS_SET",
         "MODULES_SETTINGS",
         "MODULES_DETACH",
+        "MODULES_PUBLISH",
         "MODULES_CONFIG_SWITCH",
     }
 )

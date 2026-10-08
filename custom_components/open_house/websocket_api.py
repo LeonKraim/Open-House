@@ -59,6 +59,7 @@ from ha_adapter import (
     module_host,
     module_records,
     pack_authoring,
+    slot_parts,
 )
 from ha_adapter.live import HOUSE, LiveSessionError
 from ha_adapter.module_definitions import ModuleDefinition
@@ -127,6 +128,7 @@ MODULES_READ = "open_house/modules/read"
 MODULES_HOST = "open_house/modules/host"
 MODULES_SETTINGS = "open_house/modules/settings"
 MODULES_EDIT = "open_house/modules/edit"
+MODULES_PUBLISH = "open_house/modules/publish"
 MODULES_STORE = "open_house/modules/store"
 MODULES_DEFINE = "open_house/modules/define"
 MODULES_DEPLOY = "open_house/modules/deploy"
@@ -2441,12 +2443,17 @@ async def ws_modules_settings(
     host = _host_or_error(connection, msg)
     if host is None or _stale(connection, msg, host):
         return
+    sent = _bindings(msg.get("bindings"))
+    unknown = _unknown_part(host, sent)
+    if unknown is not None:
+        connection.send_error(msg["id"], INVALID_FORMAT, unknown)
+        return
     try:
         record = await modules.async_update(
             hass,
             host.entry.entry_id,
             module=str(msg["module"]),
-            bindings=_bindings(msg.get("bindings")),
+            bindings=sent,
             settings=(
                 None if msg.get("settings") is None else _names(msg.get("settings"))
             ),
@@ -2769,6 +2776,76 @@ async def ws_modules_edit(
             # what the house offers is stale in a way a screen listing what it
             # runs is not, and answering with both is what lets either redraw
             # from the reply it already has.
+            "store": await _offered(hass, host),
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): MODULES_PUBLISH,
+        # The module by the name the house hosts it under, which is what the card
+        # knows -- the same subject `modules/edit` takes, for the same reason: a
+        # value a module publishes is the module's, in every room running it.
+        vol.Required("module"): str,
+        # The *input* whose row the toggle sits on, not an output key. A key is
+        # what the person called the value and can be anything; the input is what
+        # the row is, and it is what finds the pick this acts on.
+        vol.Required("setting"): str,
+        vol.Required("publish"): bool,
+        vol.Optional("revision"): vol.Coerce(int),
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_modules_publish(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Make one row's logic readable by any automation, or stop reading it.
+
+    The whole of demand two as one button: a condition, a flow, a script or a
+    template already holds a value, and publishing it puts that value at
+    `sensor.open_house_<module>_<key>` -- an entity like any other, which the rest
+    of Home Assistant may then use without knowing Open House exists. On is a
+    published entity; off takes it away again.
+
+    Answers with the whole house, like every other module command, because a
+    consumer bound to any installation's output is reading an entity that was
+    just re-created or removed.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    if _stale(connection, msg, host):
+        return
+    try:
+        await modules.async_publish(
+            hass,
+            host.entry.entry_id,
+            module=str(msg["module"]),
+            setting=str(msg["setting"]),
+            publish=bool(msg["publish"]),
+            # Every room's slots, because an installation being rebuilt is built
+            # against the room it sits in -- the same map `modules/edit` sends.
+            bound={
+                room_id: host.bound_slots(room_id)
+                for room_id in ("", *sorted(host.rooms))
+            },
+        )
+    except modules.ModuleHostError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    await host.async_save()
+    listing = await _hosted(hass, host)
+    connection.send_result(
+        msg["id"],
+        {
+            "module": str(msg["module"]),
+            "modules": listing["modules"],
+            # The store as well, because a definition may have been rewritten:
+            # whether this module is one the house *offers* can change what a
+            # screen lists, and answering with both lets either redraw from the
+            # reply it already holds.
             "store": await _offered(hass, host),
         },
     )
@@ -3415,6 +3492,14 @@ def _bindings(sent: object) -> dict[str, module_host.InputBinding]:
             # (`module_host.HOUSE_SCOPE`). Absent reads as the room's own, which
             # is what every row written before this field existed meant.
             scope=str(row.get("scope") or module_host.ROOM_SCOPE),
+            # Which part of a split slot the row is on
+            # (`ha_adapter.slot_parts`), empty for the slot itself. Carried
+            # here because this is the one door a binding comes through: a
+            # `part` that stopped at this line would be a row the panel drew on
+            # a part and the server resolved on the whole slot, which is two
+            # different devices under one name and no way to see it from either
+            # screen.
+            part=str(row.get("part") or ""),
         )
     return found
 
@@ -3719,18 +3804,7 @@ async def _hosted(hass: HomeAssistant, host: OpenHouseHost) -> Mapping[str, obje
                 # imported but not running (`automation_id` is empty) and whose
                 # screen has to say which device it is still waiting for --
                 # otherwise it reads as a module that silently did nothing.
-                "slots": [
-                    {
-                        "name": name,
-                        "bound": host.bound_slots(record.room_id).get(name, ""),
-                    }
-                    for name in module_host.slots_reached(
-                        {
-                            name: module_host.InputBinding(**row)
-                            for name, row in record.bindings.items()
-                        }
-                    )
-                ],
+                "slots": _hosted_slots(host, record),
                 "automation_id": record.automation_id,
                 # The configurations this module holds, and which of them it is
                 # running. Everything else on this record is one set of answers,
@@ -3794,6 +3868,99 @@ async def _hosted(hass: HomeAssistant, host: OpenHouseHost) -> Mapping[str, obje
     }
 
 
+def _unknown_part(
+    host: OpenHouseHost, bindings: Mapping[str, module_host.InputBinding]
+) -> str | None:
+    """The first part named that the house does not carry, as a sentence, or `None`.
+
+    A module put on a part nobody has is a module waiting for a device nothing
+    can give it -- the part is a binding key, and a key the vocabulary does not
+    carry is one no room may ever bind (`engine.binding`). So the write is refused
+    here, where the house's own parts record is to hand, rather than recorded and
+    discovered as a module that silently never moves. The same refusal
+    `live_modules.set_slot` makes for a pack, at the door a hosted module's
+    bindings come through.
+    """
+    for name, binding in bindings.items():
+        if binding.kind != "slot" or not binding.part:
+            continue
+        carried = slot_parts.parts_of(host.session.slot_parts, binding.slot)
+        if binding.part not in carried:
+            named = ", ".join(repr(part) for part in carried) or "none"
+            return (
+                f"the row {name!r} names part {binding.part!r} of the slot "
+                f"{binding.slot!r}, and that slot has no such part; its parts are "
+                f"{named}"
+            )
+    return None
+
+
+def _hosted_slots(
+    host: OpenHouseHost, record: module_records.ModuleRecord
+) -> list[dict[str, object]]:
+    """Which slots one hosted module reaches, and what each of them answers.
+
+    The row the card draws for a device the module does not own: the slot's name,
+    the device the module's room resolves it to, and -- where the house has split
+    the slot -- **which part of it this module is on**, with the device each part
+    is bound to.
+
+    A part is a binding key of its own (`ha_adapter.slot_parts`), so the device
+    the *module* acts on is the part's, not the parent's: `slot_key` is what
+    decides that, and it is read here rather than the parent's name so the two
+    screens cannot disagree about which entity a module is on.
+
+    The parts offered are the house's for this slot and not only the one already
+    chosen, because this list is what the row's picker is drawn from -- a list
+    holding only the current answer would be a menu with one entry.
+    """
+    bound = host.bound_slots(record.room_id)
+    parts = host.session.slot_parts
+    rows: list[dict[str, object]] = []
+    for name, row in record.bindings.items():
+        binding = module_host.InputBinding(**row)
+        if binding.kind != "slot" or not binding.slot:
+            continue
+        device = str(bound.get(module_host.slot_key(binding), ""))
+        rows.append(
+            {
+                "name": binding.slot,
+                # Which input of the module this slot answers, so a row can be
+                # written back to the binding it came from.
+                "input": name,
+                "scope": binding.scope,
+                "part": binding.part,
+                "bound": device,
+                # What Home Assistant calls the device, so the row reads as a
+                # lamp rather than as an id. Read here and not in the panel for
+                # the reason the room's slot rows do it: the panel's `hass` is a
+                # reduced view with no states in it.
+                "bound_name": _entity_name(host.hass, device),
+                "parts": [
+                    {
+                        "name": part,
+                        "label": part,
+                        "bound": str(
+                            bound.get(slot_parts.key_of(binding.slot, part), "")
+                        ),
+                    }
+                    for part in slot_parts.parts_of(parts, binding.slot)
+                ],
+            }
+        )
+    return rows
+
+
+def _entity_name(hass: HomeAssistant, entity_id: str) -> str:
+    """What Home Assistant calls an entity, or the empty string when it has none."""
+    if not entity_id:
+        return ""
+    state = hass.states.get(entity_id)
+    if state is None:
+        return ""
+    return str(state.attributes.get("friendly_name", entity_id))
+
+
 def _room_name(host: OpenHouseHost, room_id: str) -> str:
     """The room a module sits in, as a person reads it. Empty id is the house."""
     if not room_id:
@@ -3852,6 +4019,16 @@ def _module_settings(
         # back, so the row carries the script and where to open it.
         row["script_id"] = record.scripts.get(name, "")
         row["script_url"] = _script_href(row["script_id"])
+        # What this row's own logic is published as, or empty. Read off the
+        # *picks*, which are the module's answer to "which of my values do I
+        # publish" -- and keyed by the candidate name (`cast:<input>`) rather
+        # than by the key, because the key is what the person called the value
+        # and can be anything at all. The key is handed back as well, so the
+        # card can say where the reading lands rather than only that it does.
+        row["published_key"] = next(
+            (key for candidate, key in record.picks if candidate == f"cast:{name}"),
+            "",
+        )
         if name in record.flows:
             row["bound_kind"] = "flow"
             row["bound_to"] = module_host.flow_entity_id(record.slug, name)
@@ -4382,6 +4559,7 @@ _HANDLERS: tuple[Any, ...] = (
     ws_modules_host,
     ws_modules_settings,
     ws_modules_edit,
+    ws_modules_publish,
     ws_modules_config_switch,
     ws_modules_config_add,
     ws_modules_config_rename,

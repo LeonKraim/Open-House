@@ -1082,8 +1082,30 @@ const HOSTED_MODULES: HostedModule[] = [
     // One slot answered and one not, which is the pair of states the card has
     // to draw differently: the module runs, and it is waiting for a device.
     slots: [
-      { name: "ambient_light_sensor", bound: "sensor.kitchen_lux" },
-      { name: "ceiling_light", bound: "" },
+      {
+        name: "ambient_light_sensor",
+        input: "lux_sensor",
+        scope: "room",
+        part: "",
+        bound: "sensor.kitchen_lux",
+        bound_name: "Kitchen lux",
+        parts: [],
+      },
+      // Split into two parts, one bound and one not, because a split slot is the
+      // case the row's own control exists for: the module is on `west` and the
+      // device it acts on is the one that part was given.
+      {
+        name: "ceiling_light",
+        input: "lights",
+        scope: "room",
+        part: "west",
+        bound: "",
+        bound_name: "",
+        parts: [
+          { name: "west", label: "West", bound: "" },
+          { name: "east", label: "East", bound: "light.kitchen_east" },
+        ],
+      },
     ],
     automation_id: "automation.evening_lighting_kitchen",
     // Two configurations on the kitchen module, because that is what the
@@ -1967,6 +1989,40 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
       }
       return { module: slug, modules: HOSTED_MODULES };
     }
+    case COMMANDS.modulesPublish: {
+      // The switch beside a cast, and the one command here that makes an
+      // *entity* rather than changing a row: on, the module's published list
+      // gains the value and the row remembers the key it went out under; off,
+      // both go away again. The id is spelled the way the server spells it
+      // (`sensor.open_house_<slug>_<key>`) because the card reads the entity id
+      // off the module rather than building one, and a mock that left it out
+      // would draw a switch whose sentence never appeared.
+      guardStale(payload);
+      const slug = String(payload.module);
+      const name = String(payload.setting);
+      const publish = payload.publish === true;
+      const module = HOSTED_MODULES.find((row) => row.slug === slug);
+      const setting = module?.settings.find((row) => row.name === name);
+      if (module && setting) {
+        const key = setting.published_key ?? "";
+        if (publish && !key) {
+          const made = name;
+          setting.published_key = made;
+          module.outputs.push({
+            key: made,
+            kind: "string",
+            expression: "",
+            entity_id: `sensor.open_house_${slug}_${made}`,
+            value: null,
+          });
+        } else if (!publish && key) {
+          setting.published_key = "";
+          const at = module.outputs.findIndex((output) => output.key === key);
+          if (at !== -1) module.outputs.splice(at, 1);
+        }
+      }
+      return { module: slug, modules: HOSTED_MODULES };
+    }
     case COMMANDS.modulesConfigSwitch: {
       guardStale(payload);
       const module = HOSTED_MODULES.find(
@@ -2075,7 +2131,15 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
           // Waiting for everything the definition reaches through: a mock has
           // no devices to resolve them against, and an unanswered slot is the
           // state the card is most needed for.
-          slots: row.slots.map((slot) => ({ name: slot, bound: "" })),
+          slots: row.slots.map((slot) => ({
+            name: slot,
+            input: slot,
+            scope: "room",
+            part: "",
+            bound: "",
+            bound_name: "",
+            parts: [],
+          })),
           automation_id: "",
           config: "Default",
           configs: ["Default"],

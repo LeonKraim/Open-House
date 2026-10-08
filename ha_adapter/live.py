@@ -511,6 +511,29 @@ class LiveSession:
         )
         return updated
 
+    def part_bound_in(self, parent: str, part: str) -> tuple[str, ...]:
+        """Everywhere one part of one slot holds a device, by the name a person reads.
+
+        The other half of the sentence a *removal* is refused with. A part's device
+        is bound in a room, or by the house -- not on a module -- so dropping the
+        part from the record while a binding still names it would leave that room
+        naming a slot the vocabulary no longer carries, and the very rebuild this
+        removal triggers would refuse the whole house
+        (`engine.binding._validate`). The modules half of the refusal
+        (`live_modules.modules_on_part`) catches the modules; this catches the
+        device, and neither can be skipped: a part nobody's module is on is still
+        a part something is bound to.
+
+        The rooms are named rather than counted, and the house's own binding is
+        named as itself, because a person reading the refusal has to know which
+        page to go to.
+        """
+        key = part_key(parent, part)
+        found = [room.name for room in self.rooms if key in room.bindings]
+        if key in self.house_bindings:
+            found.append("the house")
+        return tuple(found)
+
     def rebind_slot_part(self, parent: str, was: str, name: str) -> tuple[str, ...]:
         """Move every binding that named one part onto the part's new name.
 

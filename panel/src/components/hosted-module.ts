@@ -41,6 +41,7 @@ import type { DetachedDetail } from "./detach.ts";
 import "../tabs/host-module.ts";
 import type {
   HostedModule,
+  HostedSlot,
   ModuleBinding,
   ModuleInputRow,
 } from "../api/models.ts";
@@ -655,6 +656,50 @@ export class HostedModuleCard extends OpenHouseElement {
     return true;
   }
 
+  /**
+   * Publish a row's logic as an entity anything may read, or stop publishing it.
+   *
+   * **Written on its own rather than through the auto-save**, because it is not
+   * one of this module's *answers*: what a module publishes is decided in the
+   * store and belongs to every room running it, while the auto-save writes the
+   * answers of the one copy this card is showing. Folding the two together would
+   * mean a switch on one room's card silently rewriting what the module is
+   * everywhere -- which is the right outcome and the wrong way to arrive at it,
+   * since the person is looking at a room.
+   *
+   * It is also the one control here that makes something exist *outside* the
+   * module: an entity the rest of Home Assistant may bind to, or may already be
+   * bound to. So it is sent as it is flipped, and the reply is not asked for --
+   * `module-changed` is, which is what makes the page re-read the module and
+   * this card render the entity id the server actually gave it.
+   */
+  private async setPublished(
+    setting: ModuleInputRow,
+    publish: boolean,
+  ): Promise<void> {
+    if (this.busy) return;
+    this.busy = true;
+    this.error = null;
+    this.notice = null;
+    this.requestUpdate();
+    try {
+      await this.requireClient().modulesPublish(
+        this.module.slug,
+        setting.name,
+        publish,
+        this.revision,
+      );
+      this.dispatchEvent(
+        new CustomEvent("module-changed", { bubbles: true, composed: true }),
+      );
+    } catch (error) {
+      if (!this.wentStale(error)) this.error = this.toError(error);
+    } finally {
+      this.busy = false;
+      this.requestUpdate();
+    }
+  }
+
   private async unhost(): Promise<void> {
     const title = this.module.title;
     // Before the module goes, so the auto-save cannot follow it: the card is
@@ -964,7 +1009,7 @@ export class HostedModuleCard extends OpenHouseElement {
       </div>
       ${this.errorBanner(this.error)}
       ${this.notice ? html`<div class="banner info">${this.notice}</div>` : nothing}
-      ${this.renderWaiting(module)}
+      ${this.renderWaiting(module)} ${this.renderSlots(module)}
       ${module.outputs.length === 0
         ? html`<p class="help">Publishes nothing.</p>`
         : html`<div class="list">
@@ -1214,6 +1259,14 @@ export class HostedModuleCard extends OpenHouseElement {
         // on the menu's, and a person who has just flipped the menu to a cast
         // they have not saved yet is not offered a detach that would refuse.
         const held = castHeldBy(setting);
+        // The output this row's logic is published as, when it is. Found in the
+        // module's own published list rather than spelled out here, because the
+        // entity id is a rule of the server's (`module_host.output_entity_id`)
+        // and a second copy of it in the panel is a second thing that can
+        // disagree with the first -- the one thing a screen may never do.
+        const published = module.outputs.find(
+          (output) => output.key === setting.published_key,
+        );
         // **One thing answers the row, and only one of them is drawn.** A cast is
         // the answer and not a remark about it -- a template is bound in place of
         // the choice, a condition's entity is what the input ends up pointed at,
@@ -1335,6 +1388,30 @@ export class HostedModuleCard extends OpenHouseElement {
                 }}
               ></open-house-detach>`
             : nothing}
+          ${held !== "none"
+            ? html`<label
+                class="check"
+                title="Home Assistant gets an entity holding this row's value, and any automation may read it -- one that has never heard of Open House included. The entity is taken away again when this is switched off."
+              >
+                <input
+                  type="checkbox"
+                  .checked=${Boolean(setting.published_key)}
+                  ?disabled=${this.busy}
+                  @change=${(event: Event) =>
+                    void this.setPublished(
+                      setting,
+                      (event.target as HTMLInputElement).checked,
+                    )}
+                />
+                <span>Also usable by any automation in Home Assistant</span>
+              </label>
+              ${published
+                ? html`<p class="help">
+                    Anything may read this row's value at
+                    <code>${published.entity_id}</code>.
+                  </p>`
+                : nothing}`
+            : nothing}
           ${mode === "template" && setting.in_trigger
             ? html`<p class="help warn">
                 A trigger names the entities it watches, and Home Assistant
@@ -1401,6 +1478,158 @@ export class HostedModuleCard extends OpenHouseElement {
       The automation is not created until that is, so nothing it publishes is
       being written.
     </div>`;
+  }
+
+  /**
+   * The devices this module does not own: the slots it reaches through.
+   *
+   * A module imported from a blueprint is answered with *roles*, not devices --
+   * "the room's lights", "the room's lux sensor" -- and the room binds the device
+   * behind each role once, for every module in it. So the row belongs on the card
+   * rather than under Settings: what a person needs to see is which device this
+   * module will actually act on, and the one thing they may change about it
+   * without leaving the card is which **part** of a split slot it is on.
+   *
+   * Shown even when every slot resolves, unlike the waiting banner above, because
+   * a slot that resolves is exactly the row a person came here to look at -- the
+   * card that only spoke up when something was wrong could not answer "which
+   * lights does this one actually drive?".
+   */
+  private renderSlots(module: HostedModule): TemplateResult | typeof nothing {
+    if (module.slots.length === 0) return nothing;
+    return html`<div class="stack" style="margin-top:10px">
+      <span class="muted small">Acts on</span>
+      ${module.slots.map((slot) => this.renderSlot(module, slot))}
+    </div>`;
+  }
+
+  /** One of those rows: the slot, the device it resolves to, and its part. */
+  private renderSlot(
+    module: HostedModule,
+    slot: HostedSlot,
+  ): TemplateResult {
+    const chosen = slot.parts.find((part) => part.name === slot.part) ?? null;
+    const id = `hosted-part-${module.slug}-${slot.name}`;
+    return html`<div class="stack" data-hosted-slot=${slot.name} style="margin-top:8px">
+      <div class="row wrap" style="align-items:center;gap:8px">
+        <code>${slot.name}</code>
+        <span
+          class="chip"
+          title=${slot.scope === "house"
+            ? "A role the whole house resolves, so this is the same device in every room."
+            : `Resolved in ${module.room_name}, by whichever device that room binds for it.`}
+          >${slot.scope === "house"
+            ? "whole house"
+            : `in ${module.room_name}`}</span
+        >
+        ${slot.part
+          ? html`<span
+              class="chip"
+              data-slot-part-chip=${slot.name}
+              title="This module is on one part of a split slot. Everything on this part acts on the one device the house bound for it."
+              >the ${chosen?.label ?? slot.part} part</span
+            >`
+          : nothing}
+        <span class="grow"></span>
+        ${slot.parts.length === 0
+          ? nothing
+          : html`<label class="muted small" for=${id}>Part</label>
+              <select
+                id=${id}
+                data-slot-part=${slot.name}
+                title="Which part of this split slot the module acts through. Everything on one part acts on one device."
+                ?disabled=${this.busy || this.stale}
+                .value=${slot.part}
+                @change=${(event: Event) =>
+                  void this.setSlotPart(
+                    module,
+                    slot,
+                    (event.target as HTMLSelectElement).value,
+                  )}
+              >
+                <option value="">The whole slot</option>
+                ${slot.parts.map(
+                  (part) => html`<option value=${part.name}>${part.label}</option>`,
+                )}
+              </select>`}
+      </div>
+      <p class="muted small" style="margin:0">
+        ${slot.bound
+          ? html`<span>${slot.bound_name || "a device"}</span>
+              <code>${slot.bound}</code>`
+          : html`Nothing bound${
+              slot.part ? ` for the ${chosen?.label ?? slot.part} part` : ""
+            } yet`}
+      </p>
+    </div>`;
+  }
+
+  /**
+   * Put this module on one part of a split slot, or back on the whole slot.
+   *
+   * Written as a **binding** and not as a setting, because that is what a slot
+   * answer is: the record keeps `{kind: "slot", slot, scope, part}` for the
+   * input, and the server rebuilds the module from it -- the part is a binding
+   * key of its own, so the device the automation is built with is the one the
+   * house bound for that part (`module_host.slot_key`).
+   *
+   * Sent alone and with nothing else named. `modulesSettings` merges the
+   * bindings it is given over the record and leaves every other kind of answer
+   * alone when it is not sent at all -- so a card that passed the whole form
+   * here would be re-sending answers the person never touched, and the empty
+   * flow list in particular is how the server is told to take the flows *off*.
+   */
+  private async setSlotPart(
+    module: HostedModule,
+    slot: HostedSlot,
+    part: string,
+  ): Promise<void> {
+    if (this.stale || this.busy) return;
+    this.busy = true;
+    this.error = null;
+    this.notice = null;
+    try {
+      const reply = await this.requireClient().modulesSettings(
+        module.slug,
+        {
+          [slot.input]: {
+            kind: "slot",
+            slot: slot.name,
+            scope: slot.scope === "house" ? "house" : "room",
+            part,
+          },
+        },
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        this.revision,
+      );
+      const saved =
+        reply.modules.find((row) => row.slug === module.slug) ?? module;
+      this.module = saved;
+      this.dispatchEvent(
+        new CustomEvent("module-changed", { bubbles: true, composed: true }),
+      );
+      const where = saved.slots.find((one) => one.name === slot.name);
+      const named =
+        part === ""
+          ? "the whole slot"
+          : `the ${where?.parts.find((one) => one.name === part)?.label ?? part} part`;
+      // Two sentences, because two different things have happened: the module is
+      // on the part either way, and whether it *acts* depends on whether the
+      // house has bound that part to a device.
+      this.notice = where?.bound
+        ? `${module.title} now acts on ${named} of ${slot.name}: ${where.bound}.`
+        : `${module.title} is on ${named} of ${slot.name}, and nothing is bound ` +
+          "there yet -- bind a device for that part in the room it sits in, and " +
+          "the module acts on it.";
+    } catch (error) {
+      if (!this.wentStale(error)) this.error = this.toError(error);
+    } finally {
+      this.busy = false;
+      this.requestUpdate();
+    }
   }
 
   private inputsOf(module: HostedModule): TemplateResult | typeof nothing {

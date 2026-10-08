@@ -812,8 +812,9 @@ export class HouseTab extends OpenHouseElement {
    *
    * Binding a part goes through the *house's* picker (`openPicker`, the same one
    * the slot itself uses), because a part's device is a house binding under the
-   * part's own key. Nothing on the block writes: a part is added, renamed or
-   * rejoined, and its device bound, by the same controls a room's page draws.
+   * part's own key -- and taking that device off again is the house's unbind, one
+   * row down. Nothing on the block writes: a part is added, renamed or rejoined,
+   * and its device bound or cleared, by the same controls a room's page draws.
    */
   private renderParts(slot: HouseSlot): TemplateResult | typeof nothing {
     if (!this.admin && slot.parts.length === 0) return nothing;
@@ -825,6 +826,10 @@ export class HouseTab extends OpenHouseElement {
       draft: (key) => this.partDrafts[key],
       onDraft: (key, value) => this.editPart(key, value),
       onBind: (part) => void this.openPicker(part.slot, part.entity_id !== null),
+      onUnbind: (part) =>
+        void this.act(`binding:${part.slot}`, () =>
+          this.requireClient().unbind(HOUSE_ID, part.slot, this.revision),
+        ),
       onAct: (action, name, newName) =>
         void this.setPart(slot.slot, action, name, newName ?? ""),
     });

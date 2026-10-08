@@ -60,7 +60,24 @@ interface ListResponse<T> {
  * short in the common case and occasionally not short at all; the total is
  * under three seconds, which is inside the time a person reads a screen.
  */
-const RETRY_DELAYS_MS = [250, 700, 1800];
+/**
+ * How long to keep asking while a reload takes the house away, in delay-per-gap.
+ *
+ * **Measured, not guessed, and widened once already.** The first list stopped
+ * after 2.75s in total, which is shorter than the thing it was waiting for: one
+ * integration reload of this house took 8s (a part rename at 15:05:29, the
+ * house back at 15:05:37), so a page that wrote and then read was spending its
+ * whole budget inside a single window and drawing the reload as a failure --
+ * which is the stale page, seen from underneath. These five gaps cover ~15s,
+ * which is longer than a reload of this integration has been observed to take
+ * and still bounded, because the window is a reload and not an absence.
+ *
+ * The cost is real and is the trade being made: a house that is *never* coming
+ * back now takes 15s to say so. That case is `not_setup` -- no entry at all --
+ * or a refusal about the request itself, and neither is retried, so what waits
+ * is only ever the gap a reload leaves.
+ */
+const RETRY_DELAYS_MS = [250, 750, 2000, 4000, 8000];
 
 /**
  * `revision`, when the caller has one, as a payload key to spread.
@@ -882,6 +899,39 @@ export class OpenHouseClient {
       kind,
       ...handle,
       ...definition,
+    });
+  }
+
+  /**
+   * Publish one row's logic as an entity anything may read, or stop.
+   *
+   * **The whole of "expose it to the rest of the house", as one switch.** A row
+   * answered with logic -- a template, a condition, a flow, a script -- already
+   * holds a value, and what this does is put that value at
+   * `sensor.open_house_<module>_<key>`, which is an entity like any other: the
+   * rest of Home Assistant and its automations can use it without knowing this
+   * integration exists. Off takes the entity away again.
+   *
+   * `setting` names the *input* rather than the output key, because the key is
+   * the person's to choose and the input is what the row is. The server slugs the
+   * input's own name for the key. It is the module's value and not one room's, so
+   * every installation follows -- which is why this answers with the whole house.
+   */
+  modulesPublish(
+    module: string,
+    setting: string,
+    publish: boolean,
+    revision?: number,
+  ): Promise<{
+    module: string;
+    modules: HostedModule[];
+    store: ModuleOfferRow[];
+  }> {
+    return this.call(COMMANDS.modulesPublish, {
+      module,
+      setting,
+      publish,
+      ...withRevision(revision),
     });
   }
 

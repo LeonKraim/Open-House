@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from .module_host import read_module_source
-from .module_records import ModuleRecord, Variant
+from .module_records import ModuleRecord, Variant, slug
 from .pack_authoring import AuthoringError
 
 __all__ = [
@@ -330,6 +330,55 @@ class ModuleDefinition:
                 else tuple(str(one) for one in scripts if one)
             ),
         )
+
+
+def published_key(setting: str) -> str:
+    """The output key a row is published under when nothing asks for a name.
+
+    The row's own name, slugged -- which is where the import screen starts its
+    key field (`websocket_api._suggested_key`), so a value ticked there and a
+    value toggled beside the row end up called the same thing. A name no rule can
+    map to a key is refused rather than mangled: a key is part of an entity id
+    (`sensor.open_house_<slug>_<key>`), and an entity id guessed out of a name is
+    one nobody can predict either.
+    """
+    return slug(setting)
+
+
+def published_picks(
+    picks: Sequence[tuple[str, str]], setting: str, publish: bool
+) -> tuple[tuple[str, str], ...]:
+    """The picks as publishing -- or unpublishing -- one row leaves them.
+
+    A pick is `(candidate name, output key)`, and the candidate of a row answered
+    with logic is `cast:<input>` (`module_host.output_candidates`). That pair is
+    the whole of the link between a switch sitting on an input and the value that
+    input publishes, which is why the row is found by *candidate* and never by
+    key: the key is what a person called the value, and a person may call it
+    anything at all.
+
+    Unpublishing removes that one pick and nothing else, so a value ticked at
+    import and switched off from the row stops being published rather than being
+    renamed or quietly left behind.
+
+    A key another output already uses is refused rather than added: two outputs
+    with one key are one entity and a fight over which of them is reading it.
+    `declare_outputs` writes the same refusal, but it writes it at *build* time --
+    and a definition is stored before anything is built, so a collision left to
+    the build would leave a module that cannot be built at all.
+    """
+    candidate = f"cast:{setting}"
+    kept = tuple(pick for pick in picks if pick[0] != candidate)
+    if not publish:
+        return kept
+    key = published_key(setting)
+    if any(other == key for _name, other in kept):
+        raise AuthoringError(
+            f"this module already publishes something called {key!r}, and two "
+            "outputs with one name would share one entity and overwrite each "
+            "other. Rename the other one first, or leave this row unpublished"
+        )
+    return (*kept, (candidate, key))
 
 
 def follow(
