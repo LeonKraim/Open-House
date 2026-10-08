@@ -461,3 +461,65 @@ def test_every_device_selector_the_panel_knows_is_named_for_it() -> None:
     assert kind({"selector": {"select": {"options": ["a"]}}}) == "select"
     assert kind({"selector": {"colour_rgb": {}}}) == "text"
     assert kind({}) == "text"
+
+
+# --------------------------------------------------------------------------
+# Which page a revision guard refuses
+# --------------------------------------------------------------------------
+
+
+class _House:
+    """Enough of a host to hold the number a page is judged against."""
+
+    def __init__(self, revision: int) -> None:
+        self.session = type("Session", (), {"revision": revision})()
+
+
+def _stale_function() -> Any:
+    return _compiled(
+        WS_MODULE, "_stale", {"STALE_PAGE": _constants(WS_MODULE)["STALE_PAGE"]}
+    )
+
+
+def test_a_page_ahead_of_the_house_is_answered_and_one_behind_it_is_refused() -> None:
+    """**The guard asks whether the set has *passed* the page, not whether it differs.**
+
+    A page renders the house at one revision and sends that number back with
+    every write, so "this page is describing a house that is no longer here"
+    means the set has moved *past* it. It was written as an equality test, which
+    is the same question only while the counter never goes backwards -- and it
+    does go backwards. Every room binding and every hosted-module write is a
+    configuration-subentry update, and Home Assistant reloads the whole entry for
+    one: the rebuilt profile set started again from zero. A page holding the
+    number it had before the reload was then refused *for good*, because a
+    counter climbing from zero cannot come back to a number it has lost, and
+    every open page went read-only behind the "this page is out of date" backdrop
+    after a single profile switch.
+
+    Both halves of that state are reachable here and they are answered
+    differently: a page behind the house is refused, a page ahead of it -- the
+    one a rebuild that could not resume the count leaves behind -- is answered.
+    """
+    stale = _stale_function()
+    constants = _constants(WS_MODULE)
+
+    connection = _Connection()
+    assert stale(connection, {"id": 1, "revision": 6}, _House(6)) is False
+    assert connection.sent == []
+
+    # A rebuild that lost the count: the page is holding a number this set no
+    # longer has, and the house it describes is the house it was rendered from.
+    connection = _Connection()
+    assert stale(connection, {"id": 2, "revision": 5}, _House(3)) is False
+    assert connection.sent == []
+
+    # And the guard still fires for the page it is for.
+    connection = _Connection()
+    assert stale(connection, {"id": 3, "revision": 2}, _House(3)) is True
+    assert [code for _id, code, _text in connection.sent] == [constants["STALE_PAGE"]]
+    assert [mid for mid, _code, _text in connection.sent] == [3]
+
+    # A caller that never rendered a page makes no claim to check.
+    connection = _Connection()
+    assert stale(connection, {"id": 4}, _House(3)) is False
+    assert connection.sent == []

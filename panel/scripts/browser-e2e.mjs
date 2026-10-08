@@ -746,10 +746,22 @@ try {
       (b) => (b.textContent ?? "").trim().startsWith("Activate"),
     ).length,
     active: window.__deepAll("open-house-tab-profiles .chip.ok").map((c) => (c.textContent ?? "").trim()),
+    // Which profile reads as in force *before* the click, by name. Read because
+    // the claim below is that the click *moved* the house, and "the profile I
+    // clicked is in force afterwards" is also true of a click that did nothing
+    // on a house that was already on it -- see the check.
+    force: window
+      .__deepAll("open-house-tab-profiles .card")
+      .filter((card) => card.querySelector("h3") && !card.querySelector(".card"))
+      .filter((card) =>
+        [...card.querySelectorAll(".chip")].some((chip) => /in force/i.test(chip.textContent ?? "")),
+      )
+      .map((card) => (card.querySelector("h3")?.textContent ?? "").trim()),
     selects: window.__deepAll("open-house-tab-profiles select").length,
   }));
   log(`  sections: ${profilePage.headings.join(", ") || "(none)"}`);
   log(`  activate buttons: ${profilePage.activate}; per-room axes: ${profilePage.selects}; active: ${profilePage.active.join(", ") || "(none)"}`);
+  log(`  in force before the click: ${profilePage.force.join(", ") || "(nothing)"}`);
   if (!profilePage.here) fail("the Profiles tab did not render");
   if (profilePage.error) fail("the Profiles tab answered with an error");
   if (profilePage.activate > 0) {
@@ -786,6 +798,28 @@ try {
       )
       .catch(() => fail("the Profiles tab never finished activating a profile"));
     await sleep(500);
+    // What the *server* says, read through the page that just asked it.
+    //
+    // A card and the house disagreeing is the whole of this step's failure, and
+    // which of the two is wrong is not something the screen can say: the panel
+    // may not have redrawn, or the write may not have landed. So both are read
+    // and both are printed, and the failure line carries the evidence rather
+    // than an accusation. The screen's own two fields come with it -- a tab that
+    // is still busy is a tab that has not read the answer yet, and one holding
+    // an error is a tab that was told no.
+    const house = await page.evaluate(async () => {
+      const tab = window.__deepAll("open-house-tab-profiles")[0];
+      const panel = window.__deepAll("open-house-panel")[0];
+      const answer = await panel.hass.callWS({ type: "open_house/profiles/list" });
+      return {
+        busy: tab?.busy,
+        refused: tab?.error === null || tab?.error === undefined ? null : tab.error,
+        list: (answer.profiles ?? [])
+          .filter((profile) => profile.kind === "house")
+          .map((profile) => `${profile.name}${profile.active ? " (in force)" : ""}`),
+      };
+    });
+    log(`  the house says: ${house.list.join(", ") || "(none)"} [busy: ${house.busy}, refused: ${house.refused === null ? "no" : JSON.stringify(house.refused)}]`);
     const after = await page.evaluate(() =>
       window
         .__deepAll("open-house-tab-profiles .card")
@@ -808,8 +842,17 @@ try {
     log(`  after activating: ${inForce.join(", ") || "(nothing reads as in force)"}`);
     if (chosen === null) {
       fail("could not tell which house profile that button belongs to");
-    } else if (!after.some((row) => row.name === chosen && row.inForce)) {
-      fail(`activating ${chosen} did not put it in force`);
+    } else if (inForce.length !== 1 || inForce[0] !== chosen) {
+      // **Exactly the one that was clicked, and nothing else.** Asking only
+      // "is the clicked profile in force" cannot fail when the click did
+      // nothing and the card list is reading a house that was already on it --
+      // and a card left saying the *old* profile is still in force is the
+      // screen disagreeing with the house, which is the whole of this step's
+      // failure. One chip, naming the profile the button was under.
+      fail(
+        `activating ${chosen} left ${inForce.join(", ") || "nothing"} in force` +
+          ` (was: ${profilePage.force.join(", ") || "nothing"})`,
+      );
     }
   }
 

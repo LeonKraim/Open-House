@@ -369,7 +369,20 @@ def _restored(session: LiveSession, profile: Profile) -> None:
     # on the first split slot the profile named, and the raise would be *partway
     # through*: everything above has already landed, so the house would be left
     # half on the profile it was coming off and half on the one it is going on.
-    session.set_slot_parts(recorded_slot_parts(setup.get("slot_parts")))
+    #
+    # **An absent key is not an empty one.** Every capture this build writes
+    # carries `slot_parts`, empty or not, because a split slot is a question this
+    # build knows how to ask -- so a snapshot with no `slot_parts` key is one
+    # written before the house could split a slot at all, which is the same
+    # "predates the field" tolerance `_room_rows` shows for a profile that names
+    # no rooms. Reading it as `{}` -- which the lenient reader answers for a
+    # missing key, because a *store* whose parts have gone really has none --
+    # would take every part off a house for the offence of switching to an older
+    # profile, and every module sitting on one would quietly fall back to the
+    # slot's whole device: half a room's lights in place of the half it was
+    # pointed at, and nothing on the screen to say so.
+    if "slot_parts" in setup:
+        session.set_slot_parts(recorded_slot_parts(setup["slot_parts"]))
 
     bound = _mapping(setup.get("house_bindings"), "house_bindings")
     for slot in set(session.house_bindings) - set(bound):

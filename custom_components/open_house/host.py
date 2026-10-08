@@ -155,6 +155,29 @@ class OpenHouseHost:
         #: its way back in -- see `async_save`.
         self._restoring = False
 
+    @property
+    def is_restoring(self) -> bool:
+        """Whether the house is midway through being put back.
+
+        Read by `__init__._async_reload_entry`, and the reason is worth stating
+        here as well as there: **a restore writes config subentries, and one
+        write of a subentry reloads the entry.** Every room's bindings are
+        written back one at a time, so a reload lands in the middle of a restore
+        by construction -- and a reload composes the house out of the subentries
+        *and the store together*, at a moment when both are only part of the way
+        to the profile being put back. The house that came up was the house from
+        before the restore, on the profile from before it, and it stayed that way
+        until something else happened to reload the entry. A person put the house
+        on a profile and watched the screen say it had not moved.
+
+        So the reload is skipped for the duration, and the restore is left to be
+        atomic: by the time it returns, the subentries, the store and the running
+        session all say the restored house, which is what a reload would have
+        built anyway. The flag is cleared in a `finally`, and a reload arriving
+        after that is an ordinary one.
+        """
+        return self._restoring
+
     # -- Reads --------------------------------------------------------------
 
     def room(self, room_id: str) -> RoomRef | None:

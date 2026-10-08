@@ -245,6 +245,43 @@ def test_a_duplicate_profile_name_is_refused(schema: Mapping[str, object]) -> No
         _set(schema, _room("bright", "lighting"), _room("bright", "climate"))
 
 
+def test_the_revision_survives_a_document_round_trip(
+    schema: Mapping[str, object],
+) -> None:
+    """**The number a page is judged against has to outlive a rebuild.**
+
+    A set is rebuilt far more often than it is moved: every room binding and
+    every hosted-module write is a configuration-subentry update, and Home
+    Assistant reloads the whole entry for one. The set the reload builds is read
+    back out of the store, so a revision that is not written down starts again
+    from zero -- and a page holding the number it rendered from is then refused
+    for good, because a counter climbing from zero never returns to a number it
+    has lost. The page does not recover until somebody reloads it by hand.
+
+    A document from a version that did not write the number reads as a set that
+    has never moved, which is what `revision` answers when it is absent rather
+    than zero-by-accident.
+    """
+    profiles = _set(
+        schema,
+        _room("bright", "lighting", **{KEY: 120.0}),
+        _house("vacation", {"foyer": {"lighting": "bright"}}),
+    )
+    profiles.activate_house_profile("vacation")
+    assert profiles.revision == 1
+
+    rebuilt = ProfileSet.from_document(profiles.to_document(), schema=schema)
+    assert rebuilt.revision == 1
+    # And the round trip is a round trip: moving on from the resumed number
+    # counts from where the house was rather than from where the rebuild started.
+    rebuilt.deactivate_house_profile()
+    assert rebuilt.revision == 2
+
+    written = profiles.to_document()
+    del written["revision"]
+    assert ProfileSet.from_document(written, schema=schema).revision == 0
+
+
 def test_the_set_round_trips_through_its_document(schema: Mapping[str, object]) -> None:
     profiles = _set(
         schema,
@@ -341,7 +378,9 @@ def test_exporting_the_set_writes_the_profiles_and_not_the_selections(
     the set form carries the profiles only. `to_document` is the *state* document
     and does carry them; the two are different documents for different jobs, and
     a set form that quietly included the state would be a file that half-applies
-    in a house whose rooms are named differently.
+    in a house whose rooms are named differently. The revision is state too, for
+    the reason `to_document` gives: it is what a page is judged against, and it
+    has to outlive the entry reload rather than travel in a file.
     """
     profiles = _set(
         schema,
@@ -354,7 +393,12 @@ def test_exporting_the_set_writes_the_profiles_and_not_the_selections(
 
     assert set(document) == {"profiles"}
     assert [row["name"] for row in document["profiles"]] == ["bright", "vacation"]
-    assert set(profiles.to_document()) == {"profiles", "selections", "house_profile"}
+    assert set(profiles.to_document()) == {
+        "profiles",
+        "selections",
+        "house_profile",
+        "revision",
+    }
 
 
 def test_an_exported_set_rebuilds_into_a_set_that_holds_the_same_profiles(

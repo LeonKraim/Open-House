@@ -536,20 +536,39 @@ class ProfileSet:
     # -- Documents ----------------------------------------------------------
 
     def to_document(self) -> dict[str, object]:
-        """The whole set: every profile and the selections in force."""
+        """The whole set: every profile, the selections in force, and the revision.
+
+        `revision` is written down because a set is rebuilt more often than it is
+        *moved*: every room binding and every hosted-module write is a
+        configuration-subentry update, and Home Assistant reloads the whole entry
+        for one. A rebuilt set that started counting again from zero would tell a
+        page -- which renders one number and sends it back with every write -- that
+        the house it is looking at is a house this set has passed, when the truth
+        is the opposite: nothing moved at all. The page is then refused for good,
+        because a counter climbing from zero cannot come back to the number the
+        page is holding. Carried, the number means what `revision` says it means
+        across a reload and across a restart.
+        """
         return {
             "profiles": [
                 self._profiles[name].to_document() for name in sorted(self._profiles)
             ],
             "selections": self.selections(),
             "house_profile": self._house_profile,
+            "revision": self._revision,
         }
 
     @classmethod
     def from_document(
         cls, document: Mapping[str, object], *, schema: Mapping[str, object]
     ) -> ProfileSet:
-        """Rebuild a set from `to_document`'s form, failing by naming what is wrong."""
+        """Rebuild a set from `to_document`'s form, failing by naming what is wrong.
+
+        The revision is resumed rather than reset (`to_document` says why). A
+        document without one -- a house stored by a version that did not write it,
+        an exported set, a test -- starts at zero, which is the number a set that
+        has never moved answers.
+        """
         profiles = document.get("profiles")
         if not isinstance(profiles, list):
             raise ProfileError("a profile document must hold a 'profiles' list")
@@ -564,6 +583,9 @@ class ProfileSet:
         house_profile = document.get("house_profile")
         if house_profile is not None:
             rebuilt._house_profile = str(house_profile)
+        resumed = document.get("revision")
+        if isinstance(resumed, int) and not isinstance(resumed, bool) and resumed > 0:
+            rebuilt._revision = resumed
         return rebuilt
 
 

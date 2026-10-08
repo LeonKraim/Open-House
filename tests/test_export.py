@@ -226,7 +226,19 @@ def test_export_then_import_is_the_identity(
     profile_schema: Mapping[str, object],
     export_schema: Mapping[str, object],
 ) -> None:
-    """The exit criterion: a configuration survives a write and a read unchanged."""
+    """The exit criterion: a configuration survives a write and a read unchanged.
+
+    The one key an export does not carry is the profile set's move counter
+    (`ProfileSet.revision`), and the one assertion below steps around it says
+    why: a backup is a configuration, and a revision is where a house stands in
+    its own history -- which no document the export schema describes has a field
+    for, deliberately, because a backup read into a *different* house would
+    otherwise claim to be that house's past. It is not a hole in the identity:
+    the counter is compared separately, and an import lands at the start of a
+    fresh life without refusing the pages that were open against the old one,
+    because the guard refuses a page *behind* the house and not one merely
+    different from it (`websocket_api._stale`).
+    """
     house = House.from_document(document, vocabulary=vocabulary)
     profiles = data.draw(_profile_sets(profile_schema))
     modes = data.draw(
@@ -250,7 +262,15 @@ def test_export_then_import_is_the_identity(
         exported, vocabulary=vocabulary, profile_schema=profile_schema
     )
     assert backup.house == house
-    assert backup.profiles.to_document() == profiles.to_document()
+    written = {
+        key: value for key, value in profiles.to_document().items() if key != "revision"
+    }
+    assert {
+        key: value
+        for key, value in backup.profiles.to_document().items()
+        if key != "revision"
+    } == written
+    assert backup.profiles.revision == 0
     assert backup.modes == tuple(modes)
 
 

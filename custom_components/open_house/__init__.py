@@ -369,7 +369,31 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload when the entry or one of its room subentries changes."""
+    """Reload when the entry or one of its room subentries changes.
+
+    **Not while a profile is being put back.** A restore writes every room's
+    bindings back one subentry at a time, and a subentry write is what calls
+    this -- so a reload lands partway through a restore by construction. A reload
+    composes the house from the subentries *and* the store together, and partway
+    through a restore both are only some of the way to the profile being put
+    back: the house that came up was the one from before the restore, on the
+    profile from before it, and it stayed that way because nothing else reloaded
+    the entry. The person had activated a profile and the screen went on showing
+    the old one -- while the store, written by the restore that was still
+    running, said the new one.
+
+    The restore is atomic without the reload: it writes each part through the
+    same door a person's edit goes through, so when it returns the subentries,
+    the store and the running session all say the restored house -- which is
+    exactly what a reload would have built. `OpenHouseHost.is_restoring` holds
+    the reasoning from the other side; an ordinary reload is one that arrives
+    after the flag is cleared.
+    """
+    key = _session_data_key()
+    sessions = hass.data.get(DOMAIN, {}).get(key, {}) if key is not None else {}
+    live = sessions.get(entry.entry_id) if isinstance(sessions, dict) else None
+    if live is not None and getattr(live, "is_restoring", False):
+        return
     await hass.config_entries.async_reload(entry.entry_id)
 
 

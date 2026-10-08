@@ -783,6 +783,68 @@ def test_a_split_slot_and_a_house_binding_on_a_part_are_put_back() -> None:
     assert "light_group__a" in session.engine.house.vocabulary.slots
 
 
+def test_a_snapshot_that_predates_parts_does_not_take_them_off_the_house() -> None:
+    """**An absent `slot_parts` is not an empty one.**
+
+    Every capture this build makes writes the key, empty or not, because a split
+    slot is a question this build knows how to ask -- so a snapshot with no
+    `slot_parts` at all is one written before the house could split a slot, the
+    same "predates the field" tolerance `_room_rows` shows for a profile that
+    names no rooms. Read through the lenient reader, which answers `{}` for a
+    missing key because a *store* whose parts have gone really has none, it took
+    every part off the house for the offence of switching to an older profile --
+    and nothing said so. Every module sitting on a part then falls back to the
+    slot's whole device (`slot_parts_of` reports a part the house does not carry
+    as no part at all), so half a room's lights move in place of the half that
+    was asked for.
+
+    The second half is what keeps the tolerance narrow: a snapshot that *does*
+    carry the key is a statement about parts, and an empty one means the house
+    had none.
+
+    The bindings are left out of the claims here because they behave as
+    documented and not as the parts do: a restore is putting the house back and
+    not merging into it, so a snapshot naming no bindings takes the house's off,
+    and the part this test's binding named goes with them. What the fix buys is
+    that the *record* stays, so a module on a part is still on that part.
+    """
+    session = _session(
+        profiles_=_profile_set(
+            (
+                _house_profile(
+                    "monday", setup={"house_settings": {SUN: 4.0}, "modules": []}
+                ),
+            )
+        )
+    )
+    session.set_slot_parts({"light_group": ("a", "b")})
+
+    activate_house(session, profile="monday")
+
+    assert dict(session.slot_parts) == {"light_group": ("a", "b")}
+    # The part is a vocabulary word the restore kept, so the engine carries it.
+    assert "light_group__a" in session.engine.house.vocabulary.slots
+
+    # A snapshot that speaks about parts still puts the whole record back: an
+    # empty `slot_parts` is the house saying it had none.
+    splitting = _session(
+        profiles_=_profile_set(
+            (
+                _house_profile(
+                    "tuesday",
+                    setup={"house_settings": {SUN: 4.0}, "slot_parts": {}},
+                ),
+            )
+        )
+    )
+    splitting.set_slot_parts({"light_group": ("a", "b")})
+
+    activate_house(splitting, profile="tuesday")
+
+    assert dict(splitting.slot_parts) == {}
+    assert "light_group__a" not in splitting.engine.house.vocabulary.slots
+
+
 def test_a_snapshot_of_a_room_this_house_no_longer_has_is_skipped() -> None:
     """A room the house has since removed is a room it cannot be set back to.
 

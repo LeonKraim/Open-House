@@ -276,9 +276,20 @@ def _stale(
     something that is not a page -- the CLI, an automation, a test -- and it is
     answered rather than refused, because the number is a claim about a *screen*
     and a caller that never rendered one makes no claim to check.
+
+    **Older than, not different from.** The question `revision` answers is whether
+    this set has *passed* the number the page is holding, so that is the test:
+    a page ahead of this set is not a page describing another house, it is a page
+    holding a number this set no longer has -- which is what a rebuild that could
+    not resume the count leaves behind. Comparing for equality instead read that
+    page as stale, and refused it *for good*: a counter climbing from zero cannot
+    come back to a number it has lost, so one profile switch was enough to make
+    every open page refuse every write until somebody reloaded it by hand. Judge
+    by the rule and the pages that have genuinely been passed are still refused,
+    while the ones that merely outlived a rebuild are answered.
     """
     sent = msg.get("revision")
-    if sent is None or int(sent) == host.session.revision:
+    if sent is None or int(sent) >= host.session.revision:
         return False
     connection.send_error(
         msg["id"],
@@ -1515,6 +1526,17 @@ async def ws_profile_activate_house(
     except LiveSessionError as refusal:
         _error(connection, msg, refusal)
         return
+    # **The move is written down before the house is put back.** Putting a taken
+    # profile back is a config-subentry write per room, and a subentry write is
+    # what makes Home Assistant reload the entry -- so the store has to be right
+    # *before* the first of them, not after the last. Saved afterwards, a reload
+    # that lands in the window reads a store still naming the profile the house
+    # was on a moment ago, composes the house from that, and the activation is
+    # undone by the act of performing it. This is the same rule, and the same
+    # reason, as `async_set_slot_parts`'s "the record is saved before any room is
+    # written"; `__init__._async_reload_entry` is the other half of it, which
+    # skips the reload altogether while the restore is in flight.
+    await _saved(host)
     held = host.session.profiles.profile(msg["profile"])
     if held.snapshot:
         # The profile is on; putting its house back is the follow-up, and its
