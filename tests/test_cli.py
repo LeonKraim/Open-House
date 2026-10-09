@@ -22,6 +22,7 @@ reached the operation before it was refused, is what each is written against.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -85,10 +86,38 @@ def commands() -> dict[str, Any]:
     return dict(group.commands)
 
 
+#: An escape sequence, as Rich writes one: `CSI`, parameters, a final letter.
+_ESCAPE = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]")
+
+
+class PlainRunner(CliRunner):
+    """A runner that reports what a page says rather than how it is painted.
+
+    Typer renders every help page and every usage error through Rich, and Rich
+    decides to paint from the environment rather than from the stream: typer
+    builds its console with `force_terminal=True` when `GITHUB_ACTIONS`,
+    `FORCE_COLOR` or `PY_COLORS` is set (`typer/rich_utils.py`). The same
+    invocation is therefore plain here and coloured on a CI runner, which is how
+    this module's help and usage assertions passed in one place and failed in the
+    other. `CliRunner.invoke`'s `color` argument cannot turn it off: its
+    `should_strip_ansi` patch reaches the click utilities, and Rich -- which is
+    what renders the page -- never asks them. What these tests assert is the
+    words, so the escape sequences are removed at the one seam every invocation
+    in this module goes through, rather than at each assertion that could meet
+    one.
+    """
+
+    def invoke(self, *args: Any, **kwargs: Any) -> Result:
+        result = super().invoke(*args, **kwargs)
+        for attribute in ("stdout_bytes", "stderr_bytes", "output_bytes"):
+            setattr(result, attribute, _ESCAPE.sub(b"", getattr(result, attribute)))
+        return result
+
+
 @pytest.fixture
 def runner() -> CliRunner:
     """A runner per test, so no invocation reads state another one left."""
-    return CliRunner()
+    return PlainRunner()
 
 
 def _document(result: Result) -> Any:

@@ -53,9 +53,7 @@ def _imported_names(*directories: Path) -> set[str]:
                 if isinstance(node, ast.Import):
                     names.update(alias.name.split(".")[0] for alias in node.names)
                 elif (
-                    isinstance(node, ast.ImportFrom)
-                    and not node.level
-                    and node.module
+                    isinstance(node, ast.ImportFrom) and not node.level and node.module
                 ):
                     names.add(node.module.split(".")[0])
     return names
@@ -115,7 +113,9 @@ def test_the_archive_root_is_the_path_hacs_copies(tmp_path: Path) -> None:
 
     prefix = f"{package_integration.INTEGRATION.as_posix()}/"
     assert names, "the archive is empty"
-    assert all(name.startswith(prefix) for name in names), "the archive has a stray root"
+    assert all(name.startswith(prefix) for name in names), (
+        "the archive has a stray root"
+    )
     assert f"{prefix}manifest.json" in names
 
 

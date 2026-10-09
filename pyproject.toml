@@ -52,6 +52,17 @@ dev = [
     # D13); the survivor threshold and the report naming survivors are task
     # 9.5's, and this only declares the tool they run through.
     "mutmut>=3.8",
+    # Three files under `tools/` speak Home Assistant's websocket API to a
+    # running instance -- `tools/ha/probe_flows.py`, `tools/ha/probe_hosting.py`
+    # and `tools/_clean_hosted.py` -- and aiohttp is what they speak it with.
+    # They are developer tooling and `tools/ha` is not shipped, so the
+    # distribution belongs to the harness rather than to the product: in
+    # `[project.dependencies]` it would enter the engine-purity declaration and
+    # make an import of it legal under `engine/`. It is named here rather than
+    # left to the machine because pyright checks `tools` in strict mode and a
+    # CI runner has no aiohttp to resolve the import against, while a
+    # developer's pyright will find stubs for it and report nothing.
+    "aiohttp>=3.9",
     "ruff>=0.6",
     "pyright>=1.1.380",
     "pre-commit>=3.8",
