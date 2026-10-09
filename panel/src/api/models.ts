@@ -677,11 +677,11 @@ export interface StoreEntry {
  *
  * The document itself is not here, and that is deliberate: a page of twenty
  * modules does not need twenty definitions parsed, and the one that does is the
- * one being installed (`storeInstall` fetches it by id). This is what a person
- * decides from -- who made it, how other people found it, what it is called.
+ * one being installed (`publishedInstall` fetches it by id). This is what a
+ * person decides from -- who made it, how other people found it, what it is called.
  */
 export interface PublishedRow {
-  /** The Store's own record id: what `storeInstall` and `storeRate` are given. */
+  /** The Store's own record id: what `publishedInstall` and `publishedRate` are given. */
   id: string;
   slug: string;
   title: string;

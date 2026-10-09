@@ -1,0 +1,309 @@
+blueprint:
+  name: Dynamic Lighting for Better Sleep
+  description: "Adjusts light brightness based on lux and weather. Transitions color
+    temperature from daylight (e.g., 5500K) to evening warmth (e.g., 2300K) starting
+    a configurable number of minutes before sunset. If the ambient lux is above the
+    maximum threshold, it immediately turns off the lights. Otherwise, it computes
+    brightness and color values. The automation is skipped if a bypass light (e.g.,
+    movie mode) is on. Also configurable:\n  • Minimum and maximum brightness as percentages
+    (min 5–50%, max 50–100%),\n  • The duration (in minutes) before sunset over which
+    the color temperature transitions.\n"
+  domain: automation
+  input:
+    lux_sensor:
+      name: Lux Sensor
+      description: The sensor that reports current light levels (in lux).
+      selector:
+        entity:
+          domain:
+          - sensor
+          multiple: false
+          reorder: false
+    weather_entity:
+      name: Weather Entity
+      description: Weather entity used to detect cloudy vs. clear conditions.
+      selector:
+        entity:
+          domain:
+          - weather
+          multiple: false
+          reorder: false
+    day_color_temp:
+      name: Day Color Temp (Kelvin)
+      description: The color temperature for daytime (e.g., 5500K).
+      default: 5500
+      selector:
+        number:
+          min: 3000.0
+          max: 6500.0
+          step: 100.0
+          unit_of_measurement: K
+          mode: slider
+    evening_color_temp:
+      name: Evening Color Temp (Kelvin)
+      description: The color temperature for evening (e.g., 2300K).
+      default: 2300
+      selector:
+        number:
+          min: 1800.0
+          max: 3500.0
+          step: 100.0
+          unit_of_measurement: K
+          mode: slider
+    min_lux_clear:
+      name: Min Lux (Clear Weather)
+      description: Lowest lux threshold on clear days.
+      default: 300
+      selector:
+        number:
+          min: 0.0
+          max: 2000.0
+          step: 50.0
+          mode: slider
+    max_lux_clear:
+      name: Max Lux (Clear Weather)
+      description: Highest lux threshold on clear days.
+      default: 950
+      selector:
+        number:
+          min: 500.0
+          max: 3000.0
+          step: 50.0
+          mode: slider
+    min_lux_cloudy:
+      name: Min Lux (Cloudy Weather)
+      description: Lowest lux threshold on cloudy days.
+      default: 300
+      selector:
+        number:
+          min: 0.0
+          max: 2000.0
+          step: 50.0
+          mode: slider
+    max_lux_cloudy:
+      name: Max Lux (Cloudy Weather)
+      description: Highest lux threshold on cloudy days.
+      default: 1200
+      selector:
+        number:
+          min: 500.0
+          max: 3000.0
+          step: 50.0
+          mode: slider
+    lights:
+      name: Lights to Control
+      description: The lights that will be adjusted by this automation.
+      selector:
+        target:
+          entity:
+          - domain:
+            - light
+    bypass_light:
+      name: Bypass Light (Optional)
+      description: 'If this light is ON (for example, movie mode), the automation
+        will not run.
+
+        '
+      default:
+      selector:
+        entity:
+          domain:
+          - light
+          multiple: false
+          reorder: false
+    start_time:
+      name: Start Time
+      description: Time of day when the automation is allowed to run.
+      default: '10:00:00'
+      selector:
+        time: {}
+    end_time:
+      name: End Time
+      description: Time of day when the automation stops running.
+      default: '21:00:00'
+      selector:
+        time: {}
+    transition_time:
+      name: Transition Time (seconds)
+      description: Duration (in seconds) for fading brightness and color changes.
+      default: 30
+      selector:
+        number:
+          min: 0.0
+          max: 600.0
+          step: 1.0
+          unit_of_measurement: seconds
+          mode: slider
+    trigger_interval:
+      name: Trigger Interval (minutes)
+      description: The interval (in minutes) at which the automation checks the lux
+        sensor (1–5).
+      default: 3
+      selector:
+        number:
+          min: 1.0
+          max: 5.0
+          step: 1.0
+          unit_of_measurement: minutes
+          mode: slider
+    min_brightness_percent:
+      name: Minimum Brightness (%)
+      description: Brightness level as a percentage when ambient light is high (range
+        5–50%).
+      default: 20
+      selector:
+        number:
+          min: 5.0
+          max: 50.0
+          step: 1.0
+          unit_of_measurement: '%'
+          mode: slider
+    max_brightness_percent:
+      name: Maximum Brightness (%)
+      description: Brightness level as a percentage when ambient light is low (range
+        50–100%).
+      default: 100
+      selector:
+        number:
+          min: 50.0
+          max: 100.0
+          step: 1.0
+          unit_of_measurement: '%'
+          mode: slider
+    color_transition_minutes:
+      name: Color Transition Duration (minutes)
+      description: Minutes from sunset over which the color temperature transitions
+        (range 20–90).
+      default: 60
+      selector:
+        number:
+          min: 20.0
+          max: 90.0
+          step: 1.0
+          unit_of_measurement: minutes
+          mode: slider
+    log_to_logbook:
+      name: Log to Logbook
+      description: If off, no entries will be sent to the Home Assistant logbook.
+      default: true
+      selector:
+        boolean: {}
+  source_url: https://github.com/MarqBarq/Dynamic-Lighting-for-Better-Sleep/blob/main/dynamic-lighting.yaml
+mode: single
+trigger_variables:
+  trigger_interval_value: !input trigger_interval
+trigger:
+- platform: time_pattern
+  minutes: '*'
+condition:
+- condition: time
+  after: !input start_time
+  before: !input end_time
+- condition: template
+  value_template: '{{ (now().minute % (trigger_interval_value | int(1))) == 0 }}
+
+    '
+action:
+- variables:
+    bypass: !input bypass_light
+    lux_sensor_entity: !input lux_sensor
+    weather_entity_entity: !input weather_entity
+    transition: !input transition_time
+    logbook_enabled: !input log_to_logbook
+    min_lux_clear_value: !input min_lux_clear
+    max_lux_clear_value: !input max_lux_clear
+    min_lux_cloudy_value: !input min_lux_cloudy
+    max_lux_cloudy_value: !input max_lux_cloudy
+    day_color_temp_value: !input day_color_temp
+    evening_color_temp_value: !input evening_color_temp
+    min_brightness_percent_value: !input min_brightness_percent
+    max_brightness_percent_value: !input max_brightness_percent
+    color_transition_minutes_value: !input color_transition_minutes
+- choose:
+  - conditions:
+    - condition: template
+      value_template: '{{ bypass is not none and bypass != '''' and is_state(bypass,
+        ''on'') }}
+
+        '
+    sequence:
+    - choose:
+      - conditions:
+        - condition: template
+          value_template: '{{ logbook_enabled }}'
+        sequence:
+        - service: logbook.log
+          data:
+            name: Dynamic Lighting
+            message: Bypass light is on; automation aborted.
+    - stop: Bypass light is on
+- variables:
+    low_brightness_value: '{{ (min_brightness_percent_value | float / 100 * 255) |
+      round(0) }}'
+    high_brightness_value: '{{ (max_brightness_percent_value | float / 100 * 255)
+      | round(0) }}'
+    min_brightness: '{{ low_brightness_value | int }}'
+    max_brightness: '{{ high_brightness_value | int }}'
+    lux: '{{ states(lux_sensor_entity) | float(0) }}'
+    weather_state: '{{ states(weather_entity_entity) | lower }}'
+    is_cloudy: '{{ weather_state in [''cloudy'', ''partlycloudy'', ''rainy'', ''pouring'',
+      ''snowy'', ''snowy-rainy''] }}'
+    now_ts: '{{ now().timestamp() }}'
+    sunset_ts: '{{ as_timestamp(state_attr(''sun.sun'', ''next_setting'')) }}'
+    sunset_offset_window: '{{ sunset_ts - (color_transition_minutes_value | float
+      * 60) }}'
+    min_lux: '{{ (min_lux_cloudy_value if is_cloudy else min_lux_clear_value) | float
+      }}'
+    max_lux: '{{ (max_lux_cloudy_value if is_cloudy else max_lux_clear_value) | float
+      }}'
+    brightness: "{% if lux >= max_lux %}\n  {{ min_brightness }}\n{% elif lux <= min_lux
+      %}\n  {{ max_brightness }}\n{% else %}\n  {% set b = (lux - min_lux) / (max_lux
+      - min_lux) %}\n  {{ (max_brightness - (max_brightness - min_brightness) * b)
+      | round(0) }}\n{% endif %}\n"
+    color_temp_kelvin: "{% if states('sun.sun') == 'below_horizon' %}\n  {{ evening_color_temp_value
+      | int }}\n{% elif now_ts <= sunset_offset_window %}\n  {{ day_color_temp_value
+      | int }}\n{% else %}\n  {% set progress = (now_ts - sunset_offset_window) /
+      (sunset_ts - sunset_offset_window) %}\n  {{ (\n    day_color_temp_value | float\n
+      \   + ((evening_color_temp_value | float - day_color_temp_value | float) * progress)\n
+      \ ) | round(0) }}\n{% endif %}\n"
+    time_now: '{{ now().strftime(''%H:%M'') }}'
+- choose:
+  - conditions:
+    - condition: template
+      value_template: '{{ logbook_enabled }}'
+    sequence:
+    - service: logbook.log
+      data:
+        name: Dynamic Lighting
+        message: 'Lux: {{ lux }}, Brightness: {{ brightness }}, Color Temp (K): {{
+          color_temp_kelvin }}, Cloudy: {{ is_cloudy }}, Time: {{ time_now }}
+
+          '
+- choose:
+  - conditions:
+    - condition: template
+      value_template: '{{ lux >= max_lux }}'
+    sequence:
+    - choose:
+      - conditions:
+        - condition: template
+          value_template: '{{ logbook_enabled }}'
+        sequence:
+        - service: logbook.log
+          data:
+            name: Dynamic Lighting Off
+            message: 'Lux ({{ lux }}) is above threshold ({{ max_lux }}). Turning
+              off lights.
+
+              '
+    - service: light.turn_off
+      target: !input lights
+      data:
+        transition: '{{ transition | int }}'
+  default:
+  - service: light.turn_on
+    target: !input lights
+    data:
+      brightness: '{{ brightness | int }}'
+      color_temp_kelvin: '{{ color_temp_kelvin | int }}'
+      transition: '{{ transition | int }}'

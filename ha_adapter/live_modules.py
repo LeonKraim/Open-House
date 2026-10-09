@@ -2836,7 +2836,7 @@ def _entries_at(path: Path, stamp: tuple[int, int]) -> tuple[Mapping[str, object
     """A registry index read at `stamp`, already known to be at that stamp.
 
     **Cached because of who calls it.** `installed_modules` and `offers` are the
-    panel's `rooms/get`, `modules/list` and `store/index`, and those run on Home
+    panel's `rooms/get` and `modules/list`, and those run on Home
     Assistant's event loop -- where this read was reported as a blocking call,
     once per screen. The key is the stamp rather than the path alone (`_stamp`),
     so a republished registry is still re-read; the pair is what makes "read once
