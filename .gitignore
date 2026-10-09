@@ -20,6 +20,22 @@ secrets.yaml
 # store is the one file the corpus validator is required to reject.
 .local/
 
+# The documentation, the specs and the agent scaffolding. All of it is ours
+# rather than the product's: a reader who opens this repository is looking at a
+# program, and the guide, the phase records, the change packages and the
+# assistant's own command files are the notes that produced it rather than part
+# of it. They are kept on this machine and shipped in no checkout -- the
+# repository carries the README and the code. Ignored rather than merely
+# untracked, so that a `git add -A` cannot put them back.
+/docs/
+/openspec/
+/CHANGELOG.md
+/CONTRIBUTING.md
+/SECURITY.md
+/mkdocs.yml
+/.claude/
+/.opencode/
+
 # Home Assistant runtime state for the dev container -- the database, logs,
 # registries and the config onboarding writes. All of it is generated, none of
 # it is authored, and it is ignored wholesale so a container run can never
