@@ -1,0 +1,37 @@
+# The Open House Store, as one command.
+#
+#   cp .env.example .env    # then fill in the two values
+#   docker compose up -d
+#
+# The values live in `.env` rather than being exported in front of `up` because
+# compose interpolates this file on *every* command: with `${VAR:?}` unset,
+# `docker compose down` fails too, and a Store you cannot switch off without
+# re-typing your admin password is a Store you will leave running.
+#
+# The superuser is the *admin* of the Store -- the account that imports the
+# schema and, if it ever needs to, edits it. It is not a publisher: publishers
+# make their own accounts from Open House, and no publisher is ever an admin.
+#
+# The image is pinned to a version rather than to `latest`, because the schema
+# and the hooks in this directory are written against 0.40's shapes and a tag
+# that moves is a Store that breaks on a day nobody changed anything.
+
+services:
+  store:
+    image: ghcr.io/muchobien/pocketbase:0.40.5
+    restart: unless-stopped
+    ports:
+      # The port a person reaches the Store's admin UI and API on. Publish it
+      # deliberately: the Store holds the accounts and the ratings, and the API
+      # is meant to be public, but the admin UI is meant to be yours.
+      - "8090:8090"
+    environment:
+      # Required, and refused loudly when missing: an admin UI with no admin is
+      # an open door.
+      PB_ADMIN_EMAIL: ${PB_ADMIN_EMAIL:?set PB_ADMIN_EMAIL to the admin address}
+      PB_ADMIN_PASSWORD: ${PB_ADMIN_PASSWORD:?set PB_ADMIN_PASSWORD}
+    volumes:
+      # Everything the Store is: the database, the uploaded files and the logs.
+      - ./pb_data:/pb_data
+      # The counters. Read from this directory on every start.
+      - ./pb_hooks:/pb_hooks

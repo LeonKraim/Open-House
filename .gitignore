@@ -58,3 +58,12 @@ e2e-house.png
 # `shots/` while a session is looking at the house, and read by nobody after.
 # The same rule `e2e-house.png` follows -- generated, not authored.
 shots/
+
+# The Store backend's own state -- the PocketBase database, uploads and logs of
+# a Store somebody stood up from `store/`. Generated, and the thing that
+# holds every publisher account, so it is never committed.
+store/pb_data/
+
+# The Store's admin address and password, which `docker compose` reads out of
+# `store/.env` on every command. `store/.env.example` is the committed twin.
+store/.env
