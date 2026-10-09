@@ -4,7 +4,7 @@
   "after_dependencies": ["mqtt"],
   "codeowners": ["@LeonKraim"],
   "config_flow": true,
-  "dependencies": ["frontend", "panel_custom"],
+  "dependencies": ["frontend", "http", "panel_custom"],
   "documentation": "https://github.com/LeonKraim/Open-House",
   "integration_type": "hub",
   "iot_class": "local_push",

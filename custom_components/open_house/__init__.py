@@ -45,6 +45,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_state_change_event
 
 from . import (
@@ -69,9 +70,15 @@ if TYPE_CHECKING:
     from .automation import HomeAutomation
     from .host import OpenHouseHost
 
-__all__ = ["async_setup", "async_setup_entry", "async_unload_entry"]
+__all__ = ["CONFIG_SCHEMA", "async_setup", "async_setup_entry", "async_unload_entry"]
 
 _LOGGER = logging.getLogger(__name__)
+
+#: A house is configured in the panel and stored in the config entry; there is
+#: nothing here for `configuration.yaml` to say. Home Assistant still asks for it
+#: to be said out loud: an integration that defines `async_setup` and no schema is
+#: reported by `hassfest`, so the empty schema is declared rather than implied.
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 #: The sidebar tab. The URL path is the panel's identity in Home Assistant --
 #: registering it twice is an error, and a panel is removed by that path -- so it
