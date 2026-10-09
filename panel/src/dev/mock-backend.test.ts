@@ -234,11 +234,11 @@ test("editing a module without its answers is refused the way the server refuses
     settings: [],
     casts: {},
     flows: [],
-    // `scripts` left out on purpose.
+    // `automations` left out on purpose.
   });
   assert.deepEqual(refused, {
     code: "invalid_format",
-    message: "scripts is required to edit a module",
+    message: "automations is required to edit a module",
   });
 });
 
@@ -254,7 +254,7 @@ test("editing a module with every answer is answered with the house and the stor
     settings: [],
     casts: {},
     flows: [],
-    scripts: {},
+    automations: [],
   })) as { module: string; modules: { slug: string; title: string }[]; store: unknown[] };
   assert.equal(reply.module, "evening_lighting_kitchen");
   assert.equal(

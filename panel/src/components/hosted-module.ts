@@ -27,10 +27,10 @@ import { OpenHouseElement } from "../base.ts";
 // Registered by the import, not referenced here: the flow block below is
 // `<open-house-node-red>` and this file only has to have the element defined.
 import "./node-red-editor.ts";
-// And the script block, which is the same bargain with Home Assistant's own
-// editor: the element is `<open-house-script>` and this file only has to have
-// it defined for the cast to be able to show one.
-import "./script-editor.ts";
+// And the automation block, which is the same bargain with Home Assistant's own
+// editor: the element is `<open-house-automation>` and this file only has to
+// have it defined for the cast to be able to show one.
+import "./automation-editor.ts";
 // And the detach block: a cast a person wants to be a module of its own is a
 // button beside the cast, and the element behind it is `<open-house-detach>`.
 import "./detach.ts";
@@ -66,7 +66,6 @@ import {
   castModeForSetting,
   castModeSelector,
   isTemplate,
-  scriptIdOf,
   writtenCondition,
   type CastMode,
 } from "./casts.ts";
@@ -174,12 +173,13 @@ export function bindingForSetting(
  *
  * **A cast counts as an answer**, and each of the three is checked for a
  * different reason. A **flow** leaves a binding behind (the entity the flow
- * watches is what the row holds), so `bound` catches it. A **condition** and a
- * **script** do not: Open House makes the entity, or makes the call, and the
- * input reads what the script hands back -- neither is a value the person sent,
- * so neither is in the record's inputs and `bound` is false on a row that is
- * perfectly answered. Left out of this test, such a row would be named in the
- * "waiting for" banner as something to go and set, when the logic that answers
+ * watches is what the row holds), so `bound` catches it. A **condition** and an
+ * **automation** do not: Open House makes the entity, or makes the helper, and
+ * the input reads what the condition decided or what the automation wrote --
+ * neither is a value the person sent, so neither is in the record's inputs and
+ * `bound` is false on a row that is perfectly answered. Left out of this test,
+ * such a row would be named in the "waiting for" banner as something to go and
+ * set, when the logic that answers
  * it is already built and running.
  */
 export function unsetOptions(module: HostedModule): ModuleInputRow[] {
@@ -188,7 +188,7 @@ export function unsetOptions(module: HostedModule): ModuleInputRow[] {
       !setting.has_default &&
       !setting.bound &&
       !setting.cast &&
-      !setting.script_id,
+      !setting.automation_id,
   );
 }
 
@@ -310,16 +310,6 @@ export class HostedModuleCard extends OpenHouseElement {
   private casting: Record<string, string> = {};
   /** A condition cast built over a setting's choice, by setting name. */
   private conditions: Record<string, unknown> = {};
-  /**
-   * A script cast picked over a setting's choice, by setting name.
-   *
-   * The id without its domain, which is what a `script.` call takes. The one
-   * cast whose answer is *named* rather than written: the others are built here
-   * (a condition, a template) or pushed here (a flow), and a script is the
-   * person's own object in Home Assistant -- so what the card holds is a
-   * reference to it, and the only thing it may do is point at a different one.
-   */
-  private scripts: Record<string, string> = {};
   /** Which cast editor each touched setting is showing, by setting name. */
   private castModes: Record<string, CastMode> = {};
   /**
@@ -438,62 +428,42 @@ export class HostedModuleCard extends OpenHouseElement {
   }
 
   /**
-   * What a script-answered setting shows under its field: the call that fills
-   * it, and Home Assistant's own editor on the script, in the page.
+   * What an automation-answered setting shows under its field: the helper it
+   * writes, and Home Assistant's own editor on the automation, in the page.
    *
    * **The mirror image of the flow block, and the difference is the whole reason
    * both exist.** A flow is built into an input that already holds a device: the
-   * device is wired into the flow and the flow runs on its own. A script is the
-   * other way round -- it is *called* when the module runs and hands its answer
-   * back -- so there is nothing to wire in and nothing watched, and the sentence
-   * says so rather than leaving a person looking for a trigger to connect.
+   * device is wired into the flow and the flow runs on its own. An automation is
+   * the other way round -- it *writes a helper* of Open House's making, and the
+   * input reads that helper -- so there is nothing wired in from this row, and
+   * the sentence says what to add instead of leaving a person looking for a
+   * device to connect.
    *
-   * **The editor, not a link to it**, for the reason Node-RED's is: the script is
-   * this setting's answer, and opening its own tab is the trip where the person
-   * loses the thread of which input they came here to fill. It is a script the
-   * house already has, or one they make in the editor the block opens.
+   * **The editor, not a link to it**, for the reason Node-RED's is: the
+   * automation is this setting's answer, and opening its own tab is the trip
+   * where the person loses the thread of which input they came here to fill. The
+   * automation is Open House's own -- made with the helper when the module was
+   * built and seeded with the action that sets it -- so this block only ever
+   * opens it, and there is nothing here for the person to name.
    */
-  private renderScript(
+  private renderAutomation(
     module: HostedModule,
     setting: ModuleInputRow,
   ): TemplateResult {
     const name = setting.title || setting.name;
-    return html`<p class="help" data-script=${setting.name}>
-        Runs when ${module.title} runs and hands its answer back, which is what
-        this input is built from -- so it is worked out afresh every time the
-        module runs, and it needs nothing wired into it.
-        ${setting.script_id
-          ? nothing
-          : html`Pick a script below, or write one in the editor.`}
+    return html`<p class="help" data-automation=${setting.name}>
+        Open House wrote the action that sets
+        <code>${setting.automation_entity || "the helper"}</code> into an
+        automation of its own; what it needs is a trigger. Add one and
+        ${module.title} reads that helper from then on -- between runs as much as
+        during one.
       </p>
-      <open-house-script
+      <open-house-automation
         .client=${this.client}
-        .script=${this.scripts[setting.name] ?? setting.script_id ?? ""}
-        .label=${`Home Assistant -- the script for ${name}`}
-        @script-chosen=${(event: CustomEvent<{ script_id: string }>) => {
-          this.chooseScript(setting.name, event.detail.script_id);
-        }}
-      ></open-house-script>`;
-  }
-
-  /**
-   * A setting's script, as the editor has just left it.
-   *
-   * The event carries only the id, and which setting it belongs to is not in it
-   * -- so the handler is built per row and names the row it was drawn for, the
-   * way every other control on this card does. Written to the draft as well as
-   * to the scripts, because the draft is what `save` walks: a script picked on a
-   * row nobody otherwise touched is still an answer, and a save that skipped it
-   * would drop the very thing the person just chose.
-   */
-  private chooseScript(name: string, scriptId: string): void {
-    if (!scriptId) return;
-    this.scripts = { ...this.scripts, [name]: scriptId };
-    if (!(name in this.draft)) {
-      const setting = this.module.settings.find((row) => row.name === name);
-      if (setting) this.draft = { ...this.draft, [name]: setting.value ?? "" };
-    }
-    this.queueSave();
+        .automation=${setting.automation_id ?? ""}
+        .entity=${setting.automation_entity ?? ""}
+        .label=${`Home Assistant -- the automation for ${name}`}
+      ></open-house-automation>`;
   }
 
   /** Which cast editor one setting is showing: what was clicked, else what it is. */
@@ -551,13 +521,15 @@ export class HostedModuleCard extends OpenHouseElement {
     // The names this call actually put on the wire, so the reply can drop
     // exactly those and leave anything typed while it was out for the next save.
     const sent = new Set<string>();
-    // The inputs answered by a *script*, by name. Unlike the flows this is not
-    // read off the module for every setting -- a flow's set is the whole answer
-    // (the server takes a name that dropped off it as a flow to take out of
-    // Node-RED), while a script is the person's own object that Open House only
-    // names, so what is sent is the rows that changed and nothing else. The one
-    // consequence: a row left alone keeps its script through the server's merge.
-    const scripts: Record<string, string> = {};
+    // The whole set of inputs answered by an *automation*, read off the module
+    // for the flows' reason rather than off this save's touched rows: the set is
+    // the answer, and the server takes a name that has dropped off it as an
+    // automation -- and the helper it wrote -- to take away.
+    const automations = new Set(
+      this.module.settings
+        .filter((setting) => this.modeOf(setting.name, setting) === "automation")
+        .map((setting) => setting.name),
+    );
     // The whole set of inputs answered by a flow, and not only the rows this save
     // touched, because the set *is* the answer: the server takes a name that has
     // dropped off it as a flow to take out of Node-RED, so a screen that sent
@@ -581,6 +553,7 @@ export class HostedModuleCard extends OpenHouseElement {
       // binds it to the entity the flow writes, over the top of this, on the way
       // to building the automation.
       if (mode === "nodered") flows.add(name);
+      if (mode === "automation") automations.add(name);
       // A **condition** travels as a condition and never as a binding: the server
       // makes an entity out of it and binds the input to that, and a device sent
       // beside it would be the answer that won.
@@ -600,20 +573,14 @@ export class HostedModuleCard extends OpenHouseElement {
         sent.add(name);
         continue;
       }
-      // A **script** is the fourth answer and the one with no binding either,
-      // for the condition's reason and a further one: what fills the input is
-      // what the script hands back *when the module runs*, so there is no value
-      // to write down here and nothing for the server to bind except a template
-      // reading the variable its own call fills. Sent as the id it names, and
-      // only when there is one -- a row switched to a script and not yet given
-      // one is a person on their way to an answer, and the rebuild that came
-      // back would draw the row without the editor they are working in.
-      if (mode === "script") {
-        const script = this.scripts[name];
-        if (script) {
-          scripts[name] = script;
-          sent.add(name);
-        }
+      // An **automation** carries no binding either, for the condition's reason
+      // and a further one: what fills the input is the *helper*, which the server
+      // makes when it builds the module, so there is no value to write down here.
+      // The name was added to the set above, with the flows; a row switched
+      // *away* from this cast is a name simply absent from the set, which is how
+      // the server is told to take the automation and its helper away.
+      if (mode === "automation") {
+        sent.add(name);
         continue;
       }
       // A **template** cast is the *whole* answer, exactly as it is on the import
@@ -632,13 +599,6 @@ export class HostedModuleCard extends OpenHouseElement {
       // no condition, and sending a removal for each of those would be a write
       // nobody asked for.
       if (row?.cast != null) casts[name] = null;
-      // And the same for a script, which is the one cast that needs it: the
-      // script branch above has already continued for every row still answered
-      // by one, so a row that *had* a script and got here is a row the person
-      // moved to something else -- a value, a device, a template, a flow. The
-      // empty id is how the server is told to drop it, and reaching this line at
-      // all is the proof that nothing else is answering the input now.
-      if (row?.script_id) scripts[name] = "";
       bindings[name] =
         cast ?? bindingForSetting(this.module.settings, name, value);
       sent.add(name);
@@ -650,8 +610,7 @@ export class HostedModuleCard extends OpenHouseElement {
     // holding it, which is what keeps its editor on the screen.
     if (
       Object.keys(bindings).length === 0 &&
-      Object.keys(casts).length === 0 &&
-      Object.keys(scripts).length === 0
+      Object.keys(casts).length === 0
     ) {
       return;
     }
@@ -666,7 +625,7 @@ export class HostedModuleCard extends OpenHouseElement {
         undefined,
         casts,
         [...flows],
-        scripts,
+        [...automations],
         // The house this card's answers were decided against. The page gives it,
         // and the server refuses the write when the house's profiles have moved
         // since -- see `wentStale`.
@@ -727,7 +686,6 @@ export class HostedModuleCard extends OpenHouseElement {
     this.draft = this.forgetMany(this.draft, sent);
     this.casting = this.forgetMany(this.casting, sent) as Record<string, string>;
     this.conditions = this.forgetMany(this.conditions, sent);
-    this.scripts = this.forgetMany(this.scripts, sent) as Record<string, string>;
     this.castModes = this.forgetMany(this.castModes, sent) as Record<
       string,
       CastMode
@@ -903,7 +861,6 @@ export class HostedModuleCard extends OpenHouseElement {
     this.draft = this.forget(this.draft, name);
     this.casting = this.forget(this.casting, name) as Record<string, string>;
     this.conditions = this.forget(this.conditions, name);
-    this.scripts = this.forget(this.scripts, name) as Record<string, string>;
     // The menu is told too, even though the record no longer holds a cast: the
     // reload that follows is not instantaneous, and until it lands the row would
     // otherwise draw the editor of a cast that is not there any more.
@@ -1105,8 +1062,7 @@ export class HostedModuleCard extends OpenHouseElement {
     return (
       Object.keys(this.draft).length > 0 ||
       Object.keys(this.casting).length > 0 ||
-      Object.keys(this.conditions).length > 0 ||
-      Object.keys(this.scripts).length > 0
+      Object.keys(this.conditions).length > 0
     );
   }
 
@@ -1115,7 +1071,6 @@ export class HostedModuleCard extends OpenHouseElement {
     this.draft = {};
     this.casting = {};
     this.conditions = {};
-    this.scripts = {};
     this.castModes = {};
     // The pending save goes with it, because it is the same thing: a timer that
     // outlived the draft would write the answers of a card that is no longer
@@ -1553,7 +1508,7 @@ export class HostedModuleCard extends OpenHouseElement {
           canCastSetting(setting, value) ||
           mode === "condition" ||
           mode === "nodered" ||
-          mode === "script";
+          mode === "automation";
         // **What the module *holds*, which is not what this form is showing.**
         // The button below detaches logic from the record, and the server reads
         // it from there -- so it is offered on the record's own cast rather than
@@ -1596,21 +1551,6 @@ export class HostedModuleCard extends OpenHouseElement {
             // draws its own empty state rather than one this screen made up.
             if (known != null) data.cast = known;
           }
-          if (mode === "script") {
-            // A script is **picked, not written**: it is Home Assistant's own
-            // object, so the control is the entity picker over the `script`
-            // domain -- the same one the import screen shows, for the same
-            // reason. The card holds the id without its domain, which is what a
-            // `script.` call takes, and the domain goes back on for the control,
-            // which names whole entities. Left unwritten when there is nothing
-            // chosen yet, so the picker draws its own empty state.
-            schema.push({
-              name: "script",
-              selector: { entity: { domain: ["script"] } },
-            });
-            const chosen = this.scripts[setting.name] ?? setting.script_id ?? "";
-            if (chosen) data.script = `script.${scriptIdOf(chosen)}`;
-          }
         }
         return html`<div class="field">
           <label class="label" for=${`setting-${module.slug}-${setting.name}`}>
@@ -1624,7 +1564,6 @@ export class HostedModuleCard extends OpenHouseElement {
             .schema=${schema}
             .computeLabel=${(item: { name: string }) => {
               if (item.name === "cast_mode") return "Set it to";
-              if (item.name === "script") return "The script it reads";
               if (item.name === "cast") {
                 return mode === "condition" ? "The condition" : "The template";
               }
@@ -1658,21 +1597,12 @@ export class HostedModuleCard extends OpenHouseElement {
                   [setting.name]: answered.cast,
                 };
               }
-              if (next === "script") {
-                // Only a *picked* script is recorded: the form reports this
-                // field on every change, including the one that switched the
-                // menu to a script a moment ago, when there is nothing in the
-                // picker yet. An empty answer there is a person on their way to
-                // one, not a choice of nothing.
-                const picked = scriptIdOf(answered.script);
-                if (picked) {
-                  this.scripts = { ...this.scripts, [setting.name]: picked };
-                }
-              }
             }}
           ></ha-form>
           ${mode === "nodered" ? this.renderFlow(module, setting) : nothing}
-          ${mode === "script" ? this.renderScript(module, setting) : nothing}
+          ${mode === "automation"
+            ? this.renderAutomation(module, setting)
+            : nothing}
           ${held !== "none"
             ? html`<open-house-detach
                 .client=${this.client}
@@ -1723,13 +1653,11 @@ export class HostedModuleCard extends OpenHouseElement {
                 out and points the trigger at the entity it makes.
               </p>`
             : nothing}
-          ${mode === "script" && setting.in_trigger
-            ? html`<p class="help warn">
-                A trigger names the entities it watches, and Home Assistant
-                matches that name against the entities the house has -- it never
-                runs anything written there -- so a script on this row would not
-                be called and the automation would install and never fire. Use a
-                condition here instead.
+          ${mode === "automation" && setting.in_trigger
+            ? html`<p class="help">
+                A trigger names the entities it watches, and the helper this cast
+                makes is a real entity -- so Home Assistant finds it, and the
+                module runs when your automation writes it.
               </p>`
             : nothing}
           ${setting.description

@@ -183,21 +183,24 @@ class ModuleRecord:
     #: setting update the flow the module already has rather than push a second
     #: one and leave the first running, writing into an entity nothing reads.
     flows: Mapping[str, str] = field(default_factory=dict)
-    #: The inputs answered **by a Home Assistant script**, by input name: the
-    #: `script.<id>` the module calls to get the value.
+    #: The inputs answered **by a Home Assistant automation**, by input name: the
+    #: id of the automation whose logic writes the value.
     #:
-    #: The fourth kind of thing, and the only one that *returns*. A script is
-    #: called with `response_variable:` and what it hands back is the value the
-    #: input is built with (`module_host.script_binding`) -- nothing Open House
-    #: made holds it, so there is no entity to publish and no template of its own
-    #: to render. That is what makes this the cast for a computation that is a
-    #: *sequence* rather than an expression: an if, a loop, a call to something
-    #: else and a value handed back at the end.
+    #: The fourth kind of thing, and the one that keeps itself current. A script
+    #: returns a value only when it is called, so it can hold nothing between the
+    #: module's own runs and can never react to the house by itself; an automation
+    #: triggers on its own and writes into a *helper* Open House made for the input
+    #: (`module_host.helper_entity_id`), and the input is bound to what that helper
+    #: holds. So the row answers itself whenever the person's automation runs, which
+    #: is the whole of what this cast is for.
     #:
-    #: Kept as the id the person picked, because it is *their* script: the panel
-    #: opens Home Assistant's own editor on it, and taking the cast away leaves
-    #: the script where it is. Open House never writes one.
-    scripts: Mapping[str, str] = field(default_factory=dict)
+    #: The *automation id* is kept because it is the one id in the pair that cannot
+    #: be worked out again: Home Assistant assigns it, and the panel opens its own
+    #: editor on it. The helper's id is spelled from the module and the input like
+    #: `module_host.flow_entity_id`, so it is not kept -- the same reason a flow
+    #: keeps its flow id and not its entity id. Open House writes the seeded
+    #: automation once and never again, so the person's own edits to it survive.
+    automations: Mapping[str, str] = field(default_factory=dict)
 
     # -- the same answers, several times over -----------------------------
     #
@@ -287,10 +290,10 @@ class ModuleRecord:
             # id and not one this integration can work out again, so it is
             # written out as it was given.
             "flows": dict(self.flows),
-            # The scripts, by input: the id of the person's own script. Written
-            # out as it was given, for the reason the flows are -- an id nobody
-            # here can work out again.
-            "scripts": dict(self.scripts),
+            # The automations, by input: the id of the person's own automation.
+            # Written out as it was given, for the reason the flows are -- an id
+            # nobody here can work out again.
+            "automations": dict(self.automations),
             # The configurations, and which one the five answers above *are*.
             # Written in full rather than as a list of names, because this file is
             # the module's whole state: a name here with its answers nowhere would
@@ -345,8 +348,8 @@ class Variant:
     derived: Mapping[str, Any] = field(default_factory=dict)
     #: The inputs answered by a Node-RED flow, by input name: the flow's id.
     flows: Mapping[str, str] = field(default_factory=dict)
-    #: The inputs answered by a Home Assistant script, by input name: its id.
-    scripts: Mapping[str, str] = field(default_factory=dict)
+    #: The inputs answered by a Home Assistant automation, by input name: its id.
+    automations: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def of(cls, record: ModuleRecord) -> Variant:
@@ -357,7 +360,7 @@ class Variant:
             picks=tuple(record.picks),
             derived=dict(record.derived),
             flows=dict(record.flows),
-            scripts=dict(record.scripts),
+            automations=dict(record.automations),
         )
 
     def applied_to(self, record: ModuleRecord) -> ModuleRecord:
@@ -376,7 +379,7 @@ class Variant:
             picks=tuple(self.picks),
             derived=dict(self.derived),
             flows=dict(self.flows),
-            scripts=dict(self.scripts),
+            automations=dict(self.automations),
         )
 
     def as_json(self) -> Mapping[str, Any]:
@@ -387,7 +390,7 @@ class Variant:
             "picks": [list(pick) for pick in self.picks],
             "derived": dict(self.derived),
             "flows": dict(self.flows),
-            "scripts": dict(self.scripts),
+            "automations": dict(self.automations),
         }
 
 
@@ -670,7 +673,7 @@ def _record(row: object, path: Path) -> ModuleRecord:
         settings=tuple(answers.settings),
         derived=dict(answers.derived),
         flows=dict(answers.flows),
-        scripts=dict(answers.scripts),
+        automations=dict(answers.automations),
         variants=configurations,
         variant=active,
     )
@@ -689,7 +692,7 @@ def _answers(row: Mapping[str, Any]) -> Variant:
     settings = row.get("settings")
     derived = row.get("derived")
     flows = row.get("flows")
-    scripts = row.get("scripts")
+    automations = row.get("automations")
     return Variant(
         bindings={
             str(key): dict(value)
@@ -721,18 +724,19 @@ def _answers(row: Mapping[str, Any]) -> Variant:
             for name, flow in (flows.items() if isinstance(flows, Mapping) else ())
             if flow
         },
-        # The person's own scripts, by input, read the same way and dropped the
-        # same way. Nothing here writes, pushes or deletes one -- the id is a
-        # reference to a script that lives in Home Assistant, so an id that names
-        # nothing is a module that calls a script the person may simply have
-        # renamed, and dropping it is how the module goes back to waiting rather
-        # than failing to start.
-        scripts={
-            str(name): str(script)
-            for name, script in (
-                scripts.items() if isinstance(scripts, Mapping) else ()
+        # The person's own automations, by input, read the same way and dropped the
+        # same way. Nothing here writes the person's logic -- the id is a reference
+        # to an automation that lives in Home Assistant, so an id that names nothing
+        # is a module whose row reads a helper the person may simply have deleted
+        # the automation behind, and dropping it is how the module goes back to
+        # waiting rather than failing to start. (An older file's `scripts` entry is
+        # not read at all: the script cast is gone, so that input simply waits.)
+        automations={
+            str(name): str(automation)
+            for name, automation in (
+                automations.items() if isinstance(automations, Mapping) else ()
             )
-            if script
+            if automation
         },
     )
 

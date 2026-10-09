@@ -24,5 +24,18 @@ make it so that when you are importing a blueprint as a module you arent able to
 make it so you are able to see each module accessing a slot and being able to split up the slot into how ever many parts so that potentially each module has its own slot for the device its using or 2 modules have a slot together and 3 modules have a slot together and they are all the slots are the same slot basically like the same name
 
 
+DONE:
 v5
 also make it so that you have automations instaead of just haos scripts for the inputs of selectors and make the thing update everytime the haos automation is triggered and updates the variable instead of just a script cause i think that was a dumb idea cause when is the script ever gonan trigger its dumb righ we dont constantly wanna run the script so standarad automations are better it think
+
+
+v6
+fix import as module on automations -- it returns an error instead of importing
+make it test paste yaml
+remove author a module
+design a store backend; a publisher name is set once per HAOS install and a name already taken on the store is refused ("pick another name, you are not allowed to publish under other people's names")
+the store filters installed / not installed in a tab of the store tab
+embed Node-RED into the app so the user does not have to install it, without conflicting with a Node-RED that is already installed
+next to any module the user made themselves (not published by someone else), a publish button
+comments and 1-to-5 star ratings on a module in the store
+use a premade backend for the store -- something with at least 200 GitHub stars, so we do not make grave mistakes in the backend

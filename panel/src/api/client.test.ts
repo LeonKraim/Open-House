@@ -228,11 +228,11 @@ test("editing a module sends every one of the module's answers", async () => {
       settings: [],
       casts: {},
       flows: [],
-      scripts: {},
+      automations: [],
     },
   );
   const sent = calls[0] ?? {};
-  for (const field of ["bindings", "outputs", "settings", "casts", "flows", "scripts"]) {
+  for (const field of ["bindings", "outputs", "settings", "casts", "flows", "automations"]) {
     assert.ok(field in sent, `modules/edit was sent without ${field}`);
   }
 });

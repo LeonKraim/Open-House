@@ -159,14 +159,14 @@ class ModuleDefinition:
     #: value, it is a program. Installing it pushes a flow for that input in
     #: whichever Node-RED is doing the installing.
     flows: tuple[str, ...] = ()
-    #: The inputs answered by a **script**, by name -- the names and not the
-    #: scripts, for the reason the flows are names: a `script.<id>` belongs to one
-    #: Home Assistant, and a definition carrying one would install into a second
-    #: house calling a script that is not there. Unlike a flow, this house cannot
-    #: make the missing half -- the script is the person's own and Open House
-    #: never writes one -- so an input named here arrives with no script behind it
-    #: and the installing house answers it, exactly as a slot arrives unbound.
-    scripts: tuple[str, ...] = ()
+    #: The inputs answered by a **Home Assistant automation**, by name -- the names
+    #: and not the automations, for the reason the flows are names: an automation id
+    #: belongs to one Home Assistant, and a definition carrying one would install
+    #: into a second house pointing at an automation that is not there. Unlike a
+    #: flow, this house *can* make the missing half: Open House makes the helper the
+    #: row reads and seeds an automation that writes it, so an input named here
+    #: arrives with both, ready for the person to give it a trigger.
+    automations: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not _KEY.match(self.slug):
@@ -243,7 +243,7 @@ class ModuleDefinition:
         )
 
     def _check_names(self, inputs: Mapping[str, Any]) -> None:
-        for name in {*self.bindings, *self.derived, *self.flows, *self.scripts}:
+        for name in {*self.bindings, *self.derived, *self.flows, *self.automations}:
             if name not in inputs:
                 raise AuthoringError(
                     f"the module is set up to answer {name!r} and the document "
@@ -267,7 +267,7 @@ class ModuleDefinition:
             "picks": [list(pick) for pick in self.picks],
             "derived": dict(self.derived),
             "flows": list(self.flows),
-            "scripts": list(self.scripts),
+            "automations": list(self.automations),
         }
 
     def with_answers(
@@ -277,7 +277,7 @@ class ModuleDefinition:
         settings: Sequence[str] | None,
         casts: Mapping[str, Any] | None = None,
         flows: Sequence[str] | None = None,
-        scripts: Sequence[str] | None = None,
+        automations: Sequence[str] | None = None,
     ) -> ModuleDefinition:
         """This definition with an install's own answers laid over its defaults.
 
@@ -296,7 +296,7 @@ class ModuleDefinition:
         property of the input, so a room that sends a set is *saying* which of
         them are, and a room that sends nothing keeps the definition's.
 
-        `scripts` is replaced the same way and for the same reason: which of a
+        `automations` is replaced the same way and for the same reason: which of a
         module's inputs are answered by a program is a property of the input, not
         a value a room lays over the definition's.
         """
@@ -332,10 +332,10 @@ class ModuleDefinition:
             flows=self.flows
             if flows is None
             else tuple(str(one) for one in flows if one),
-            scripts=(
-                self.scripts
-                if scripts is None
-                else tuple(str(one) for one in scripts if one)
+            automations=(
+                self.automations
+                if automations is None
+                else tuple(str(one) for one in automations if one)
             ),
         )
 
@@ -506,22 +506,20 @@ def _following(
             )
             if name in inputs
         },
-        # The scripts, by the same rule as the flows, minus the half this house
-        # cannot make: the *ids* are this house's and are kept, and the *names*
-        # are the module's. A name that has started being answered by a script
-        # arrives with no id (`configuration.scripts.get(name, "")`), and the
-        # build refuses it -- a script cast with nothing to call is a module that
-        # cannot be built, which is the honest answer for a definition installed
-        # into a house that has not picked a script for it yet.
-        scripts={
-            name: configuration.scripts.get(name, "")
+        # The automations, by the same rule as the flows: the *ids* are this
+        # house's and are kept, and the *names* are the module's. A name that has
+        # started being answered by an automation arrives with an id this house
+        # made when it seeded the automation (`configuration.automations.get`), so
+        # unlike the old script cast there is no half this house cannot make.
+        automations={
+            name: configuration.automations.get(name, "")
             for name in dict.fromkeys(
                 (
-                    *after.scripts,
+                    *after.automations,
                     *(
                         name
-                        for name in configuration.scripts
-                        if name not in before.scripts
+                        for name in configuration.automations
+                        if name not in before.automations
                     ),
                 )
             )
@@ -641,11 +639,11 @@ def _definition(row: Mapping[str, Any]) -> ModuleDefinition:
     flows = row.get("flows") or []
     if not isinstance(flows, (list, tuple)):
         raise AuthoringError("the module's flows are not a list of inputs")
-    # The script-answered inputs, as *names*, for the reason the flows are names.
-    # A file from a house that has never seen a script cast has none.
-    scripts = row.get("scripts") or []
-    if not isinstance(scripts, (list, tuple)):
-        raise AuthoringError("the module's scripts are not a list of inputs")
+    # The automation-answered inputs, as *names*, for the reason the flows are
+    # names. A file from a house that has never seen an automation cast has none.
+    automations = row.get("automations") or []
+    if not isinstance(automations, (list, tuple)):
+        raise AuthoringError("the module's automations are not a list of inputs")
     return ModuleDefinition(
         slug=str(row.get("slug") or ""),
         title=str(row.get("title") or ""),
@@ -666,7 +664,7 @@ def _definition(row: Mapping[str, Any]) -> ModuleDefinition:
         ),
         derived={str(name): condition for name, condition in derived.items()},
         flows=tuple(str(name) for name in flows if name),
-        scripts=tuple(str(name) for name in scripts if name),
+        automations=tuple(str(name) for name in automations if name),
     )
 
 

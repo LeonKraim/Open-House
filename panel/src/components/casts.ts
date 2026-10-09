@@ -10,8 +10,8 @@
  *
  * What is *not* here: the editors themselves. The condition editor and the
  * template box are Home Assistant's own (`ha-form` draws them from the selector
- * these return), and the Node-RED and script editors are embeds of those
- * applications (`node-red-editor.ts`, `script-editor.ts`). This module decides
+ * these return), and the Node-RED and automation editors are embeds of those
+ * applications (`node-red-editor.ts`, `automation-editor.ts`). This module decides
  * which one a row shows, and what a row holds while it shows it.
  *
  * The four casts and the one thing they do not share:
@@ -24,11 +24,11 @@
  *     never rendered, so a condition written there would match nothing.
  *   * **nodered** -- a flow, built in Node-RED, which writes the value the input
  *     reads. The row's own answer stays, because it is what the flow watches.
- *   * **script** -- a Home Assistant script, built in Home Assistant's own editor,
- *     which *returns* the value. A script is the one of the four that returns
- *     rather than holds: `stop:` with `response_variable` is how Home Assistant
- *     hands a value back to whoever called, so this is the cast to reach for when
- *     the computation is a sequence of its own rather than an expression.
+ *   * **automation** -- a Home Assistant automation, built in Home Assistant's own
+ *     editor, which *writes* the value. The one cast that runs on its own: Open
+ *     House makes a helper out of the row's selector kind and seeds the automation
+ *     with the action that sets it, so the person opens the editor on the syntax
+ *     they need and adds the trigger. What the input reads is the helper's state.
  */
 
 import type { ModuleBinding, ModuleInputRow } from "../api/models.ts";
@@ -43,7 +43,12 @@ import type { ModuleBinding, ModuleInputRow } from "../api/models.ts";
  * yet has not answered, and the screen has to tell that from a row they never
  * touched.
  */
-export type CastMode = "none" | "template" | "condition" | "nodered" | "script";
+export type CastMode =
+  | "none"
+  | "template"
+  | "condition"
+  | "nodered"
+  | "automation";
 
 /**
  * A condition as an answer, or `null` for nothing written.
@@ -115,11 +120,14 @@ export function castModeSelector(inTrigger: boolean): Record<string, unknown> {
         // trigger would take the option away from the inputs most worth
         // programming.
         { value: "nodered", label: "A Node-RED flow (nodes, in Node-RED)" },
-        // **Home Assistant's own script, which returns the value.** The one cast
-        // that is a *sequence*: an if, a loop, a call to something else and a
-        // value handed back at the end -- which an expression cannot say. Built
-        // in Home Assistant's script editor, embedded in the row.
-        { value: "script", label: "HAOS script logic (a script that returns it)" },
+        // **Home Assistant's own automation, which writes the value.** The one
+        // cast that *runs on its own*: a script only runs when something calls
+        // it, so it can never keep an input current between runs, while an
+        // automation triggers on the house moving and writes a helper the row
+        // reads. Open House makes the helper and seeds the automation with the
+        // action that sets it, so the person opens Home Assistant's own editor on
+        // it, sees the syntax, and adds the trigger.
+        { value: "automation", label: "HAOS automation (writes the value)" },
         {
           value: "template",
           label: inTrigger
@@ -137,9 +145,9 @@ export function castModeSelector(inTrigger: boolean): Record<string, unknown> {
  * A setting with a **condition** behind it opens on the condition editor,
  * because the condition is the thing the person authored and the entity id the
  * input is bound to is machinery they never chose. A setting the person has
- * flipped the menu on since is what the menu says. The same rule for a **script**
- * and a **flow**: what the person authored is the script or the flow, and the
- * value it hands back is not theirs to edit here.
+ * flipped the menu on since is what the menu says. The same rule for an
+ * **automation** and a **flow**: what the person authored is the automation or the
+ * flow, and the value it writes is not theirs to edit here.
  */
 export function castModeForSetting(
   setting: ModuleInputRow,
@@ -150,9 +158,9 @@ export function castModeForSetting(
   // the flow is the thing the person authored, and the entity it writes is
   // machinery they never chose.
   if (setting.flow_id) return "nodered";
-  // A script the same again: the script is the answer, and what it returns is
-  // read rather than written here.
-  if (setting.script_id) return "script";
+  // An automation the same again: the automation is the answer, and the helper
+  // it writes is read rather than written here.
+  if (setting.automation_id) return "automation";
   // **Truthiness, not presence.** The server sends `"cast": null` for every
   // setting that has none -- `record.derived.get(name)`, which is `None` for
   // all but the cast ones -- and `null !== undefined`, so a presence test opens
@@ -195,10 +203,9 @@ export function castHeldBy(setting: ModuleInputRow): CastMode {
  * comes with the output node alone and an empty left-hand side, and whatever
  * starts it is the person's to build.
  *
- * A **script** cast asks the same question and answers it the same way: a script
- * runs when something calls it, so the input node is built when the row names an
- * entity to watch, and a row holding a number gets the call with nothing to
- * start it.
+ * An **automation** cast does not come through here: an automation triggers on
+ * its own and writes the helper the row reads, so whether a flow could watch
+ * that row's answer is the same question it is for any other row.
  *
  * `multiple` is the one case that is neither: a target set to several entities
  * is a list, and a trigger given a list would fire on whichever of them was
@@ -238,33 +245,12 @@ export function canCastSetting(setting: ModuleInputRow, value: unknown): boolean
  * Empty is how the choice comes back, which is what makes the box on-demand
  * rather than a second, competing answer.
  *
- * A *condition*, *flow* or *script* cast is deliberately not here: none of the
- * three is a binding but a `casts` (or `flows`, or `scripts`) entry, because the
- * server makes an entity or a call out of it and binds the input to that -- and a
- * binding sent beside it would be the answer that lost.
+ * A *condition*, *flow* or *automation* cast is deliberately not here: none of
+ * the three is a binding but a `casts` (or `flows`, or `automations`) entry,
+ * because the server makes an entity or a helper out of it and binds the input to
+ * that -- and a binding sent beside it would be the answer that lost.
  */
 export function castBinding(cast: string | undefined): ModuleBinding | null {
   const text = (cast ?? "").trim();
   return text ? { kind: "literal", value: text } : null;
-}
-
-/**
- * The id inside an entity id a script picker handed back, or `""`.
- *
- * A script cast is answered by picking one of the scripts the house already has
- * -- the control is an entity picker over the `script` domain, because a script
- * *is* an entity of Home Assistant's -- and what a `script.` call takes is the id
- * without its domain. So this is the one place the two spellings meet, and it is
- * here rather than in either screen because both screens show this control: the
- * import screen's row and the card's settings form.
- *
- * **Tolerant on purpose.** The picker holds `script.turn_it_on` and the answer is
- * `turn_it_on`, but the same value may arrive with the domain already off, or as
- * something this cannot read at all -- and a screen that threw here would lose a
- * whole form to one unreadable field.
- */
-export function scriptIdOf(value: unknown): string {
-  if (typeof value !== "string") return "";
-  const trimmed = value.trim();
-  return trimmed.startsWith("script.") ? trimmed.slice("script.".length) : trimmed;
 }

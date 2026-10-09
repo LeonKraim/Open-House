@@ -2177,9 +2177,9 @@ async def ws_modules_hosted(
         # the entity they bound, and an unbound one is not offered at all.
         vol.Optional("bindings", default=dict): dict,
         # The rows the screen has answered with *logic* -- a condition, a flow or
-        # a script -- for the same reason the bindings are sent: what a row can
-        # publish is asked of the answer it holds, and a cast-answered row is one
-        # more thing a person may publish. A **template** cast is not here,
+        # an automation -- for the same reason the bindings are sent: what a row
+        # can publish is asked of the answer it holds, and a cast-answered row is
+        # one more thing a person may publish. A **template** cast is not here,
         # because it *is* a binding and arrives in `bindings` above.
         #
         # Sent for all three or for none. A screen that has read once sends its
@@ -2189,7 +2189,7 @@ async def ws_modules_hosted(
         # (the same fallback `bindings` makes, and for the same reason).
         vol.Optional("casts", default=None): vol.Any(None, [str]),
         vol.Optional("flows", default=None): vol.Any(None, [str]),
-        vol.Optional("scripts", default=None): vol.Any(None, [str]),
+        vol.Optional("automations", default=None): vol.Any(None, [str]),
         # **Reading a module this house already runs, rather than a new source.**
         # Naming one here is what opens the import screen *on* a module: the
         # document is the module's own rather than anything sent, and the reply
@@ -2278,7 +2278,7 @@ async def ws_modules_read(
         answers,
         conditions=_cast_rows(msg, editing, "casts"),
         flows=_cast_rows(msg, editing, "flows"),
-        scripts=_cast_rows(msg, editing, "scripts"),
+        automations=_cast_rows(msg, editing, "automations"),
     )
     # The roles the house itself answers, which is the set an input may be
     # answered with at *global* scope (`module_host.HOUSE_SCOPE`). Read from the
@@ -2310,7 +2310,7 @@ async def ws_modules_read(
                     # screen is open on one. Both are read off the seed rather
                     # than the record so the row and the save agree about the
                     # same input even where the definition is the newer half.
-                    **_cast_ids(editing, name),
+                    **_cast_ids(editing, name, block),
                 }
                 for name, block in source.inputs.items()
             ],
@@ -2357,20 +2357,40 @@ async def ws_modules_read(
     )
 
 
-def _cast_ids(editing: Mapping[str, Any] | None, name: str) -> Mapping[str, str]:
-    """The flow and the script a row is answered by, for a screen open on a module.
+def _cast_ids(
+    editing: Mapping[str, Any] | None, name: str, block: Mapping[str, Any] | None = None
+) -> Mapping[str, str]:
+    """The flow and the automation a row is answered by, for a screen open on a
+    module.
 
     Both, and not only the flow: the row opens whichever of the two editors the
     answer belongs to, and which one that is is a fact about the answer rather
-    than about the input -- so a row answered by a script has no flow to open and
-    a row answered by a flow has no script. Empty for a fresh import, where there
-    is no module yet and nothing to have answered.
+    than about the input -- so a row answered by an automation has no flow to
+    open and a row answered by a flow has no automation. Empty for a fresh
+    import, where there is no module yet and nothing to have answered.
+
+    The automation's *helper* rides along with its id, because the row's editor
+    says which entity the person's action has to set -- and the helper's id is
+    the module's slug plus the input's name in the row's own selector kind, which
+    is the row's block to say (`module_host.helper_entity_id`).
     """
     if editing is None:
         return {}
+    slug = str(editing.get("module") or "")
+    helper = ""
+    if slug and block is not None:
+        # **Guarded, because an input name is a blueprint's to spell.** A name
+        # that is not a module-key shape is a name no helper can be minted for,
+        # and that is a refusal the *save* makes for the rows this cast actually
+        # answers -- not a reason for the screen to fail to read at all. So a name
+        # like that simply has no helper to show, and its row says the automation
+        # is pending.
+        with contextlib.suppress(pack_authoring.AuthoringError):
+            helper = module_host.helper_entity_id(slug, name, dict(block))
     return {
         "flow_id": str((editing.get("flows") or {}).get(name, "")),
-        "script_id": str((editing.get("scripts") or {}).get(name, "")),
+        "automation_id": str((editing.get("automations") or {}).get(name, "")),
+        "automation_entity": helper,
     }
 
 
@@ -2460,10 +2480,11 @@ async def _module_to_edit(
             # it. The screen shows a flow row per name and opens the flow the id
             # names (`module_definitions.follow`).
             "flows": {name: record.flows.get(name, "") for name in definition.flows},
-            # The same two halves for a script: the names are the module's, the
-            # id is the house's, and the row opens the person's own script.
-            "scripts": {
-                name: record.scripts.get(name, "") for name in definition.scripts
+            # The same two halves for an automation: the names are the module's,
+            # the id is the house's, and the row opens the person's own
+            # automation.
+            "automations": {
+                name: record.automations.get(name, "") for name in definition.automations
             },
             "picks": [{"name": name, "key": key} for name, key in definition.picks],
         }
@@ -2480,7 +2501,7 @@ async def _module_to_edit(
             "settings": list(record.settings),
             "casts": dict(record.derived),
             "flows": dict(record.flows),
-            "scripts": dict(record.scripts),
+            "automations": dict(record.automations),
             "picks": [{"name": name, "key": key} for name, key in record.picks],
         }
     return {
@@ -2525,12 +2546,12 @@ async def _module_to_edit(
         # runs, writing into an entity this integration makes for it
         # (`modules._async_push_flows`).
         vol.Optional("flows", default=list): list,
-        # The inputs answered by a *Home Assistant script*, by input name, each
-        # naming the script to call. The fourth kind of answer, and the only one
-        # that returns: the automation calls the script first and is built from
-        # what it hands back (`modules.async_host`). A mapping rather than a list,
-        # because the id is the person's own and has to travel.
-        vol.Optional("scripts", default=dict): dict,
+        # The inputs answered by a *Home Assistant automation*, by name. The
+        # fourth kind of answer: the automation runs on its own and writes a
+        # helper the row reads, so it is a flow's twin -- Open House makes the
+        # helper and the seeded automation, which is why a name is enough and the
+        # id is this house's to fill in (`modules._async_seed_automations`).
+        vol.Optional("automations", default=list): list,
     }
 )
 @websocket_api.async_response
@@ -2580,7 +2601,7 @@ async def ws_modules_host(
             bound=host.bound_slots(room_id),
             casts=_casts(msg.get("casts")),
             flows=_names(msg.get("flows")),
-            scripts=_scripts(msg.get("scripts")),
+            automations=_names(msg.get("automations")),
         )
     except modules.ModuleHostError as refusal:
         connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
@@ -2610,11 +2631,12 @@ async def ws_modules_host(
         # the reason the condition answers are: the screen is showing every row,
         # so what it sends is every row's answer (`modules.async_update`).
         vol.Optional("flows"): list,
-        # Which inputs are answered by a script, by name, when a cast is what
-        # changed -- including an empty id for a name, which is how a script cast
-        # comes back off (`modules.async_update`). Merged rather than replaced,
-        # because the settings form shows only the inputs a person kept settable.
-        vol.Optional("scripts"): dict,
+        # Which inputs are answered by an automation, by name, when a cast is what
+        # changed. Sent as the whole set rather than as a change to it, for the
+        # flows' reason: Open House makes the automation, so a name that drops off
+        # the set is a cast taken away as well as an answer withdrawn
+        # (`modules.async_update`).
+        vol.Optional("automations"): list,
         # The revision the card was drawn from. The card saves itself on a timer
         # (`panel/src/components/hosted-module.ts`), so without this a card drawn
         # before a profile switch would write the answers of the house that was
@@ -2653,8 +2675,10 @@ async def ws_modules_settings(
             bound=host.bound_slots(await _room_of(hass, str(msg["module"]))),
             casts=(None if msg.get("casts") is None else _casts(msg.get("casts"))),
             flows=None if msg.get("flows") is None else _names(msg.get("flows")),
-            scripts=(
-                None if msg.get("scripts") is None else _scripts(msg.get("scripts"))
+            automations=(
+                None
+                if msg.get("automations") is None
+                else _names(msg.get("automations"))
             ),
         )
     except modules.ModuleHostError as refusal:
@@ -2693,11 +2717,11 @@ async def ws_modules_settings(
         # module asks for, so it is the same field.
         vol.Optional("room_id", default=""): str,
         # What should start the new module, where the cast cannot name it itself
-        # (`cast_document.detached_document`). A template and a script say nothing
-        # about when they should run, so for those two this is not a refinement --
-        # it is the difference between a module and a module that never runs. A
-        # condition and a flow bring their own, and anything named here is watched
-        # *beside* them rather than instead.
+        # (`cast_document.detached_document`). A template says nothing about when
+        # it should run, so for it this is not a refinement -- it is the
+        # difference between a module and a module that never runs. A condition, a
+        # flow and an automation bring their own, and anything named here is
+        # watched *beside* them rather than instead.
         vol.Optional("trigger", default=list): list,
         vol.Optional("revision"): int,
     }
@@ -2825,8 +2849,8 @@ async def _detach_slot(
     if rule is None:
         raise modules.ModuleHostError(
             f"{slot!r} is a device on this module rather than a rule, so there is "
-            "nothing to detach: a condition, a template, a flow or a script on the "
-            "slot is what can become a module of its own"
+            "nothing to detach: a condition, a template, a flow or an automation on "
+            "the slot is what can become a module of its own"
         )
     record, watched = await modules.async_detach_slot(
         hass,
@@ -2905,7 +2929,7 @@ async def _detach_slot(
         vol.Required("settings"): list,
         vol.Required("casts"): dict,
         vol.Required("flows"): list,
-        vol.Required("scripts"): dict,
+        vol.Required("automations"): list,
     }
 )
 @websocket_api.async_response
@@ -2959,7 +2983,7 @@ async def ws_modules_edit(
             settings=_names(msg.get("settings")),
             casts=_casts(msg.get("casts")),
             flows=_names(msg.get("flows")),
-            scripts=_scripts(msg.get("scripts")),
+            automations=_names(msg.get("automations")),
             # **Every room's answers, not the one room's.** An edit reaches the
             # installations in all of them, and a module that reaches through a
             # slot has to be built against the room it sits in -- so the map is
@@ -3010,7 +3034,7 @@ async def ws_modules_publish(
 ) -> None:
     """Make one row's logic readable by any automation, or stop reading it.
 
-    The whole of demand two as one button: a condition, a flow, a script or a
+    The whole of demand two as one button: a condition, a flow, an automation or a
     template already holds a value, and publishing it puts that value at
     `sensor.open_house_<module>_<key>` -- an entity like any other, which the rest
     of Home Assistant may then use without knowing Open House exists. On is a
@@ -3296,11 +3320,11 @@ async def ws_modules_store(
         # this file elsewhere pushes a flow for that input in whatever Node-RED
         # is doing the installing (`modules.async_define`).
         vol.Optional("flows", default=list): list,
-        # The inputs answered by a script, by name, each naming the script. The
-        # *names* are what travels in the file -- a `script.<id>` belongs to one
-        # Home Assistant -- so the id is read off the same mapping and kept only
-        # in the record of the house that picked it (`modules.async_define`).
-        vol.Optional("scripts", default=dict): dict,
+        # The inputs answered by an automation, by name. Travels as *names*, like
+        # the flows -- an automation id belongs to one Home Assistant, so the id
+        # is made afresh in whatever house installs this file and kept only in
+        # that house's record (`modules.async_define`).
+        vol.Optional("automations", default=list): list,
     }
 )
 @websocket_api.async_response
@@ -3344,7 +3368,7 @@ async def ws_modules_define(
             replace=bool(msg.get("replace")),
             casts=_casts(msg.get("casts")),
             flows=_names(msg.get("flows")),
-            scripts=_scripts(msg.get("scripts")),
+            automations=_names(msg.get("automations")),
         )
     except modules.ModuleHostError as refusal:
         connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
@@ -3372,10 +3396,10 @@ async def ws_modules_define(
         # The inputs this room answers with a flow of nodes, by name, when the
         # room differs from the definition about that.
         vol.Optional("flows"): list,
-        # The inputs this room answers with a script, by name, each naming the
-        # script it picked. The definition carries the *names*; the id belongs to
-        # this house, so the room supplies it here (`modules.async_deploy`).
-        vol.Optional("scripts"): dict,
+        # The inputs this room answers with an automation, by name, when the room
+        # differs from the definition about that. Names only, like the flows: the
+        # id is made here (`modules.async_deploy`).
+        vol.Optional("automations"): list,
     }
 )
 @websocket_api.async_response
@@ -3415,8 +3439,10 @@ async def ws_modules_deploy(
             bound=host.bound_slots(room_id),
             casts=(None if msg.get("casts") is None else _casts(msg.get("casts"))),
             flows=None if msg.get("flows") is None else _names(msg.get("flows")),
-            scripts=(
-                None if msg.get("scripts") is None else _scripts(msg.get("scripts"))
+            automations=(
+                None
+                if msg.get("automations") is None
+                else _names(msg.get("automations"))
             ),
         )
     except modules.ModuleHostError as refusal:
@@ -3658,10 +3684,11 @@ def _definition_json(
         # assigned by the Node-RED of the house that installs the module, so it
         # is minted there and recorded on that house's record rather than here.
         "flows": list(definition.flows),
-        # The inputs it answers with a *script*, by name, for the same reason and
-        # by the same split: the name is the module's and travels in the file, and
-        # the `script.<id>` is the installing house's.
-        "scripts": list(definition.scripts),
+        # The inputs it answers with an *automation*, by name, for the same reason
+        # and by the same split: the name is the module's and travels in the file,
+        # and the automation's id -- and the helper it sets -- are the installing
+        # house's.
+        "automations": list(definition.automations),
         "slots": list(definition.slots),
         "missing_slots": [slot for slot in definition.slots if slot not in bound],
         "deployed": [
@@ -3779,26 +3806,6 @@ def _casts(sent: object) -> dict[str, Any]:
     return {
         str(name): value
         for name, value in sent.items()
-        if isinstance(name, str) and name
-    }
-
-
-def _scripts(sent: object) -> dict[str, str]:
-    """The script answers off a message, by input name: the script each names.
-
-    A mapping rather than a list, and that is the difference between this and the
-    flows: a flow is *made* here, so a name is enough and the id is this house's to
-    fill in (`modules._async_push_flows`). A script is the person's own and Open
-    House only ever names it, so the id has to travel. An *empty* one is passed
-    through rather than dropped, because it is how a script cast comes back off
-    (`modules.async_update`), and a row that is not a string is dropped because an
-    input name is what this is read by and an id under no name names nothing.
-    """
-    if not isinstance(sent, Mapping):
-        return {}
-    return {
-        str(name): str(script or "")
-        for name, script in sent.items()
         if isinstance(name, str) and name
     }
 
@@ -4001,19 +4008,19 @@ def _flow_href(base: str, flow_id: str) -> str:
     return f"{base.rstrip('/')}/#flow/{flow_id}"
 
 
-def _script_href(script_id: str) -> str:
-    """Home Assistant's own script editor, opened on one script.
+def _automation_href(automation_id: str) -> str:
+    """Home Assistant's own automation editor, opened on one automation.
 
     A *relative* address, unlike the flows': Node-RED is another program on
-    another port, so its address has to be configured, but the script editor is
-    Home Assistant's own page and the browser reading this is already in Home
-    Assistant. `/config/script/edit/<id>` is that page's route, and building it
-    here rather than in the panel keeps the panel from having to know which of the
-    two editors is which.
+    another port, so its address has to be configured, but the automation editor
+    is Home Assistant's own page and the browser reading this is already in Home
+    Assistant. `/config/automation/edit/<id>` is that page's route, and building
+    it here rather than in the panel keeps the panel from having to know which of
+    the two editors is which.
     """
-    if not script_id:
+    if not automation_id:
         return ""
-    return f"/config/script/edit/{script_id}"
+    return f"/config/automation/edit/{automation_id}"
 
 
 async def _hosted(hass: HomeAssistant, host: OpenHouseHost) -> Mapping[str, object]:
@@ -4031,6 +4038,7 @@ async def _hosted(hass: HomeAssistant, host: OpenHouseHost) -> Mapping[str, obje
     }
     records = await modules.async_records(hass)
     editor = _node_red_url(hass)
+    helpers = {record.slug: _helpers_of(record) for record in records}
     return {
         "modules": [
             {
@@ -4077,17 +4085,19 @@ async def _hosted(hass: HomeAssistant, host: OpenHouseHost) -> Mapping[str, obje
                     }
                     for name, flow_id in record.flows.items()
                 },
-                # The inputs this module answers with a *script*, each with the
-                # script's own id and where it is edited. There is no entity here
-                # and that is the point of this cast: what the input reads is what
-                # the script hands back when the automation runs, so the only
-                # thing kept anywhere is the name of the script to call.
-                "scripts": {
+                # The inputs this module answers with an *automation*, each with
+                # the helper the input is bound to, the automation's own id and
+                # where it is edited. The entity is here and that is the point of
+                # this cast: what the input reads is the helper's state, written
+                # by the person's own automation -- the same shape as a flow, with
+                # a Home Assistant automation in place of a Node-RED one.
+                "automations": {
                     name: {
-                        "script_id": script_id,
-                        "url": _script_href(script_id),
+                        "automation_id": automation_id,
+                        "entity_id": helpers[record.slug].get(name, ""),
+                        "url": _automation_href(automation_id),
                     }
-                    for name, script_id in record.scripts.items()
+                    for name, automation_id in record.automations.items()
                 },
                 "inputs": [
                     {"name": name, "value": _jsonable(value)}
@@ -4195,6 +4205,31 @@ def _hosted_slots(
     return rows
 
 
+def _helpers_of(record: module_records.ModuleRecord) -> Mapping[str, str]:
+    """The helper each automation-answered input is bound to, by input name.
+
+    Read out of the record's own stored document, for the reason
+    `_module_settings` reads it: which helper Open House made for an input is
+    decided by that input's *selector*, and the selector is the document's to
+    declare. A document that will not read is a module the house still hosts, so
+    the rows lose their entity and keep their automation id rather than the
+    listing failing -- the same trade `_module_settings` makes.
+    """
+    if not record.automations or not record.source:
+        return {}
+    try:
+        source = module_host.read_module_source(record.source)
+    except pack_authoring.AuthoringError:
+        return {}
+    made: dict[str, str] = {}
+    for name in record.automations:
+        block = source.inputs.get(name)
+        if block is None:
+            continue
+        made[name] = module_host.helper_entity_id(record.slug, name, block)
+    return made
+
+
 def _entity_name(hass: HomeAssistant, entity_id: str) -> str:
     """What Home Assistant calls an entity, or the empty string when it has none."""
     if not entity_id:
@@ -4258,11 +4293,15 @@ def _module_settings(
         # the flow, and the card opens Node-RED on it.
         row["flow_id"] = record.flows.get(name, "")
         row["flow_url"] = _flow_href(editor, row["flow_id"])
-        # A setting answered with a script is the same shape again: what fills it
-        # is not a value the person edits here, it is what their own script hands
-        # back, so the row carries the script and where to open it.
-        row["script_id"] = record.scripts.get(name, "")
-        row["script_url"] = _script_href(row["script_id"])
+        # A setting answered with an automation is the same shape again: what
+        # fills it is not a value the person edits here, it is the helper their
+        # own automation writes, so the row carries the automation and where to
+        # open it -- and the helper, so the card can say what is being read.
+        row["automation_id"] = record.automations.get(name, "")
+        row["automation_url"] = _automation_href(row["automation_id"])
+        row["automation_entity"] = module_host.helper_entity_id(
+            record.slug, name, source.inputs[name]
+        )
         # What this row's own logic is published as, or empty. Read off the
         # *picks*, which are the module's answer to "which of my values do I
         # publish" -- and keyed by the candidate name (`cast:<input>`) rather
@@ -4276,9 +4315,11 @@ def _module_settings(
         if name in record.flows:
             row["bound_kind"] = "flow"
             row["bound_to"] = module_host.flow_entity_id(record.slug, name)
-        elif name in record.scripts:
-            row["bound_kind"] = "script"
-            row["bound_to"] = f"script.{record.scripts[name]}"
+        elif name in record.automations:
+            row["bound_kind"] = "automation"
+            row["bound_to"] = module_host.helper_entity_id(
+                record.slug, name, source.inputs[name]
+            )
         elif name in record.derived:
             row["bound_kind"] = "condition"
             row["bound_to"] = module_host.derived_entity_id(record.slug, name)

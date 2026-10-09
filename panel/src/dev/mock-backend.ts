@@ -1264,7 +1264,7 @@ const STORED_MODULES: ModuleOfferRow[] = [
     blueprint: "blueprints/automation/homeassistant/motion_light.yaml",
     pinned: false,
     flows: [],
-    scripts: [],
+    automations: [],
     slots: ["ambient_light_sensor", "ceiling_light"],
     missing_slots: ["ceiling_light"],
     deployed: [
@@ -1292,7 +1292,7 @@ const STORED_MODULES: ModuleOfferRow[] = [
     blueprint: "",
     pinned: true,
     flows: [],
-    scripts: [],
+    automations: [],
     slots: [],
     missing_slots: [],
     deployed: [],
@@ -1357,7 +1357,7 @@ const HOSTED_MODULES: HostedModule[] = [
     // No script on either module in the mock: the cast is offered on every
     // settings row and a mock that shipped one would be showing a state the
     // fixture cannot keep true -- nothing here calls anything.
-    scripts: {},
+    automations: {},
     inputs: [{ name: "threshold", value: 40 }],
     settings: [
       {
@@ -1398,7 +1398,7 @@ const HOSTED_MODULES: HostedModule[] = [
     configs: ["Default"],
     derived: {},
     flows: {},
-    scripts: {},
+    automations: {},
     inputs: [],
     settings: [],
     outputs: [
@@ -2363,8 +2363,11 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
           flows: Object.fromEntries(
             Object.entries(hosted.flows).map(([name, flow]) => [name, flow.flow_id]),
           ),
-          scripts: Object.fromEntries(
-            Object.entries(hosted.scripts).map(([name, script]) => [name, script.script_id]),
+          automations: Object.fromEntries(
+            Object.entries(hosted.automations).map(([name, row]) => [
+              name,
+              row.automation_id,
+            ]),
           ),
           // The mock's outputs carry only the key, where the server keeps the
           // input's own name *and* the key the person chose; the key is what the
@@ -2430,10 +2433,17 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
             { flow_id: "", entity_id: `sensor.open_house_flow_${slug}_${String(name)}` },
           ]),
         ),
-        scripts: Object.fromEntries(
-          Object.entries((payload.scripts ?? {}) as Record<string, string>).map(
-            ([name, script]) => [name, { script_id: script }],
-          ),
+        automations: Object.fromEntries(
+          (Array.isArray(payload.automations)
+            ? (payload.automations as unknown[])
+            : []
+          ).map((name) => [
+            String(name),
+            {
+              automation_id: `open_house_${slug}_${String(name)}`,
+              entity_id: `input_text.open_house_${slug}_${String(name)}`,
+            },
+          ]),
         ),
         inputs: Object.entries(bindings)
           .filter(([, binding]) => binding.kind === "literal")
@@ -2461,7 +2471,15 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
       guardStale(payload);
       const slug = String(payload.module);
       const bindings = (payload.bindings ?? {}) as Record<string, unknown>;
-      const scripts = (payload.scripts ?? {}) as Record<string, string>;
+      // The whole set of inputs answered by an automation, which is what the
+      // card sends: a name that has dropped off it is a cast taken away, and the
+      // helper and the automation it stood for go with it.
+      const automations = new Set(
+        (Array.isArray(payload.automations)
+          ? (payload.automations as unknown[])
+          : []
+        ).map(String),
+      );
       const module = HOSTED_MODULES.find((row) => row.slug === slug);
       if (module) {
         for (const setting of module.settings) {
@@ -2469,23 +2487,37 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
             setting.value = bindings[setting.name];
             setting.bound = true;
           }
-          // A script cast is a *name*, not a value, so it is kept in two places
-          // the way the server keeps it: on the module's own map, and on the row
-          // so the settings form opens on the script it names rather than on the
-          // choice above. An empty id is the cast coming back off, which the
-          // card sends when the menu is moved away from a script.
-          if (setting.name in scripts) {
-            const script = scripts[setting.name] ?? "";
-            if (script) {
-              module.scripts[setting.name] = {
-                script_id: script,
-                url: `/config/script/edit/${script}`,
-              };
-            } else {
-              delete module.scripts[setting.name];
-            }
-            setting.script_id = script;
-            setting.bound_kind = script ? "script" : "literal";
+        }
+        // The automation cast is a *set*, kept on the module's own map the way
+        // the server keeps it -- one entry per input, holding the automation's id
+        // and the helper it writes -- with each row told both, so the card opens
+        // its editor and says which entity is being read. A name that has dropped
+        // off the set is the cast coming back off, which the card sends by
+        // leaving it out.
+        for (const name of Object.keys(module.automations)) {
+          if (automations.has(name)) continue;
+          delete module.automations[name];
+          const row = module.settings.find((setting) => setting.name === name);
+          if (row) {
+            delete row.automation_id;
+            delete row.automation_entity;
+            delete row.automation_url;
+            row.bound_kind = "literal";
+          }
+        }
+        for (const name of automations) {
+          const made = {
+            automation_id: `open_house_${slug}_${name}`,
+            entity_id: `input_text.open_house_${slug}_${name}`,
+            url: `/config/automation/edit/open_house_${slug}_${name}`,
+          };
+          module.automations[name] = made;
+          const row = module.settings.find((setting) => setting.name === name);
+          if (row) {
+            row.automation_id = made.automation_id;
+            row.automation_entity = made.entity_id;
+            row.automation_url = made.url;
+            row.bound_kind = "automation";
           }
         }
       }
@@ -2627,7 +2659,14 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
       // says `vol.Required` for exactly this reason; the client's type said
       // "optional" and sent nothing, so the refusal arrived as `invalid_format`
       // with a sentence about a field the caller could not have known it owed.
-      for (const field of ["bindings", "outputs", "settings", "casts", "flows", "scripts"]) {
+      for (const field of [
+        "bindings",
+        "outputs",
+        "settings",
+        "casts",
+        "flows",
+        "automations",
+      ]) {
         if (!(field in payload)) {
           throw refuse(REFUSALS.invalidFormat, `${field} is required to edit a module`);
         }
@@ -2673,7 +2712,7 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
         configs: ["Default"],
         derived: {},
         flows: {},
-        scripts: {},
+        automations: {},
         inputs: [],
         settings: [],
         outputs: [
@@ -2747,7 +2786,10 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
           .filter((binding) => binding.kind === "slot" && binding.slot !== undefined)
           .map((binding) => String(binding.slot)),
         flows: Array.isArray(payload.flows) ? (payload.flows as string[]).map(String) : [],
-        scripts: Object.keys((payload.scripts ?? {}) as Record<string, string>),
+        automations: (Array.isArray(payload.automations)
+          ? (payload.automations as string[])
+          : []
+        ).map(String),
         missing_slots: [],
         // A define never installs, so a definition that replaces another keeps
         // the placements the old one had: those are rooms running it, and they
@@ -2801,7 +2843,7 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
           configs: ["Default"],
           derived: {},
           flows: {},
-          scripts: {},
+          automations: {},
           inputs: [],
           settings: [],
           outputs: [],
@@ -2899,7 +2941,7 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
         pinned: false,
         slots: [],
         flows: [],
-        scripts: [],
+        automations: [],
         missing_slots: [],
         deployed: [],
       };

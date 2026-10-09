@@ -57,24 +57,25 @@ __all__ = [
     "Output",
     "OutputCandidate",
     "action_key",
-    "answer_with_scripts",
     "bind_inputs",
     "binding_to_entity",
     "cast_answers",
     "config_id_for",
     "declare_outputs",
-    "declared_variable_names",
     "derived_entity_id",
     "flow_entity_id",
+    "Helper",
+    "helper_automation",
+    "helper_config_id",
+    "helper_entity_id",
+    "helper_for",
+    "helper_name",
     "instantiate",
     "output_candidates",
     "output_entity_id",
     "publish_actions",
     "read_module_source",
     "resolve_slots",
-    "script_binding",
-    "script_calls",
-    "script_variable",
     "slot_key",
     "slots_reached",
     "unresolved_slots",
@@ -523,8 +524,8 @@ def output_candidates(
         binding = (bindings or {}).get(name)
         # **An empty expression here is not a hole, it is a module not built
         # yet.** A person ticking this on a fresh import has named no module, so
-        # there is no slug to spell the entity a condition makes or the variable
-        # a script fills -- and the reading is written when the module is built,
+        # there is no slug to spell the entity a condition makes or the helper an
+        # automation fills -- and the reading is written when the module is built,
         # from the answer that carries it. The same is true of a reading over a
         # slot nobody has bound, and it is offered for the same reason: a
         # candidate list that changed shape between importing a blueprint and
@@ -615,15 +616,15 @@ def cast_answers(
     *,
     conditions: Iterable[str] = (),
     flows: Iterable[str] = (),
-    scripts: Iterable[str] = (),
+    automations: Iterable[str] = (),
 ) -> dict[str, str]:
     """Which inputs are answered with *logic* rather than with a value, and which.
 
     The names come from the two places that know them, and both are needed.
     Three of the four casts are recorded beside the answers -- `derived` for a
-    condition, `flows`, `scripts` -- because the record has to remember them for
-    the build. A **template** is not recorded anywhere, and it does not need to
-    be: it *is* the answer, so the binding says it. A row whose answer is
+    condition, `flows`, `automations` -- because the record has to remember them
+    for the build. A **template** is not recorded anywhere, and it does not need
+    to be: it *is* the answer, so the binding says it. A row whose answer is
     template text is a row something works out at run time rather than a value,
     and that is the definition rather than a guess about intent.
 
@@ -639,7 +640,7 @@ def cast_answers(
     """
     named = dict.fromkeys(conditions, "condition")
     named.update(dict.fromkeys(flows, "flow"))
-    named.update(dict.fromkeys(scripts, "script"))
+    named.update(dict.fromkeys(automations, "automation"))
     for name, binding in (bindings or {}).items():
         if name not in named and _is_template_text(binding.value):
             named[name] = "template"
@@ -651,7 +652,8 @@ def _reading_of(binding: InputBinding) -> tuple[str, bool] | None:
 
     Two answers, and between them they cover every cast. A **device** the row
     holds -- an entity a person picked, the binary sensor a condition made, the
-    entity a flow writes -- is read as its state. Anything else is text, and a
+    entity a flow writes, the helper an automation writes -- is read as its state.
+    Anything else is text, and a
     template among it is handed over as the template it is: wrapping `{{ ... }}`
     again renders to nothing, which is the same rule `_publish` applies.
 
@@ -709,11 +711,9 @@ def declare_outputs(
     `casts` likewise, and for the same reason: a pick on an input answered with a
     cast is a pick because the candidate is offered. A cast output is appended at
     the end of the action list like any other reading -- it names no `variables:`
-    -- and that placement is right for all four. The condition and the flow are
-    entities, always readable. A template is rendered where the publisher lands.
-    And a **script**'s returned value is in scope from the call (which
-    `answer_with_scripts` puts at the top of the action list) to the end of the
-    run, which is where the publisher lands too.
+    -- and that placement is right for all four. The condition, the flow and the
+    automation are entities, always readable. A template is rendered where the
+    publisher lands.
     """
     candidates = {
         candidate.name: candidate
@@ -1760,167 +1760,326 @@ def binding_to_entity(block: object, entity_id: str) -> InputBinding:
     return InputBinding(kind="literal", value=_template_for(selector, entity_id))
 
 
-def _variable_name(taken: set[str], name: str) -> str:
-    """`name`, or the first numbered spelling of it nothing has taken.
+#: The Home Assistant *helper* domain each value kind's answer lives in. The
+#: kind comes from `_kind_from_selector`, so a number input's helper holds a
+#: number, a yes-or-no's holds a boolean, and a choice's holds one of the options
+#: the blueprint declared. Everything else -- a piece of text, an entity id -- is
+#: `input_text`, which is the one kind that holds any of them.
+_HELPER_DOMAINS = {
+    "number": "input_number",
+    "boolean": "input_boolean",
+    "enum": "input_select",
+}
 
-    Numbered with an underscore rather than the `" #2"` `_unique` uses for output
-    *labels*, because this name is written into a running automation: Home
-    Assistant's template variables are identifiers, and a variable called
-    `oh_brightness #2` is a template referring to a name Home Assistant will not
-    bind, which renders to nothing at run time instead of failing where it can be
-    seen. The prefix is checked, not assumed, so an input the blueprint itself
-    named the same way does not have its variable clobbered.
+#: What each helper domain's own *set* action is called, and the field it takes
+#: the value in. Three of the four take a value and a boolean takes the service
+#: itself, which is why the action is two things here rather than one.
+_HELPER_SETTERS = {
+    "input_number": ("set_value", "value"),
+    "input_select": ("select_option", "option"),
+    "input_text": ("set_value", "value"),
+}
+
+#: The largest length `input_text` accepts (`input_text.MAX_LENGTH_STATE_STATE`).
+#: Spelled here because the helper Open House makes is meant to hold anything a
+#: row might, and a helper that refused a long string would refuse it silently --
+#: as the *helper*, not as the module, so the module's own error would be about
+#: a value that never arrived.
+_TEXT_LIMIT = 255
+
+#: The reading a number selector takes when the blueprint did not bound it. Home
+#: Assistant's own number selector uses the same pair, so an unbounded input gets
+#: the slider a person would have got had they made the helper by hand.
+_NUMBER_FALLBACK = (0.0, 100.0, 1.0)
+
+
+def _helper_object_id(module: str, name: str) -> str:
+    """`open_house_<module>_<name>`: the one spelling of a helper's own name.
+
+    **Home Assistant derives the entity id from the helper's name, and that
+    derivation is not ours to choose.** The helper is *made* under a name and
+    slugified into an id by Home Assistant (`util.slugify`, whose rule is "a run of
+    anything that is not a word character becomes one underscore"), so what this
+    spells is what that derivation gives -- including the collapsing, which is
+    here rather than in the caller because a module or an input whose name ends in
+    an underscore is otherwise a helper whose id is not the id the input reads.
+    Both halves are `_KEY`-shaped, so the collapse is the whole of the difference.
     """
-    if name not in taken:
-        taken.add(name)
-        return name
-    number = 2
-    while f"{name}_{number}" in taken:
-        number += 1
-    numbered = f"{name}_{number}"
-    taken.add(numbered)
-    return numbered
+    return re.sub(r"_+", "_", f"open_house_{module}_{name}")
 
 
-def script_variable(name: str) -> str:
-    """The variable a script's returned value is bound to, from the input's name.
+def helper_entity_id(module: str, name: str, block: object) -> str:
+    """The helper a person's *automation* writes, and that the input reads.
 
-    Prefixed, and the prefix matters: this name is introduced into the person's
-    own automation beside every variable the blueprint declares, so it has to be
-    recognisable as Open House's -- and unlikely to collide -- rather than
-    something a reader might think the blueprint wrote. Anything in the input name
-    that a template variable cannot hold becomes an underscore, because blueprint
-    input names are free to carry characters variables are not.
+    The fourth way an input may be answered -- by a Home Assistant automation of
+    the person's own -- needs a place for that automation to put its answer. An
+    automation can write only what a service can write, and the entities a service
+    may *set* are the house's helpers; so the answer has to be a helper of the
+    house's own. The domain is read off the selector, because the value a row
+    expects is the value the helper has to hold: a number input wants an
+    `input_number`, a yes-or-no an `input_boolean`, a choice an `input_select`, and
+    everything else an `input_text`.
+
+    Spelled here like `output_entity_id` and `flow_entity_id`, so the maker, the
+    binding and the panel cannot disagree about where it lives. Unlike a flow's
+    entity, a helper is an object of the instance's own -- it shows up in Home
+    Assistant's Settings > Helpers list and is editable there -- so the id reads as
+    the module's rather than as machinery: `open_house_<module>_<name>`.
+
+    It is the *same* shape the flow cast uses (`binding_to_entity`): an entity Open
+    House made, filled by a writer that is not Open House -- a Node-RED flow there,
+    the person's own automation here -- and bound to the input by its state.
     """
-    return "oh_" + re.sub(r"\W", "_", name)
+    if not _KEY.match(module):
+        raise AuthoringError(f"{module!r} is not a module name")
+    if not _KEY.match(name):
+        raise AuthoringError(f"{name!r} is not an input name")
+    domain = _HELPER_DOMAINS.get(_kind_from_selector(block), "input_text")
+    return f"{domain}.{_helper_object_id(module, name)}"
 
 
-def declared_variable_names(source: HostedSource) -> frozenset[str]:
-    """Every name the document's own variables already take, at any depth.
+def helper_name(module: str, name: str) -> str:
+    """The name a helper is made under, which is what Home Assistant slugs into
+    `helper_entity_id`.
 
-    Both spellings a value comes back under: a `variables:` entry the blueprint
-    set, and the `response_variable` a call handed back. Read so a script's
-    returned value is bound to a name *nothing else in the document uses* -- a
-    variable silently overwriting one the blueprint reads later is a bug that
-    shows up as the wrong answer from the wrong place, which is the worst kind to
-    trace back.
+    Words rather than the underscored id, because this is the name a person reads
+    in Settings > Helpers and in every entity picker: `Open House kitchen lux`.
+    The two spellings are one fact, which is why they are one function apart --
+    `_helper_object_id` is the slug of this.
     """
-    document = source.document
-    names = {name for name, _entry, _branch in _variables(document)}
-    names.update(_response_variables(document))
-    return frozenset(names)
+    return f"Open House {module} {name}"
 
 
-def script_binding(block: object, variable: str) -> InputBinding:
-    """An input's answer, when the answer is *what a script handed back*.
+def helper_config_id(module: str, name: str) -> str:
+    """The id of the automation Open House seeds to write a helper.
 
-    The same decision `binding_to_entity` makes, and for the same reason: an
-    input that takes a device is given the value itself, and an input that takes a
-    value is given a template reading it. The difference is only where the value
-    comes from -- a run-scoped variable rather than an entity Open House made --
-    so an input answered this way is *entity* where a device belongs and
-    *literal* (template text) otherwise.
+    Readable rather than `config_id_for`'s derived uuid, and derived from the same
+    two names, because this id is not only matched by Home Assistant -- it is what
+    the panel puts in the address of the embedded automation editor
+    (`/config/automation/edit/<id>`), and a person who opens the file is meant to
+    be able to tell which row an automation belongs to.
     """
+    if not _KEY.match(module):
+        raise AuthoringError(f"{module!r} is not a module name")
+    if not _KEY.match(name):
+        raise AuthoringError(f"{name!r} is not an input name")
+    return f"open_house_{module}_{name}"
+
+
+@dataclass(frozen=True)
+class Helper:
+    """A helper as Open House makes it, and the action that writes it.
+
+    Three facts and no more, because there are exactly three things a caller does
+    with one: make it (`domain` and `data` are the request Home Assistant's own
+    helper flow would send), know where it is (`entity_id`), and seed the action
+    that sets it (`action`). The default the seeded action writes and the reading
+    the helper starts at are the *same* value, so a person who changes nothing
+    sees the module's own default rather than a blank.
+    """
+
+    entity_id: str
+    domain: str
+    data: Mapping[str, Any]
+    action: Mapping[str, Any]
+
+
+def helper_for(module: str, name: str, block: object) -> Helper:
+    """The helper an automation-cast input is answered through.
+
+    **The selector decides what is made**, because the value the input expects is
+    the value the helper has to hold: a `number` selector's bounds become the
+    `input_number`'s bounds (and its unit and step, so the module's own slider and
+    Home Assistant's agree), a `select`'s options become the `input_select`'s
+    options, and a `boolean` becomes an `input_boolean`.
+
+    **The default is the block's own.** A blueprint input may declare a `default`,
+    and that is what the helper starts at and what the seeded action writes -- so
+    the row reads what the blueprint said it would read until the person's own
+    automation starts writing it, and the seeded action is a working example of
+    writing *this* row rather than a placeholder. Where there is no default, each
+    kind takes the emptiest value it can hold.
+    """
+    entity_id = helper_entity_id(module, name, block)
+    domain = entity_id.split(".", 1)[0]
+    title = helper_name(module, name)
     selector = _selector(block)
-    if "entity" in selector or "target" in selector:
-        return InputBinding(kind="entity", value="{{ " + variable + " }}")
-    return InputBinding(kind="literal", value="{{ " + variable + " }}")
-
-
-def answer_with_scripts(
-    source: HostedSource, scripts: Mapping[str, str]
-) -> tuple[dict[str, InputBinding], tuple[tuple[str, str], ...]]:
-    """The inputs a person answered with a script, as bindings and as calls.
-
-    Two things come back together because they are one decision: the *variable*
-    a script's answer is bound to is chosen here, and the same name is what the
-    binding reads and what the call writes it into. Deciding the two separately
-    is how a binding could come to read a variable no call ever set -- an input
-    filled with the text `{{ oh_x }}`, rendering to an empty string, and an
-    automation that runs against nothing with nothing in the log to say why.
-
-    Refused for an input the **trigger** names, which is the one place a script
-    cast cannot go: a trigger's `entity_id` is matched against the devices a house
-    has rather than rendered (`input_in_trigger`), so a variable written there is
-    compared as text and the automation installs and never fires.
-    """
-    taken = set(declared_variable_names(source))
-    bindings: dict[str, InputBinding] = {}
-    calls: list[tuple[str, str]] = []
-    for name, script in scripts.items():
-        if not script:
-            # A name with no script behind it: an installation that followed a
-            # definition naming this input before the installing house picked a
-            # script for it. Not answered, rather than answered with a call to
-            # nothing -- the input goes back to being one nothing fills, which is
-            # the state the build already knows how to hold a module in.
-            continue
-        block = source.inputs.get(name)
-        if not isinstance(block, Mapping):
-            raise AuthoringError(f"{name!r} is not an input of this blueprint")
-        if input_in_trigger(source, name):
-            raise AuthoringError(
-                f"{name!r} is named by the automation's trigger, so it cannot be "
-                "answered by a script: a trigger's entity_id is matched against "
-                "real devices rather than rendered, and a value written there "
-                "would leave the automation never firing"
+    declared = block.get("default") if isinstance(block, Mapping) else None
+    if domain == "input_number":
+        number = selector.get("number")
+        number = number if isinstance(number, Mapping) else {}
+        low, high, step = _number_bounds(number)
+        value = _number_default(declared, low, high, step)
+        data: dict[str, Any] = {
+            "name": title,
+            "min": low,
+            "max": high,
+            "step": step,
+            # `box` rather than the slider: a slider's handle is dragged to a
+            # number the module's own run then reads, and the value a person
+            # types is the one they meant.
+            "mode": "box",
+            "initial": value,
+        }
+        unit = number.get("unit_of_measurement")
+        if isinstance(unit, str) and unit:
+            data["unit_of_measurement"] = unit
+        return Helper(
+            entity_id=entity_id,
+            domain=domain,
+            data=data,
+            action=_setter(domain, entity_id, value),
+        )
+    if domain == "input_boolean":
+        setting = bool(declared)
+        return Helper(
+            entity_id=entity_id,
+            domain=domain,
+            data={"name": title, "initial": setting},
+            action=_setter(domain, entity_id, setting),
+        )
+    if domain == "input_select":
+        options = _options_of(selector.get("select"))
+        if options:
+            choice = declared if declared in options else options[0]
+            return Helper(
+                entity_id=entity_id,
+                domain=domain,
+                data={"name": title, "options": options, "initial": choice},
+                action=_setter(domain, entity_id, choice),
             )
-        variable = _variable_name(taken, script_variable(name))
-        bindings[name] = script_binding(block, variable)
-        # The person's script, however the panel handed it over: an entity id
-        # with its domain (`script.turn_the_lights_on`), a bare object id, or the
-        # leading `script.` left off. Normalised here rather than at the call
-        # site, so a `script.` written twice cannot become `script.script.x` --
-        # a step naming a service that does not exist, in an automation that
-        # otherwise installs perfectly.
-        calls.append((re.sub(r"^script\.", "", str(script)), variable))
-    return bindings, tuple(calls)
+        # A `select` with nothing to choose from cannot be an `input_select`: the
+        # helper's own schema requires at least one option. Text holds the value
+        # just as well, and an input that expected one of no options is an input
+        # nothing could have answered anyway.
+        domain = "input_text"
+        entity_id = f"input_text.{_helper_object_id(module, name)}"
+    text = "" if declared is None else str(declared)
+    return Helper(
+        entity_id=entity_id,
+        domain=domain,
+        data={"name": title, "min": 0, "max": _TEXT_LIMIT, "initial": text},
+        action=_setter(domain, entity_id, text),
+    )
 
 
-def script_calls(
-    document: Mapping[str, Any],
-    calls: Sequence[tuple[str, str]],
-) -> dict[str, Any]:
-    """Prepend the script calls that answer this module's script casts.
+def helper_automation(module: str, name: str, helper: Helper) -> Mapping[str, Any]:
+    """The automation Open House seeds for `helper`, for the person to finish.
 
-    **At the top of the action list, and that position is the whole of the
-    correctness.** A script only runs when it is called, and the value it hands
-    back with `response_variable:` is in scope for the rest of the list the call
-    sits in -- so the call goes first, and every use of the input below it can
-    read the variable. Anywhere else and an input used above the call would
-    render the variable as nothing.
+    **Two things and both of them are for the person to replace**: the trigger,
+    which is empty, and the action, which is the working example. An empty
+    `trigger:` is what Home Assistant's own editor gives a new automation -- the
+    validator accepts an empty list and the editor's own Save writes one -- so
+    what the person opens is a new automation rather than a seeded one they have
+    to clear out first. The action is the "visual syntax" the cast exists to
+    teach: what a row is set by, spelled in the editor's own vocabulary.
 
-    Run **after** `publish_actions`, never before: that function inserts each
-    output's publisher beside the action that produced it, found by a path into
-    the document's lists -- and a step inserted at the front of a list moves every
-    index after it, so a path computed before this ran would land beside the wrong
-    action. By the time this is reached the publishers are in place and nothing
-    reads the document by index again.
-
-    A `script` step rather than a `service` one, because it is a script being run:
-    Home Assistant accepts `action: script.<id>` as a step and answers it with
-    `response_variable:`, and the old `service:` spelling would say the same thing
-    less plainly.
+    **Open House seeds this once and never again.** The seeding is guarded on the
+    automation's id being absent from `automations.yaml`, so the person's own
+    triggers, conditions and actions survive every later save of the module --
+    which they have to, because the whole point is that the automation becomes
+    theirs.
     """
-    if not calls:
-        return _copy(document)
-    result = _copy(document)
-    key = _action_key(result)
-    if key is None:
-        # No actions to run a script from. `answer_with_scripts` already refused
-        # an input the trigger names, so a script cast on a document with no
-        # actions at all is nothing to build; the callers refuse that earlier.
-        return result
-    sequence = result[key]
-    if not isinstance(sequence, list):
-        sequence = [sequence]
-        result[key] = sequence
-    steps = [
-        {"action": f"script.{script}", "response_variable": variable}
-        for script, variable in calls
+    return {
+        "id": helper_config_id(module, name),
+        "alias": helper_name(module, name),
+        "description": (
+            f"Open House made this to answer the {name!r} input of the {module!r} "
+            "module. Add a trigger, and this automation sets "
+            f"{helper.entity_id}, which is the helper that input reads. You can "
+            "change the action, and you can make more helpers."
+        ),
+        "trigger": [],
+        "action": [helper.action],
+    }
+
+
+def _setter(domain: str, entity_id: str, value: object) -> Mapping[str, Any]:
+    """The action that writes `value` into the helper `entity_id` names.
+
+    Three of the four helpers are set by a service that takes a value; a boolean
+    is set by turning it on or off, so its action carries no data at all. The
+    field the value goes in is the domain's own (`input_number.set_value` takes
+    `value`, `input_select.select_option` takes `option`), because that is what a
+    person writing the action by hand would have to get right.
+    """
+    if domain == "input_boolean":
+        return {
+            "action": f"input_boolean.{'turn_on' if value else 'turn_off'}",
+            "target": {"entity_id": entity_id},
+        }
+    service, field = _HELPER_SETTERS[domain]
+    return {
+        "action": f"{domain}.{service}",
+        "target": {"entity_id": entity_id},
+        "data": {field: value},
+    }
+
+
+def _number_bounds(number: Mapping[str, Any]) -> tuple[float, float, float]:
+    """A number selector's bounds and step, defaulted where it gave none.
+
+    A blueprint may write any of the three as a *template* -- `min: "{{ x }}"` --
+    and a helper's bounds are numbers, so a template is not a bound this can use.
+    It takes the fallback rather than guessing, which is the same choice the
+    selector's own schema makes for an absent one.
+    """
+    low, high, step = _NUMBER_FALLBACK
+    given = [
+        item if isinstance(item, (int, float)) and not isinstance(item, bool) else None
+        for item in (number.get("min"), number.get("max"), number.get("step"))
     ]
-    sequence[:0] = steps
-    return result
+    low = float(given[0]) if given[0] is not None else low
+    high = float(given[1]) if given[1] is not None else high
+    step = float(given[2]) if given[2] is not None else step
+    if high <= low:
+        # `input_number` refuses a maximum that is not above its minimum, and the
+        # blueprint's own answer would then be a module that cannot be built for a
+        # reason about a helper. One step above the minimum is the narrowest range
+        # that keeps the blueprint's own bound rather than replacing it.
+        high = low + step
+    return low, high, step
+
+
+def _number_default(
+    declared: object, low: float, high: float, step: float
+) -> float:
+    """The number a helper starts at, from the block's default and its bounds.
+
+    Clamped into the range rather than refused: a default outside its own bounds
+    is a blueprint's mistake, but the *module* is not what is wrong, and a helper
+    that would not accept the value is a module that will not save. The clamp
+    names the value the blueprint meant as nearly as the range can hold.
+    """
+    value = declared
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return low
+    number = float(value)
+    if number < low:
+        return low
+    if number > high:
+        return high
+    return number
+
+
+def _options_of(select: object) -> list[str]:
+    """A `select` selector's options as the plain strings `input_select` holds.
+
+    A selector's options may be written as bare strings or as `{value, label}`
+    pairs, and the label is the thing a person reads while the value is the thing
+    the module is given -- so the *value* is what the helper holds. Duplicates go,
+    because `input_select` refuses them and two options spelled the same are one
+    option.
+    """
+    if not isinstance(select, Mapping):
+        return []
+    found: list[str] = []
+    for option in select.get("options") or []:
+        if isinstance(option, Mapping):
+            option = option.get("value")
+        if isinstance(option, str) and option and option not in found:
+            found.append(option)
+    return found
 
 
 def _copy(node: object) -> Any:

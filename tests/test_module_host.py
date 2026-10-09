@@ -1902,17 +1902,17 @@ def test_an_entity_that_is_not_a_module_has_no_derived_entity() -> None:
 
 
 # --------------------------------------------------------------------------
-# The script cast: an input answered by what a script hands back
+# The automation cast: an input answered through a helper an automation sets
 # --------------------------------------------------------------------------
 
-#: The three shapes a script cast has to answer, in one document: an input that
-#: takes a device, one that takes a value, and one the *trigger* names. Written
-#: here rather than taken from the corpus because a corpus blueprint that happens
-#: to answer one of them would leave the other two untested -- and the trigger is
-#: the case the cast has to *refuse*, which no working blueprint exercises.
-SCRIPTED = """
+#: Every shape an automation cast has to answer, in one document: an input that
+#: takes a device, one that takes a number with bounds and a default, one that
+#: takes a choice, and one that takes text. Written here rather than taken from
+#: the corpus because a corpus blueprint that happens to answer one of them would
+#: leave the other three untested.
+AUTOMATED = """
 blueprint:
-  name: Scripted
+  name: Automated
   input:
     lux_sensor:
       name: Lux sensor
@@ -1921,17 +1921,27 @@ blueprint:
           domain: sensor
     brightness:
       name: Brightness
+      default: 40
       selector:
         number:
-          min: 0
-          max: 100
-    watched:
-      name: The device the trigger watches
+          min: 10
+          max: 90
+          step: 5
+          unit_of_measurement: "%"
+    mode:
+      name: Mode
       selector:
-        entity:
+        select:
+          options:
+            - low
+            - high
+    note:
+      name: A note
+      selector:
+        text:
 trigger:
   - platform: state
-    entity_id: !input watched
+    entity_id: light.kitchen
 action:
   - service: light.turn_on
     target:
@@ -1941,138 +1951,264 @@ action:
 """
 
 
-def _scripted() -> module_host.HostedSource:
-    return module_host.read_module_source(SCRIPTED)
+def _automated() -> module_host.HostedSource:
+    return module_host.read_module_source(AUTOMATED)
 
 
-def test_a_script_answers_a_device_input_with_the_variable_it_wrote() -> None:
-    """A call that returns a value, and the input that reads it.
+def _block(name: str) -> object:
+    return _automated().inputs[name]
 
-    **Both halves come out of one call to `answer_with_scripts`**, and that is the
-    point of it: the variable a script's answer lands in is the name the binding
-    reads, so an input bound to `{{ oh_lux_sensor }}` beside a call that writes
-    some `other_name` is an automation built against nothing -- it renders to an
-    empty string, and nothing in the log says why.
+
+def _booleans() -> str:
+    """`AUTOMATED` with its text input asked for a yes-or-no instead."""
+    return AUTOMATED.replace("        text:\n", "        boolean:\n", 1)
+
+
+def test_the_helper_a_row_is_answered_through_is_named_for_its_row() -> None:
+    """One id per row, spelled from the module's name and the input's.
+
+    The domain is read off the *selector*, because the value a row expects is the
+    value the helper has to hold: a number input takes a number, a device input
+    takes a device id -- which is text -- and a choice takes one of the options
+    the blueprint declared. Reading it off the record instead, or asking the panel
+    to guess, is how the maker and the binding come to disagree about where an
+    answer lives.
     """
-    bindings, calls = module_host.answer_with_scripts(
-        _scripted(), {"lux_sensor": "work_it_out"}
+    assert (
+        module_host.helper_entity_id("kitchen", "brightness", _block("brightness"))
+        == "input_number.open_house_kitchen_brightness"
     )
-    assert bindings["lux_sensor"] == module_host.InputBinding(
-        kind="entity", value="{{ oh_lux_sensor }}"
+    assert (
+        module_host.helper_entity_id("kitchen", "lux_sensor", _block("lux_sensor"))
+        == "input_text.open_house_kitchen_lux_sensor"
     )
-    assert calls == (("work_it_out", "oh_lux_sensor"),)
+    assert (
+        module_host.helper_entity_id("kitchen", "mode", _block("mode"))
+        == "input_select.open_house_kitchen_mode"
+    )
+    assert (
+        module_host.helper_entity_id("kitchen", "note", _block("note"))
+        == "input_text.open_house_kitchen_note"
+    )
 
 
-def test_a_script_answers_a_value_input_with_a_template_reading_it() -> None:
-    """A number input takes the value as a template and not as a device id.
+def test_a_boolean_selector_takes_a_boolean_helper() -> None:
+    """The fourth kind, which the fixture above has no room for."""
+    source = module_host.read_module_source(_booleans())
+    assert (
+        module_host.helper_entity_id("kitchen", "note", source.inputs["note"])
+        == "input_boolean.open_house_kitchen_note"
+    )
 
-    The same decision `binding_to_entity` makes for a flow's entity: an input that
-    takes a *thing* is given the thing, and one that takes a value is given a
-    template reading it -- because what a call hands back is a value, and writing
-    the variable's raw name where a number belongs is a blueprint doing arithmetic
-    on a string.
+
+def test_the_object_id_collapses_underscores_the_way_home_assistant_does() -> None:
+    """The id is Home Assistant's *slug of the name*, and that rule collapses runs.
+
+    A helper is made under a name and slugified into an entity id, so a module or
+    an input whose name ends in an underscore -- both legal -- would otherwise give
+    a helper whose id is not the id the input reads, which is a binding answered by
+    an entity nothing made. The collapsing is here rather than at the call site
+    because it is the *derivation*, and there is one of it.
     """
-    bindings, _calls = module_host.answer_with_scripts(
-        _scripted(), {"brightness": "work_out_the_brightness"}
-    )
-    assert bindings["brightness"] == module_host.InputBinding(
-        kind="literal", value="{{ oh_brightness }}"
+    assert (
+        module_host.helper_entity_id("kitchen_", "lux", _block("lux_sensor"))
+        == "input_text.open_house_kitchen_lux"
     )
 
 
-def test_a_script_the_trigger_names_is_refused() -> None:
-    """The one place a script cast cannot go, refused rather than written in.
+def test_a_number_helper_takes_the_selector_s_bounds_and_the_block_s_default() -> None:
+    """The slider a person drags in the module and the helper are the same range.
 
-    A trigger's `entity_id` is matched against the entities a house has and never
-    rendered, so a variable written there is compared as the text `{{ oh_watched }}`
-    and matches nothing -- an automation that installs, reports nothing wrong, and
-    never fires. A refusal the person can read is the only honest answer.
+    Bounds, step, unit and default all come from the block: the helper is the
+    entity the row is *answered through*, so a helper with different bounds from
+    the input it answers is a row that can be set to a value it then refuses.
     """
-    with pytest.raises(AuthoringError, match="named by the automation's trigger"):
-        module_host.answer_with_scripts(_scripted(), {"watched": "work_it_out"})
-
-
-def test_a_script_cast_names_a_script_that_exists() -> None:
-    """The call is the person's script, however the panel spelled it.
-
-    A definition moves between houses and the id travels as it was written, so a
-    `script.` may arrive attached or not -- and a second `script.` on the front
-    would be a step naming a service that does not exist, in an automation that
-    otherwise installs perfectly.
-    """
-    for written in ("work_it_out", "script.work_it_out"):
-        _bindings, calls = module_host.answer_with_scripts(
-            _scripted(), {"lux_sensor": written}
-        )
-        assert calls == (("work_it_out", "oh_lux_sensor"),)
-
-
-def test_a_name_with_no_script_behind_it_answers_nothing() -> None:
-    """What an installation whose definition names an input the house has not
-    picked a script for holds: the *name* and an empty id.
-
-    Not a call to `script.` -- which is a step naming no script at all -- and not
-    a binding either: the input goes back to being one nothing fills, which is a
-    state the build already knows how to hold a module in.
-    """
-    bindings, calls = module_host.answer_with_scripts(
-        _scripted(), {"lux_sensor": "", "brightness": ""}
-    )
-    assert bindings == {}
-    assert calls == ()
-
-
-def test_a_variable_the_document_already_takes_is_numbered_around() -> None:
-    """The script's value does not clobber a variable the blueprint reads.
-
-    A name is introduced into the person's own automation beside every variable the
-    document declares, so the collision is real: overwriting one would show up as
-    the wrong answer arriving from the wrong place, which is the worst kind to
-    trace back. Numbered with an underscore rather than `_unique`'s `" #2"`,
-    because a template variable is an identifier and a name with a space in it
-    renders to nothing.
-    """
-    text = SCRIPTED.replace(
-        "  - service: light.turn_on",
-        "  - variables:\n      oh_lux_sensor: the blueprint's own reading\n"
-        "  - service: light.turn_on",
-    )
-    bindings, calls = module_host.answer_with_scripts(
-        module_host.read_module_source(text), {"lux_sensor": "work_it_out"}
-    )
-    assert bindings["lux_sensor"].value == "{{ oh_lux_sensor_2 }}"
-    assert calls == (("work_it_out", "oh_lux_sensor_2"),)
-
-
-def test_a_script_is_called_before_anything_uses_what_it_returned() -> None:
-    """The call goes at the top of the action list, and that is the correctness.
-
-    A script runs only when it is called, and the value it hands back is in scope
-    for the rest of the list the call sits in -- so a use *above* the call renders
-    the variable as nothing. Prepend rather than insert-beside, because where the
-    first use is depends on the blueprint's own branches.
-    """
-    document = _scripted().document
-    built = module_host.script_calls(document, (("work_it_out", "oh_lux_sensor"),))
-    steps = built["action"]
-    assert steps[0] == {
-        "action": "script.work_it_out",
-        "response_variable": "oh_lux_sensor",
+    helper = module_host.helper_for("kitchen", "brightness", _block("brightness"))
+    assert helper.domain == "input_number"
+    assert helper.data == {
+        "name": "Open House kitchen brightness",
+        "min": 10.0,
+        "max": 90.0,
+        "step": 5.0,
+        "mode": "box",
+        "initial": 40.0,
+        "unit_of_measurement": "%",
     }
-    assert len(steps) == len(document["action"]) + 1
-    # The blueprint's own steps are untouched and still in their order.
-    assert steps[1:] == list(document["action"])
+    assert helper.action == {
+        "action": "input_number.set_value",
+        "target": {"entity_id": "input_number.open_house_kitchen_brightness"},
+        "data": {"value": 40.0},
+    }
 
 
-def test_a_document_with_no_calls_is_copied_rather_than_returned() -> None:
-    """Nothing answered by a script means nothing to add -- and the document that
-    comes back is not the one handed in.
+def test_a_number_default_outside_its_own_bounds_is_clamped_not_refused() -> None:
+    """A blueprint whose default is out of range is not the *module's* mistake.
 
-    `script_calls` runs on the instantiated automation, and callers go on to
-    append to what it answers; handing back the same object would have them
-    editing the caller's own document.
+    `input_number` refuses an initial outside its bounds, so the choice is between
+    a module that will not save and a helper holding the nearest value inside the
+    range the blueprint itself declared. The person can see and move the helper.
     """
-    document = _scripted().document
-    built = module_host.script_calls(document, ())
-    assert built == document
-    assert built is not document
+    text = AUTOMATED.replace("default: 40", "default: 400")
+    source = module_host.read_module_source(text)
+    helper = module_host.helper_for("kitchen", "brightness", source.inputs["brightness"])
+    assert helper.data["initial"] == 90.0
+
+
+def test_a_number_with_no_bounds_takes_the_selector_s_own_fallback() -> None:
+    """A number selector may declare no bounds at all, and `input_number` must have
+    them. The pair used is Home Assistant's own number-selector default, so an
+    unbounded input gets the slider a person making the helper by hand would have
+    got. A *template* bound is not a number and takes the fallback too.
+    """
+    text = AUTOMATED.replace(
+        "          min: 10\n          max: 90\n          step: 5\n",
+        '          min: "{{ low }}"\n',
+    )
+    source = module_host.read_module_source(text)
+    helper = module_host.helper_for("kitchen", "brightness", source.inputs["brightness"])
+    assert (helper.data["min"], helper.data["max"], helper.data["step"]) == (
+        0.0,
+        100.0,
+        1.0,
+    )
+
+
+def test_a_select_helper_takes_the_options_and_starts_at_the_declared_default() -> None:
+    """`input_select` holds bare strings, so a `{value, label}` option contributes
+    its *value*: the label is what a person reads, and the value is what the module
+    is given. A default naming an option is kept; one naming nothing is the first.
+    """
+    helper = module_host.helper_for("kitchen", "mode", _block("mode"))
+    assert helper.data == {
+        "name": "Open House kitchen mode",
+        "options": ["low", "high"],
+        "initial": "low",
+    }
+    assert helper.action == {
+        "action": "input_select.select_option",
+        "target": {"entity_id": "input_select.open_house_kitchen_mode"},
+        "data": {"option": "low"},
+    }
+    text = AUTOMATED.replace(
+        "          options:\n            - low\n            - high\n",
+        "          options:\n            - label: Slow\n              value: low\n"
+        "            - high\n",
+    ).replace(
+        "    mode:\n      name: Mode\n",
+        "    mode:\n      name: Mode\n      default: high\n",
+    )
+    source = module_host.read_module_source(text)
+    chosen = module_host.helper_for("kitchen", "mode", source.inputs["mode"])
+    assert chosen.data["options"] == ["low", "high"]
+    assert chosen.data["initial"] == "high"
+
+
+def test_a_select_with_nothing_to_choose_from_falls_back_to_text() -> None:
+    """`input_select` requires at least one option, and a blueprint may declare a
+    select with none. Text holds the value just as well -- and an input that
+    expected one of no options is an input nothing could have answered anyway.
+    """
+    text = AUTOMATED.replace("          options:\n            - low\n            - high\n", "")
+    source = module_host.read_module_source(text)
+    helper = module_host.helper_for("kitchen", "mode", source.inputs["mode"])
+    assert helper.domain == "input_text"
+    assert helper.entity_id == "input_text.open_house_kitchen_mode"
+
+
+def test_a_text_helper_holds_anything_the_row_might() -> None:
+    """The fallback kind, and it takes the full length `input_text` allows: a
+    length the helper refused would be refused *as the helper*, so the module's own
+    error would be about a value that never arrived.
+    """
+    helper = module_host.helper_for("kitchen", "note", _block("note"))
+    assert helper.domain == "input_text"
+    assert helper.data == {
+        "name": "Open House kitchen note",
+        "min": 0,
+        "max": 255,
+        "initial": "",
+    }
+    assert helper.action["action"] == "input_text.set_value"
+
+
+def test_a_boolean_helper_is_set_by_turning_it_on_or_off() -> None:
+    """Three of the four helpers are set by a service that takes a value; a boolean
+    is set by the service itself, so its action carries no data at all.
+    """
+    source = module_host.read_module_source(_booleans())
+    helper = module_host.helper_for("kitchen", "note", source.inputs["note"])
+    assert helper.domain == "input_boolean"
+    assert helper.action == {
+        "action": "input_boolean.turn_off",
+        "target": {"entity_id": "input_boolean.open_house_kitchen_note"},
+    }
+
+
+def test_the_seeded_automation_has_no_trigger_and_one_action() -> None:
+    """**An empty trigger is deliberate**, and it is what Home Assistant's own
+    editor writes for a new automation: the validator accepts an empty list, so
+    what the person opens is new rather than seeded-and-then-cleared. The action is
+    the whole point of the seeding -- it shows what the row is set by, in the
+    editor's own vocabulary -- and it sets the very helper the row reads.
+    """
+    helper = module_host.helper_for("kitchen", "brightness", _block("brightness"))
+    document = module_host.helper_automation("kitchen", "brightness", helper)
+    assert document["id"] == "open_house_kitchen_brightness"
+    assert document["alias"] == "Open House kitchen brightness"
+    assert document["trigger"] == []
+    assert document["action"] == [helper.action]
+    assert "input_number.open_house_kitchen_brightness" in document["description"]
+
+
+def test_the_config_id_is_the_one_the_panel_opens_the_editor_on() -> None:
+    """The id is readable rather than derived, because the panel puts it in the
+    address of the embedded editor -- so a person who opens `automations.yaml` can
+    tell which row an automation belongs to. It is also the id `_append` replaces
+    by, so seeding twice lands on one automation rather than two.
+    """
+    assert module_host.helper_config_id("kitchen", "brightness") == (
+        "open_house_kitchen_brightness"
+    )
+    assert module_host.helper_automation(
+        "kitchen", "brightness", module_host.helper_for("kitchen", "brightness", _block("brightness"))
+    )["id"] == module_host.helper_config_id("kitchen", "brightness")
+
+
+def test_an_entity_input_reads_the_helper_and_a_value_input_reads_its_state() -> None:
+    """The *same* rule the flow cast follows, because it is the same shape of
+    answer: an entity Open House made, filled by a writer that is not Open House.
+    An input that takes a thing is given the entity's id; one that takes a value is
+    given a template reading it, typed the way the input expects.
+    """
+    device = module_host.helper_entity_id("kitchen", "lux_sensor", _block("lux_sensor"))
+    assert module_host.binding_to_entity(_block("lux_sensor"), device) == (
+        module_host.InputBinding(kind="entity", value=device)
+    )
+    number = module_host.helper_entity_id("kitchen", "brightness", _block("brightness"))
+    assert module_host.binding_to_entity(_block("brightness"), number) == (
+        module_host.InputBinding(
+            kind="literal", value="{{ states('" + number + "') | float(0) }}"
+        )
+    )
+
+
+def test_a_helper_is_named_after_its_row_in_words() -> None:
+    """The name a person reads in Settings > Helpers and in every entity picker,
+    and the thing Home Assistant slugs into `helper_entity_id`.
+    """
+    assert module_host.helper_name("kitchen", "brightness") == (
+        "Open House kitchen brightness"
+    )
+
+
+def test_a_cast_answers_the_record_it_is_asked_about() -> None:
+    """`cast_answers` reports an automation-answered row as logic rather than as a
+    value, which is what makes a pick on it a candidate for publishing rather than
+    a refusal.
+    """
+    answered = {"brightness": module_host.InputBinding(kind="literal", value="5")}
+    casts = module_host.cast_answers(
+        answered, automations={"brightness": "open_house_kitchen_brightness"}
+    )
+    assert casts["brightness"] == "automation"
+    assert "lux_sensor" not in casts

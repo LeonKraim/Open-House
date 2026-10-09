@@ -41,26 +41,22 @@ import {
   castModeSelector,
   entityIds,
   isTemplate,
-  scriptIdOf,
   writtenCondition,
   type CastMode,
 } from "../components/hosted-module.ts";
 // Re-exported so a caller has one place to reach for the cast's vocabulary,
 // whichever screen it is looking at: the rule is the components module's, and
 // the import screen and the card share it rather than each writing their own.
-// `scriptIdOf` lives in `casts.ts` beside that vocabulary because the card needs
-// it too -- both screens show the same script picker and read its answer the
-// same way -- and it is re-exported from here because it has been this module's
-// public name for a caller since before the card had a script field at all.
 export {
   castModeSelector,
-  scriptIdOf,
   writtenCondition,
   type CastMode,
 } from "../components/hosted-module.ts";
 // Registered by the import: a row cast to a flow draws `<open-house-node-red>`,
-// and this file only has to have the element defined.
+// and a row cast to an automation draws `<open-house-automation>` -- and this
+// file only has to have the two elements defined.
 import "../components/node-red-editor.ts";
+import "../components/automation-editor.ts";
 import type {
   DevSource,
   HostedModule,
@@ -138,17 +134,28 @@ export interface InputDecision {
    */
   condition?: unknown;
   /**
-   * The script this input is answered by, when `castMode` is `script`: the id of
-   * the person's own script, without its domain.
+   * The automation this input is answered by, when `castMode` is `automation`:
+   * Open House's own id for it.
    *
-   * The odd one out among the casts, and the difference is what a script *is*: a
-   * template is text this screen holds and a condition is a config it holds, but
-   * a script is a thing that already exists in Home Assistant -- a sequence with
-   * a name and an editor and its own page -- and Open House never writes one. So
-   * what is kept here is a *reference*, and the editor beside it opens the real
-   * thing rather than drawing a second one.
+   * The odd one out among the casts, and the difference is that the automation is
+   * *Open House's*: a template is text this screen holds and a condition is a
+   * config it holds, while an automation is made by the server when the module is
+   * built (`modules._async_seed_automations`) -- it already carries the alias and
+   * the action that sets the helper, and this screen only ever opens the real
+   * thing. So what is kept here is a *reference*, and it is read back off the
+   * module rather than chosen here: it is empty on the import screen, where the
+   * module does not exist yet.
    */
-  script?: string;
+  automation?: string;
+  /**
+   * The helper that automation writes: a real Home Assistant entity, made by the
+   * server from the row's own selector kind, and what the input is bound to.
+   *
+   * Shown rather than used -- the editor's sentence names the entity the person's
+   * action has to set -- and empty wherever `automation` is, because both are made
+   * in the same act.
+   */
+  helper?: string;
   /**
    * Whether this input stays settable on the module after it is hosted.
    *
@@ -190,7 +197,7 @@ const CAST_WORDS: Record<CastMode, string> = {
   condition: "a condition",
   template: "a template",
   nodered: "a flow",
-  script: "a script",
+  automation: "an automation",
 };
 
 export class HostModuleScreen extends OpenHouseElement {
@@ -549,10 +556,11 @@ export class HostModuleScreen extends OpenHouseElement {
           // A condition is an answer, so a row that has one is not waiting for
           // anything -- the server builds its entity and the input is filled.
           castCondition(decision) === null &&
-          // And a script is an answer too, when there is one behind it: a row
-          // showing the script mode with nothing picked yet *is* waiting, and it
-          // says so below in its own sentence rather than as one of these.
-          (castModeOf(decision) !== "script" || !(decision.script ?? "").trim()) &&
+          // And an automation is an answer too: the server makes the helper when
+          // it builds the module and the input reads it from the first moment, so
+          // a row showing this cast is not waiting for anything -- not even on the
+          // import screen, where the automation itself does not exist yet.
+          castModeOf(decision) !== "automation" &&
           !decision.input.has_default &&
           decision.how !== "literal",
       )
@@ -635,7 +643,7 @@ export class HostModuleScreen extends OpenHouseElement {
       settings: this.kept,
       casts: this.casts,
       flows: castFlowAnswers(this.decisions),
-      scripts: castScriptAnswers(this.decisions),
+      automations: castAutomationAnswers(this.decisions),
     };
     try {
       const seed = this.seed;
@@ -1090,17 +1098,10 @@ export class HostModuleScreen extends OpenHouseElement {
         castData[`cast_${index}`] = decision.condition;
       }
     }
-    if (mode === "script") {
-      // The script is picked, not written: it is Home Assistant's own object and
-      // the field is a device-style picker over its entities, so the person names
-      // one that already exists -- or opens the editor below and makes one, which
-      // then arrives back here through `script-chosen`.
-      castSchema.push({
-        name: `script_${index}`,
-        selector: { entity: { domain: ["script"] } },
-      });
-      if (decision.script) castData[`script_${index}`] = `script.${decision.script}`;
-    }
+    // **The automation cast has no field of its own, and that is the design.**
+    // The helper and the automation are made by the server when the module is
+    // built, and the input binds to the helper -- so there is nothing here for
+    // the person to name, pick or type. What the row holds is the editor below.
     if (!device) {
       castSchema.push({ name: `expose_${index}`, selector: { boolean: {} } });
     }
@@ -1149,62 +1150,52 @@ export class HostModuleScreen extends OpenHouseElement {
             this.applyInput(index, event.detail.value);
           }}
         ></ha-form>
-        ${mode === "script" && input.in_trigger
-          ? html`<p class="help warn">
-              The trigger names this input, so a script here would not work: Home
-              Assistant matches a trigger's entity against the entities the house
-              has, and never renders what is written there -- so the automation
-              would install and never fire. Use a <strong>condition</strong>
-              instead.
+        ${mode === "automation" && input.in_trigger
+          ? html`<p class="help">
+              This input is named by the trigger, so this cast is a good fit: the
+              helper Open House makes is a real entity, and Home Assistant matches
+              a trigger's <code>entity_id</code> against the entities a house has
+              -- so the trigger finds it and the module runs when your automation
+              writes it.
             </p>`
           : nothing}
         ${mode === "nodered" ? this.renderFlow(decision) : nothing}
-        ${mode === "script" ? this.renderScript(decision, index) : nothing}
+        ${mode === "automation" ? this.renderAutomationCast(decision) : nothing}
       </details>
     </div>`;
   }
 
   /**
-   * The editor a row answered by a script opens, and what it is for.
+   * The editor a row answered by an automation opens, and what it is for.
    *
    * **The same editor Node-RED's cast gets, embedded -- with one difference that
-   * is the whole reason a script cast exists.** A flow is built into an input
-   * that already has a device in it: the device is wired into the flow and the
-   * flow runs on its own. A script is the other way round: it is *called* when
-   * the module runs and hands its answer back, so it needs nothing wired in and
-   * nothing watched -- it is where a computation that is a sequence rather than
-   * an expression lives, and it is written in Home Assistant's editor because
-   * that is what a script is made in.
-   */
-  private renderScript(decision: InputDecision, index: number): TemplateResult {
-    const name = decision.input.name;
-    return html`<p class="help" data-script=${name}>
-        Runs when the module runs and hands its answer back, which is what this
-        input is built from -- so it is worked out afresh every time, and it needs
-        nothing wired into it. It is your script: Open House only ever names it.
-      </p>
-      <open-house-script
-        .client=${this.client}
-        .script=${decision.script ?? ""}
-        .label=${`Home Assistant -- the script for ${name}`}
-        @script-chosen=${(event: CustomEvent<{ script_id: string }>) => {
-          this.chooseScript(index, event.detail.script_id);
-        }}
-      ></open-house-script>`;
-  }
-
-  /**
-   * One row's script, as the editor has just left it.
+   * is the whole reason an automation cast exists.** A flow is built into an input
+   * that already has a device in it: the device is wired into the flow, and the
+   * flow runs on its own. An automation is the other way round: Open House makes a
+   * *helper* out of the row's selector kind, seeds the automation with the action
+   * that sets it, and binds the input to the helper -- so what the person writes
+   * is the trigger, and the row reads whatever the automation writes, between
+   * runs as much as during one.
    *
-   * The event carries only the id and the row it belongs to is the one that drew
-   * the editor, so nothing has to be matched up: a screen with four script rows
-   * has four editors, and the one that was closed is the one that spoke.
+   * The entity is spelled out rather than resolved here, for the reason the flow's
+   * is: the helper's id is minted by the server from the module's slug
+   * (`module_host.helper_entity_id`), and a second implementation of that rule in
+   * the panel is how the two spellings drift.
    */
-  private chooseScript(index: number, scriptId: string): void {
-    if (!scriptId) return;
-    this.decisions = this.decisions.map((decision, at) =>
-      at === index ? { ...decision, script: scriptId } : decision,
-    );
+  private renderAutomationCast(decision: InputDecision): TemplateResult {
+    const name = decision.input.name;
+    return html`<p class="help" data-automation=${name}>
+        Open House makes a helper for this input -- a real Home Assistant entity,
+        so the row reads a value from the first moment -- and an automation with
+        the action that sets it already written in. Add whatever trigger should
+        drive it, and the input follows the helper from then on.
+      </p>
+      <open-house-automation
+        .client=${this.client}
+        .automation=${decision.automation ?? ""}
+        .entity=${decision.helper ?? ""}
+        .label=${`Home Assistant -- the automation for ${name}`}
+      ></open-house-automation>`;
   }
 
   /**
@@ -1297,14 +1288,12 @@ export class HostModuleScreen extends OpenHouseElement {
         castMode: mode,
         cast: mode === "template" && typeof written === "string" ? written : decision.cast,
         condition: mode === "condition" ? written : decision.condition,
-        // The picker holds an entity id (`script.turn_it_on`) and the answer is
-        // the id without its domain, which is what a `script.` call takes. Off
-        // the form entirely when another mode is showing, so switching away from
-        // the script leaves it where it was left.
-        script:
-          mode === "script"
-            ? scriptIdOf(data[`script_${index}`]) || decision.script
-            : decision.script,
+        // **An automation has no field on the form, so there is nothing to read
+        // here.** Its id is the server's, minted when the module is built, and the
+        // row carries it across an edit unchanged -- a person who renames the
+        // automation in Home Assistant's own editor is renaming the one the module
+        // seeded, not answering this row differently.
+        automation: decision.automation,
       };
     });
     this.outputs = this.outputs.map((output) => ({ ...output }));
@@ -1323,7 +1312,7 @@ export class HostModuleScreen extends OpenHouseElement {
           own -- <code>sensor.open_house_&lt;module&gt;_&lt;key&gt;</code> --
           published by one step added beside the value it reads, not by a rewrite
           of the blueprint. A row you answered with <em>logic</em> -- a condition,
-          a template, a flow, a script -- is offered here too: tick it and the
+          a template, a flow, an automation -- is offered here too: tick it and the
           answer that row works out becomes an entity the rest of the house can
           read, which is what "expose it" means.
         </p>
@@ -1627,22 +1616,24 @@ export function editDecision(
     expose: seed.settings.includes(name),
     castMode: "none",
   };
-  // A script cast is answered by the script *itself*, which is a thing the store
-  // row names rather than a value it holds -- so the answer comes off the row's
-  // own `script_id` (`_cast_ids`) and, for a module the store defines, off the
-  // seed. Both are read because the two can disagree: a definition naming an
-  // input a room has not picked a script for has the name and no id.
-  const script = input.script_id || seed.scripts[name] || "";
+  // An automation cast is answered by the *automation*, which is Open House's own
+  // and is made with the helper when the module is built -- so the answer comes
+  // off the row's own `automation_id` (`_cast_ids`) and, for a module the store
+  // defines, off the seed. Both are read because the two can disagree: a
+  // definition naming an input a room has not answered has the name and no id.
+  const automation = input.automation_id || seed.automations[name] || "";
   if (seed.flows[name] !== undefined || input.flow_id) {
     // A flow is the one cast that keeps the row's own answer, because that
     // answer is the wire the flow is built from (`bindingFor`) -- so the row
     // goes on reading it below rather than returning here.
     decision.castMode = "nodered";
-  } else if (script) {
-    // A script is *not* that: nothing is wired into it, so the row stops here
-    // rather than going on to read a binding it does not have.
-    decision.castMode = "script";
-    decision.script = script;
+  } else if (automation) {
+    // An automation is *not* that either: what the row reads is the helper, which
+    // is not a binding the person wrote, so the row stops here rather than going
+    // on to read one it does not have.
+    decision.castMode = "automation";
+    decision.automation = automation;
+    decision.helper = input.automation_entity || "";
     return decision;
   } else if (seed.casts[name] !== undefined) {
     decision.castMode = "condition";
@@ -1719,50 +1710,42 @@ export function castFlowAnswers(decisions: readonly InputDecision[]): string[] {
 }
 
 /**
- * The inputs answered by a **script**, by name, and the script each names.
+ * The inputs answered by an **automation**, by name, as the server reads them.
  *
- * A mapping rather than the list the flows are, and the difference is which half
- * the server can fill in: a flow is *pushed* at save and its id is minted then, so
- * a name is the whole of what the screen knows. A script already exists -- it is
- * the person's own and Open House never writes one -- so the id is the whole of
- * what the screen has to say, and a name with no id behind it is left out rather
- * than sent, because a call to a script nobody named is a module that cannot run.
+ * Names and not ids, exactly as the flows: the helper and the automation are made
+ * by the server when it builds the module, so the id is minted there and recorded
+ * on *that* house's record rather than sent by this screen. Which is also why
+ * there is nothing to leave out -- a row showing this cast is an answer even
+ * before the module exists, because the helper arrives with it and the input reads
+ * it from the first moment.
  */
-export function castScriptAnswers(
+export function castAutomationAnswers(
   decisions: readonly InputDecision[],
-): Record<string, string> {
-  const found: Record<string, string> = {};
-  for (const decision of decisions) {
-    if (castModeOf(decision) !== "script") continue;
-    const script = (decision.script ?? "").trim();
-    if (script) found[decision.input.name] = script;
-  }
-  return found;
+): string[] {
+  return decisions
+    .filter((decision) => castModeOf(decision) === "automation")
+    .map((decision) => decision.input.name);
 }
 
 /**
  * The rows answered with logic, as the *read* is told about them: names, by kind.
  *
  * The save sends the payloads beside these (`castAnswers`, `castFlowAnswers`,
- * `castScriptAnswers`) because it is writing them down. The read only has to know
- * *which* rows hold a worked-out value rather than a typed one -- that is what
- * decides whether the row is offered as one more thing the module publishes --
- * so the names are the whole of it, and sending conditions and script ids along
- * would be handing the server a payload it has no use for.
- *
- * A script row with no id behind it is left out of all three, because nothing
- * answers it: a row that is showing the script editor and has not picked one is
- * a person who has not decided yet.
+ * `castAutomationAnswers`) because it is writing them down. The read only has to
+ * know *which* rows hold a worked-out value rather than a typed one -- that is what
+ * decides whether the row is offered as one more thing the module publishes -- so
+ * the names are the whole of it, and sending conditions along would be handing the
+ * server a payload it has no use for.
  */
 export function castRowNames(decisions: readonly InputDecision[]): {
   casts: string[];
   flows: string[];
-  scripts: string[];
+  automations: string[];
 } {
   return {
     casts: Object.keys(castAnswers(decisions)),
     flows: castFlowAnswers(decisions),
-    scripts: Object.keys(castScriptAnswers(decisions)),
+    automations: castAutomationAnswers(decisions),
   };
 }
 
@@ -2052,7 +2035,6 @@ export function labelFor(name: string, how?: How, mode?: CastMode): string {
     if (mode === "template") return "The template";
     return "The cast";
   }
-  if (name.startsWith("script_")) return "The script that answers it";
   if (name.startsWith("expose_")) return "Keep as a setting";
   return "What fills it";
 }

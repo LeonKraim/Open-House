@@ -51,6 +51,7 @@ from homeassistant.config import AUTOMATION_CONFIG_PATH
 from homeassistant.const import CONF_ID, SERVICE_RELOAD
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util.file import write_utf8_file_atomic
 from homeassistant.util.yaml import dump, load_yaml
@@ -268,7 +269,7 @@ async def async_define(
     replace: bool = False,
     casts: Mapping[str, Any] | None = None,
     flows: Sequence[str] = (),
-    scripts: Mapping[str, str] | None = None,
+    automations: Sequence[str] = (),
 ) -> ModuleDefinition:
     """Write down a module this house offers, and answer with what was written.
 
@@ -321,11 +322,11 @@ async def async_define(
             # about the module, and the flow itself belongs to one house's
             # Node-RED. See `ModuleDefinition.flows`.
             flows=tuple(str(one) for one in flows if one),
-            # The names only, for the reason the flows are: a `script.<id>`
-            # belongs to one Home Assistant, so the definition says *which inputs
-            # are answered by a script* and the house installing it names the
-            # script. See `ModuleDefinition.scripts`.
-            scripts=tuple(name for name, script in (scripts or {}).items() if script),
+            # The names only, for the reason the flows are: the automation that
+            # answers it is made *here* on install, so the definition says *which
+            # inputs are answered by an automation* and the installing house makes
+            # the helper and the automation. See `ModuleDefinition.automations`.
+            automations=tuple(str(name) for name in automations if name),
         )
     except AuthoringError as refusal:
         raise ModuleHostError(str(refusal)) from refusal
@@ -347,7 +348,7 @@ async def async_deploy(
     bound: Mapping[str, str] | None = None,
     casts: Mapping[str, Any] | None = None,
     flows: Sequence[str] | None = None,
-    scripts: Mapping[str, str] | None = None,
+    automations: Sequence[str] | None = None,
 ) -> ModuleRecord:
     """Install a module this house offers into a room, or into the house.
 
@@ -378,20 +379,16 @@ async def async_deploy(
     "Dim a light (front_room)".
     """
     definition = await async_definition(hass, module)
-    # What the room answers with a script by *name* is the definition's business
+    # What the room answers with a program by *name* is the definition's business
     # -- which inputs are answered by a program is a fact about the module -- and
-    # the id the room picked is the room's, so the same mapping is read twice for
-    # its two halves. See `ModuleDefinition.scripts`.
+    # the ids are the room's, so the same set is read twice for its two halves.
+    # See `ModuleDefinition.automations`.
     installed = definition.with_answers(
         bindings=bindings,
         settings=settings,
         casts=casts,
         flows=flows,
-        scripts=(
-            None
-            if scripts is None
-            else tuple(name for name, script in scripts.items() if script)
-        ),
+        automations=automations,
     )
     name = (
         module_records.slug(f"{definition.slug} {room_id}")
@@ -421,15 +418,10 @@ async def async_deploy(
             bound=bound,
             casts=installed.derived,
             flows=installed.flows,
-            # The room's own ids, which the definition cannot carry: a
-            # `script.<id>` belongs to one Home Assistant, so the module arrives
-            # here knowing *which inputs* are script-answered and the installing
-            # house says *which script*. A name with no id behind it is left out
-            # rather than named with nothing -- the input goes back to being one
-            # nothing answers, which the build already knows how to wait for.
-            scripts={
-                name: str(script) for name, script in (scripts or {}).items() if script
-            },
+            # The names, not the ids: Open House makes the helper and seeds the
+            # automation on install, so the room names *which inputs* are
+            # automation-answered and this house makes the half that answers them.
+            automations=installed.automations,
         )
     except AuthoringError as refusal:
         raise ModuleHostError(str(refusal)) from refusal
@@ -522,7 +514,7 @@ async def async_host(
     bound: Mapping[str, str] | None = None,
     casts: Mapping[str, Any] | None = None,
     flows: Sequence[str] = (),
-    scripts: Mapping[str, str] | None = None,
+    automations: Sequence[str] = (),
 ) -> ModuleRecord:
     """Host one imported source as a module, and answer with what was recorded.
 
@@ -587,12 +579,15 @@ async def async_host(
     written by another program rather than evaluated by this one. `_async_push_flows`
     is the pushing and the recording.
 
-    `scripts` is the fifth: the inputs answered by a **Home Assistant script**, by
-    name, each naming the script to call. A script is the only one of them that
-    *returns* -- it is called from the automation's own first step and the value it
-    hands back is what the input is built from (`module_host.script_calls`) -- and
-    the script itself is the person's own, so nothing is written to, pushed to or
-    deleted from Home Assistant for it. What is kept here is only the name.
+    `automations` is the fifth: the inputs answered by a **Home Assistant
+    automation**, by name. An automation is not a value either, and it is put to
+    the same use as a flow -- an entity the input is bound to -- except that the
+    writer is a Home Assistant automation of the person's own rather than a program
+    in another add-on. Because an automation may set only what a service may set,
+    the entity is a *helper* Open House makes (`module_host.helper_entity_id`), and
+    Open House also seeds an automation that writes it (to a default, so the person
+    sees the syntax and adds their own trigger). `_async_seed_automations` is the
+    making and the recording, like `_async_push_flows` for a flow.
     """
     name = name or module_records.slug(title or _title_of(text))
     _refuse_a_different_module(name, blueprint, await async_records(hass))
@@ -614,13 +609,12 @@ async def async_host(
         # id, so the next save pushes a flow rather than updating one that was
         # never written.
         flows=dict.fromkeys((str(one) for one in flows if one), ""),
-        # The id the person picked, kept as it was given: unlike a flow, nothing
-        # here makes the script, so an id left empty is an input that is *meant*
-        # to be answered by a script and has none yet -- which `_async_build`
-        # reads as no answer rather than as a broken one.
-        scripts={
-            name: str(script) for name, script in (scripts or {}).items() if script
-        },
+        # The ids are filled in by the seeding below, exactly as the flow ids are
+        # filled in by the push: an input named here is answered by an automation
+        # whether or not the seeding has run, and `_async_build` binds it either
+        # way. What a failed seed leaves out is the id, so the next save makes the
+        # automation rather than updating one that was never written.
+        automations=dict.fromkeys((str(one) for one in automations if one), ""),
     )
     record = await _async_push_flows(
         hass, entry_id, record, dict(bindings or {}), bound
@@ -638,7 +632,7 @@ async def async_update(
     bound: Mapping[str, str] | None = None,
     casts: Mapping[str, Any] | None = None,
     flows: Sequence[str] | None = None,
-    scripts: Mapping[str, str] | None = None,
+    automations: Sequence[str] | None = None,
 ) -> ModuleRecord:
     """Change a hosted module's settings, and answer with the module as it now is.
 
@@ -658,7 +652,7 @@ async def async_update(
     because which of a module's values a person wants to keep at hand can change
     after they have lived with it.
 
-    `casts`, `flows` and `scripts` are the three kinds of *logic* one of those
+    `casts`, `flows` and `automations` are the three kinds of *logic* one of those
     settings may be answered with instead of a value, and each is written onto the
     record before the rebuild for the reason the bindings are: the automation is
     built again from the record, so logic held only in the form that sent it would
@@ -694,23 +688,45 @@ async def async_update(
                 if condition
             },
         )
-    if scripts is not None:
-        # Merged rather than replaced, and an *empty id* sent for a name is how a
-        # script cast comes back off -- the same on-demand rule the conditions
-        # follow, and the opposite of the flows. A flow is pushed and given a
-        # home here, so the set of them is this house's; a script is the person's
-        # own and Open House only ever *names* it, so what a form sends is a
-        # reference that may be removed rather than a thing that may be undone.
+    if automations is not None:
+        # Sent rather than merged, and the *set* of inputs is what is sent rather
+        # than a map of ids: an automation cast is a flow's twin -- Open House
+        # makes the helper, seeds the automation and gives both a home here -- so
+        # which inputs are answered this way is this house's set, and a name that
+        # drops off it is a cast taken away. The ids on the record are looked up
+        # rather than taken from the screen, for the reason the flows' are: what
+        # the screen names is the input and what this house holds is the id.
         #
-        # Merged, and not replaced, because the settings form shows only the
-        # inputs a person kept settable: a script cast on one it is not showing
-        # must not be dropped by a screen that never knew about it.
+        # A name that drops off is taken out of the house as well -- the seeded
+        # automation and the helper go -- for the reason a dropped flow is taken
+        # out of Node-RED: both are this house's own objects, and one left behind
+        # goes on writing an entity no input reads any more.
+        #
+        # ...unless another *configuration* names it, which is the flows' rule and
+        # is here for the flows' reason: the set sent is the whole truth about the
+        # configuration being edited and about no other, so a module switched to a
+        # configuration that answers the input another way must not lose the first
+        # configuration's automation, or switching back would land on an input
+        # nothing writes.
+        wanted = {str(one) for one in automations if one}
+        elsewhere = {
+            automation
+            for other, configuration in record.variants.items()
+            if other != record.variant
+            for automation in configuration.automations.values()
+        }
+        for gone in [
+            name
+            for name, automation in record.automations.items()
+            if name not in wanted and automation not in elsewhere
+        ]:
+            await _async_forget_automation(
+                hass, record.automations[gone], _helper_id_of(record, gone)
+            )
         record = replace(
             record,
-            scripts={
-                name: script
-                for name, script in {**dict(record.scripts), **dict(scripts)}.items()
-                if script
+            automations={
+                name: record.automations.get(name, "") for name in sorted(wanted)
             },
         )
     if flows is not None:
@@ -777,7 +793,7 @@ async def async_detach(
 
     **The row's cast is read from the record rather than from the screen.** The
     record is where the four kinds are kept -- `derived` for a condition, `flows`,
-    `scripts`, and the binding itself for a template -- and the screen's own view
+    `automations`, and the binding itself for a template -- and the screen's own view
     of them is derived from the same three fields. Reading the record means a
     detach can only ever act on logic the house *has*: a cast written into a form
     and not yet saved is a cast the module does not hold, which is the same rule
@@ -802,14 +818,14 @@ async def async_detach(
         answers,
         conditions=source_record.derived,
         flows=source_record.flows,
-        scripts=source_record.scripts,
+        automations=source_record.automations,
     )
     cast = casts.get(input_name)
     if cast is None:
         raise ModuleHostError(
             f"{input_name!r} is answered with a value rather than with logic, so "
-            "there is nothing to detach: a condition, a template, a flow or a "
-            "script is what can become a module of its own"
+            "there is nothing to detach: a condition, a template, a flow or an "
+            "automation is what can become a module of its own"
         )
     alias = title or f"{source_record.title}: {input_name}"
     held = answers.get(input_name)
@@ -820,8 +836,12 @@ async def async_detach(
             cast=cast,
             template=str(held.value) if held is not None else "",
             condition=source_record.derived.get(input_name),
-            script=source_record.scripts.get(input_name, ""),
             flow_entity=cast_document.flow_entity_for(source_record.slug, input_name),
+            # The helper the row is answered through, which the detached module
+            # then reads: the row reads an entity a writer fills, and the new
+            # module reads the same one -- so what the person's automation sets is
+            # the value both of them have.
+            automation_entity=_helper_id_of(source_record, input_name) or "",
             trigger=trigger,
         )
     except AuthoringError as refusal:
@@ -841,9 +861,9 @@ async def async_detach(
     # logic worked out inside somebody else's run.
     #
     # The three records of logic go, and they have to: `_async_build` applies
-    # `derived`, `flows` and `scripts` *over* the person's answers, so a cast left
-    # on the record would overwrite the binding written here and the row would go
-    # on holding the logic it was just detached from.
+    # `derived`, `flows` and `automations` *over* the person's answers, so a cast
+    # left on the record would overwrite the binding written here and the row would
+    # go on holding the logic it was just detached from.
     #
     # A flow is the one that needs saying out loud: it stays in Node-RED, where
     # somebody's nodes are still running and still writing the entity the detached
@@ -864,9 +884,15 @@ async def async_detach(
             for name, flow in source_record.flows.items()
             if name != input_name
         },
-        scripts={
-            name: script
-            for name, script in source_record.scripts.items()
+        # Dropped from the record and *not* forgotten from the house, which is the
+        # flow's rule and is here for the flow's reason: the new module goes on
+        # reading the helper, and the person's automation goes on writing it. What
+        # the row stops holding is the cast, not the entity -- so taking the helper
+        # or the automation away here would take away the thing the module just
+        # detached into existence was made to read.
+        automations={
+            name: automation
+            for name, automation in source_record.automations.items()
             if name != input_name
         },
     )
@@ -901,7 +927,7 @@ async def async_detach_slot(
     piece of logic attached to a row, and detaching it writes that logic into a
     document of its own so the row can stop holding it and point at what the
     module publishes instead. What differs is only *where the logic is kept*. An
-    input's cast lives on the module's record (`derived`, `flows`, `scripts` and
+    input's cast lives on the module's record (`derived`, `flows`, `automations` and
     the binding), so `async_detach` reads it there. A slot's rule lives in the
     session's settings (`ha_adapter.slot_rules`, written by
     `live_modules.set_slot_rule`) because a slot's *device* is per module and the
@@ -963,7 +989,7 @@ async def async_edit(
     settings: Sequence[str] = (),
     casts: Mapping[str, Any] | None = None,
     flows: Sequence[str] = (),
-    scripts: Mapping[str, str] | None = None,
+    automations: Sequence[str] = (),
     bound: Mapping[str, Mapping[str, str]] | None = None,
 ) -> tuple[ModuleRecord, ...]:
     """Edit a module, and every installation of it follows.
@@ -1018,14 +1044,15 @@ async def async_edit(
                             name: record.flows.get(name, "")
                             for name in _flow_names(flows)
                         },
-                        # The ids come from the screen, not from the record: a script
-                        # is the person's own and nothing here makes one, so what the
-                        # edit screen picked is the whole truth about which input is
-                        # answered by which script.
-                        scripts={
-                            name: str(script)
-                            for name, script in (scripts or {}).items()
-                            if script
+                        # The ids are kept by name, for the flows' reason: the name
+                        # of an automation-answered input is the module's, and the
+                        # id is *this* house's -- Open House made the automation --
+                        # so what the edit screen says is the whole truth about which
+                        # input is answered this way, and an input it has just named
+                        # has no id yet and is seeded by the build.
+                        automations={
+                            name: record.automations.get(name, "")
+                            for name in _flow_names(automations)
                         },
                     ),
                 )
@@ -1047,7 +1074,7 @@ async def async_edit(
         settings=settings,
         casts=casts,
         flows=flows,
-        scripts=scripts,
+        automations=automations,
     )
     # Written before anything is built, so the store and the house are never two
     # different answers about what this module is. The construction above is what
@@ -1103,7 +1130,7 @@ async def async_publish(
     """Publish one row's logic as a value any automation can read, or stop.
 
     **This is the whole of "expose it to the rest of the house", as one act.** A
-    row answered with logic -- a template, a condition, a flow, a script -- is
+    row answered with logic -- a template, a condition, a flow, an automation -- is
     already holding the thing worth reading, and Open House can already say so:
     `declare_outputs` offers each of them as a candidate, and what a module
     publishes is an ordinary entity (`sensor.open_house_<module>_<key>`). What
@@ -1203,7 +1230,7 @@ def _edited(
     settings: Sequence[str],
     casts: Mapping[str, Any] | None,
     flows: Sequence[str],
-    scripts: Mapping[str, str] | None,
+    automations: Sequence[str],
 ) -> ModuleDefinition:
     """`before` as the edit screen has just left it, or a refusal naming why not.
 
@@ -1236,10 +1263,11 @@ def _edited(
         picks=tuple(outputs),
         derived=dict(casts or {}),
         flows=_flow_names(flows),
-        # The names only, for the reason the flows are names: the id belongs to
-        # the house that picked it, and this definition travels to every room --
-        # and to every house a file is sent to (`follow`).
-        scripts=tuple(name for name, script in (scripts or {}).items() if script),
+        # The names only, for the reason the flows are names: the id belongs to the
+        # house that made it -- the automation and the helper are both this
+        # house's, under ids spelled from these names -- and this definition
+        # travels to every room, and to every house a file is sent to (`follow`).
+        automations=_flow_names(automations),
     )
 
 
@@ -1511,6 +1539,20 @@ async def async_remove_config(
     for flow in dict.fromkeys(dropped.flows.values()):
         if flow and flow not in elsewhere:
             await _async_forget_flow(hass, entry_id, flow)
+    # An automation-answered input the dropped configuration was the last to name
+    # goes the same way, and by the same rule: the automation and the helper were
+    # made for *that* row, and one another configuration still names stays, because
+    # it is that configuration's and switching back to it has to find one.
+    named_elsewhere = {
+        automation
+        for configuration in remaining.values()
+        for automation in configuration.automations.values()
+    }
+    for gone, automation in dropped.automations.items():
+        if automation and automation not in named_elsewhere:
+            await _async_forget_automation(
+                hass, automation, _helper_id_of(holding, gone)
+            )
     if name != holding.variant:
         return await _async_store(hass, entry_id, replace(holding, variants=remaining))
     # The active one is the one going, so the module takes up the first that is
@@ -1524,6 +1566,212 @@ async def async_remove_config(
     return await _async_build(
         hass, entry_id, moved, bindings=_answers_of(moved), bound=bound
     )
+
+
+async def _async_seed_automations(
+    hass: HomeAssistant, record: ModuleRecord, source: module_host.HostedSource
+) -> ModuleRecord:
+    """Make what answers every automation-cast input: a helper, and an automation.
+
+    **Two objects per row, and both are seeded rather than owned.** The helper is
+    made once, holding the blueprint's own default; the automation is written once,
+    with an empty trigger and the working action that sets the helper. After that
+    they are the person's -- the helper is in Home Assistant's Helpers list and the
+    automation in the editor the row embeds -- and nothing here writes over either
+    one again.
+
+    **The record's own id is the record of having seeded.** A name the record
+    already carries an id for has been seeded, so a build that happens because a
+    room rebound a slot costs a dictionary lookup rather than a look at the house;
+    a name with no id has no automation, and both are made. That is also what makes
+    a failed seed recoverable: the id is written last, so a build that fails
+    half-way left the name open rather than half-answered.
+
+    Seeding is *not* skipped for a module that is waiting for a device: the helper
+    and the automation are about the row, not about the run, and a person may want
+    to write their automation while the module is still waiting for its room.
+
+    The id is this house's the way a flow id is -- Open House makes the automation,
+    so the record keeps its id -- and the input is bound from the helper, which is
+    spelled from the same two names (`module_host.helper_entity_id`).
+    """
+    if not record.automations:
+        return record
+    made = dict(record.automations)
+    for name in record.automations:
+        if made.get(name):
+            continue
+        block = source.inputs.get(name)
+        if block is None:
+            # The same case the flow loop refuses: a record that names an input
+            # the document does not declare, which only happens if somebody edited
+            # the source out from under it. Making a helper for an input that does
+            # not exist would be an entity nothing reads.
+            raise ModuleHostError(
+                f"{record.slug!r} has an automation for an input called {name!r}, "
+                "and the blueprint it was imported from declares no such input"
+            )
+        try:
+            helper = module_host.helper_for(record.slug, name, block)
+        except AuthoringError as refusal:
+            raise ModuleHostError(str(refusal)) from refusal
+        await _async_make_helper(hass, helper)
+        await _async_create_automation(
+            hass,
+            dict(module_host.helper_automation(record.slug, name, helper)),
+            module=record.slug,
+        )
+        made[name] = module_host.helper_config_id(record.slug, name)
+    return replace(record, automations=made)
+
+
+async def _async_make_helper(hass: HomeAssistant, helper: module_host.Helper) -> None:
+    """Make one helper, once, and leave it alone ever after.
+
+    Nothing is written where the helper already is. The id is Open House's own
+    spelling of the module's and the input's name, and a person who changed the
+    helper's value, its bounds or its name in Home Assistant's own screens keeps
+    every one of those: this is the maker, not the keeper.
+
+    **A helper that was made and did not appear is refused**, rather than left as
+    an input answered by an entity nothing made -- which is the failure this whole
+    layer designs against, because it is silent. The check is the entity registry
+    rather than the state machine, so a helper that is known but unavailable still
+    counts as made.
+    """
+    if er.async_get(hass).async_get(helper.entity_id) is not None:
+        return
+    collection = _helper_collection(hass, helper.domain)
+    if collection is None:
+        raise ModuleHostError(
+            f"this instance cannot make a {helper.domain} helper, and "
+            f"{helper.entity_id} is what this module's input is answered "
+            "through: Home Assistant's own helpers are the entities an "
+            "automation may set"
+        )
+    try:
+        await collection.async_create_item(dict(helper.data))
+    except Exception as refusal:
+        raise ModuleHostError(
+            f"Home Assistant would not make the helper {helper.entity_id} that "
+            f"this module's input is answered through: {refusal}"
+        ) from refusal
+    if er.async_get(hass).async_get(helper.entity_id) is None:
+        raise ModuleHostError(
+            f"the helper {helper.entity_id} was asked for and did not appear, so "
+            "this module's input would read an entity nothing made"
+        )
+
+
+def _helper_collection(hass: HomeAssistant, domain: str) -> Any | None:
+    """The live helper collection for `domain`, or `None` if there is not one.
+
+    **Home Assistant offers no way to make a helper from Python, and this is the
+    way in.** The `input_*` components are storage-backed collections, and the
+    collection is made inside the component's own `async_setup` and handed to
+    nothing -- not `hass.data`, not any helper module -- so there is no attribute
+    to read it from. What *is* reachable is the websocket command the frontend's
+    own Helpers screen calls: one of the four commands registered for a collection
+    (`<domain>/list`) is that collection's own bound method, so the object behind
+    it is the collection, and `async_create_item` on it is the very call the
+    screen's Create button makes.
+
+    Reaching through a bound method is ugly, and it is deliberate. The alternative
+    is a second way to make a helper, and a helper Home Assistant did not make is
+    one its own screens would not list, would not edit and would not keep -- which
+    is the whole of what a helper is here. Every way of not finding it answers
+    `None`, and the caller refuses in words that say so rather than writing an
+    entity nobody owns.
+    """
+    commands = hass.data.get("websocket_api")
+    if not isinstance(commands, dict):
+        return None
+    registered = commands.get(f"{domain}/list")
+    if not isinstance(registered, tuple) or not registered:
+        return None
+    collection = getattr(getattr(registered[0], "__self__", None), "storage_collection", None)
+    return collection
+
+
+async def _async_forget_automation(
+    hass: HomeAssistant, config_id: str, entity_id: str | None
+) -> None:
+    """Take one automation-cast input's seeding back out of the house.
+
+    Two objects, because the row had two, and each is answered the way its twin
+    is. The **automation** goes the way a module's own does (`_async_retire`):
+    withdrawn from `automations.yaml` by its id and reloaded, with a reload that
+    finds nothing swallowed rather than raised, because "there was nothing to stop"
+    is the answer this wanted either way. The **helper** goes like a flow
+    (`_async_forget_flow`): a failure is logged and swallowed, because the input
+    has already stopped reading it by the time this runs and refusing the settings
+    change somebody asked for would be a worse answer than a stray entity and a
+    line in the log.
+
+    The two are passed in rather than read off a record, because a caller dropping
+    a *configuration* holds a `Variant` and a caller dropping an input holds a
+    record, and the two ids are the whole of what this needs.
+
+    **The cost is real and worth naming**: a helper a person came to use somewhere
+    else goes with the row. It is taken away only where it is still spelled as
+    Open House's own -- found in the registry by the id this would have made -- so
+    a person who moved it out of the way keeps it.
+    """
+    if not config_id:
+        return
+    await _async_withdraw_automation(hass, config_id)
+    if entity_id is not None:
+        await _async_drop_helper(hass, entity_id)
+
+
+def _helper_id_of(record: ModuleRecord, name: str) -> str | None:
+    """The helper an input is answered through, or `None` where that cannot be read.
+
+    Read from the module's own document rather than kept on the record, because
+    the document is what says which *kind* of helper the row takes -- and a record
+    that kept a second copy of it would be a record that could disagree with the
+    blueprint about what the row is.
+    """
+    try:
+        source = module_host.read_module_source(record.source)
+        block = source.inputs.get(name)
+        if block is None:
+            return None
+        return module_host.helper_entity_id(record.slug, name, block)
+    except AuthoringError:
+        return None
+
+
+async def _async_drop_helper(hass: HomeAssistant, entity_id: str) -> None:
+    """Delete one helper Open House made, if it is still where it was left."""
+    entry = er.async_get(hass).async_get(entity_id)
+    if entry is None or not entry.unique_id:
+        return
+    collection = _helper_collection(hass, entity_id.split(".", 1)[0])
+    if collection is None:
+        return
+    try:
+        await collection.async_delete_item(entry.unique_id)
+    except Exception as failure:  # noqa: BLE001
+        _LOGGER.warning("a helper could not be removed from Home Assistant: %s", failure)
+
+
+async def _async_withdraw_automation(hass: HomeAssistant, config_id: str) -> None:
+    """Take one entry out of `automations.yaml`, and reload what it was.
+
+    Shared by every removal, because they are the same two steps: the file write,
+    which is the only way to change what Home Assistant reads, and the reload of
+    that one id, which is what makes the running automation go. A reload that
+    finds nothing is the ordinary case rather than a failure -- a module that never
+    ran, a seeding that was taken back twice.
+    """
+    path = Path(hass.config.path(AUTOMATION_CONFIG_PATH))
+    async with _MUTATION_LOCK:
+        await hass.async_add_executor_job(_withdraw, path, config_id)
+    with contextlib.suppress(HomeAssistantError):
+        await hass.services.async_call(
+            AUTOMATION_DOMAIN, SERVICE_RELOAD, {CONF_ID: config_id}, blocking=True
+        )
 
 
 async def _async_forget_flow(hass: HomeAssistant, entry_id: str, flow_id: str) -> None:
@@ -1623,6 +1871,22 @@ async def async_unhost(hass: HomeAssistant, entry_id: str, module: str) -> Modul
         ]
     ):
         await _async_forget_flow(hass, entry_id, flow_id)
+    # The seeded automations and their helpers next, and for the same reason the
+    # flows went first: after the write below nothing says which of them belonged
+    # to this module. Every configuration's, not only the active one's, by the rule
+    # above -- and the helper is taken with each, because it was made for that row
+    # and an entity nothing reads is worse than one that was never made.
+    for name, automation in dict.fromkeys(
+        [
+            *found.automations.items(),
+            *(
+                pair
+                for configuration in found.variants.values()
+                for pair in configuration.automations.items()
+            ),
+        ]
+    ):
+        await _async_forget_automation(hass, automation, _helper_id_of(found, name))
     await _async_retire(hass, module)
     await _async_amend_records(
         hass, lambda all_records: tuple(r for r in all_records if r.slug != module)
@@ -1698,21 +1962,25 @@ async def _async_build(
         answered[name] = module_host.binding_to_entity(
             block, module_host.flow_entity_id(record.slug, name)
         )
-    # A script-cast input is answered by *what the person's script hands back*.
-    # Both halves of that come from `answer_with_scripts` together, because the
-    # variable name the input reads is the same name the call writes it into: a
-    # second spelling of the choice here is how a binding could come to read a
-    # variable no call ever set. The calls are held until `publish_actions` has
-    # run -- that function finds each output's position by an index into the
-    # document's action lists, and a call prepended before it would move every
-    # index after it.
-    try:
-        script_bindings, script_calls = module_host.answer_with_scripts(
-            source, dict(record.scripts)
+    # An automation-cast input is bound to the *helper* the person's automation
+    # writes, by exactly the rule a flow-cast input is bound to the entity its
+    # flow writes -- one function in `module_host` for the one decision, because
+    # the two casts differ in nothing but who the writer is. The helper is made
+    # *first*: the seeding below is what makes it, and an input bound to an entity
+    # nothing made is the one failure this layer keeps designing against.
+    #
+    # Seeded rather than made, and the record is what says so: a name the record
+    # already carries an id for has been seeded, so a build that happens because a
+    # room rebound a slot costs a dictionary lookup rather than a look at the
+    # house. See `_async_seed_automations`.
+    record = await _async_seed_automations(hass, record, source)
+    for name in record.automations:
+        # A name the document does not declare is refused by the seeding above,
+        # in the same words the flow loop uses for the same case.
+        block = source.inputs[name]
+        answered[name] = module_host.binding_to_entity(
+            block, module_host.helper_entity_id(record.slug, name, block)
         )
-    except AuthoringError as refusal:
-        raise ModuleHostError(str(refusal)) from refusal
-    answered.update(script_bindings)
     # Handed through as they came rather than copied into a dict: `bound` may be
     # a `BoundSlots`, and copying it would keep only its room view -- which is
     # exactly the wrong half for a global slot. `None` is the only absence, and
@@ -1736,7 +2004,7 @@ async def _async_build(
                 answered,
                 conditions=record.derived,
                 flows=record.flows,
-                scripts=record.scripts,
+                automations=record.automations,
             ),
         )
     except AuthoringError as refusal:
@@ -1815,10 +2083,6 @@ async def _async_build(
     except AuthoringError as refusal:
         raise ModuleHostError(str(refusal)) from refusal
     document = module_host.publish_actions(automation, declared, module=record.slug)
-    # After the publishers, never before: each script call goes to the *front* of
-    # the action list, which moves every index after it -- and `publish_actions`
-    # placed its steps by exactly such an index.
-    document = module_host.script_calls(document, script_calls)
     entity_id = await _async_create_automation(hass, document, module=record.slug)
     built = keeping_answers(
         replace(
@@ -1926,14 +2190,7 @@ async def _async_retire(hass: HomeAssistant, module: str) -> None:
     raised: the common case is a module that never ran, and "there was no
     automation to stop" is the answer this wanted either way.
     """
-    path = Path(hass.config.path(AUTOMATION_CONFIG_PATH))
-    config_id = config_id_for(module)
-    async with _MUTATION_LOCK:
-        await hass.async_add_executor_job(_withdraw, path, config_id)
-    with contextlib.suppress(HomeAssistantError):
-        await hass.services.async_call(
-            AUTOMATION_DOMAIN, SERVICE_RELOAD, {CONF_ID: config_id}, blocking=True
-        )
+    await _async_withdraw_automation(hass, config_id_for(module))
 
 
 def _refuse_a_different_module(

@@ -40,7 +40,7 @@ import {
   castCondition,
   castFlowAnswers,
   castRowNames,
-  castScriptAnswers,
+  castAutomationAnswers,
   castModeOf,
   castModeSelector,
   editDecision,
@@ -48,7 +48,6 @@ import {
   hostedOutputs,
   howSelector,
   labelFor,
-  scriptIdOf,
   splitOutput,
   valueSelector,
   type How,
@@ -143,29 +142,33 @@ test("a cast is offered on every row, and the menu names every editor", () => {
   // have been a question about the house -- were the rows with no box.
   const options = (castModeSelector(false).select as { options: { value: string }[] })
     .options.map((option) => option.value);
-  assert.deepEqual(options, ["none", "condition", "nodered", "script", "template"]);
+  assert.deepEqual(options, ["none", "condition", "nodered", "automation", "template"]);
 });
 
-test("a script cast is offered everywhere, and opens on the script behind it", () => {
-  // "haos script logic": a Home Assistant script that *returns* the value. Of the
-  // four casts it is the one that is a sequence -- an if, a call, a value handed
-  // back at the end -- which an expression cannot say and a flow says only by
-  // being a second program to write. It is offered on every row, like the other
+test("an automation cast is offered everywhere, and opens on the automation behind it", () => {
+  // "make it so that you have automations instead of just haos scripts for the
+  // inputs of selectors". Of the four casts it is the one that *runs on its own*:
+  // a script only runs when something calls it, so it can never keep an input
+  // current between runs, while an automation triggers on the house moving and
+  // writes the helper the row reads. It is offered on every row, like the other
   // three, for the reason they are: the want can arrive at any of them.
   for (const trigger of [false, true]) {
     const options = (castModeSelector(trigger).select as {
       options: { value: string }[];
     }).options.map((option) => option.value);
-    assert.ok(options.includes("script"));
+    assert.ok(options.includes("automation"));
   }
-  // A setting a script answers opens on the script, exactly as one a flow
-  // answers opens on the flow: what the person authored is the script, and what
-  // it returns is machinery they never chose.
-  assert.equal(castModeForSetting(input_("entity", { script_id: "script.lux" })), "script");
-  assert.equal(castModeForSetting(input_("entity", { script_id: "" })), "none");
+  // A setting an automation answers opens on the automation, exactly as one a
+  // flow answers opens on the flow: what the person authored is the automation,
+  // and the helper it writes is machinery they never chose.
+  assert.equal(
+    castModeForSetting(input_("entity", { automation_id: "open_house_lux_hall" })),
+    "automation",
+  );
+  assert.equal(castModeForSetting(input_("entity", { automation_id: "" })), "none");
   // The mode the person has flipped the menu to wins over both.
   assert.equal(
-    castModeForSetting(input_("entity", { script_id: "script.lux" }), "none"),
+    castModeForSetting(input_("entity", { automation_id: "open_house_lux_hall" }), "none"),
     "none",
   );
 });
@@ -291,8 +294,9 @@ test("an open condition editor with nothing in it is not an answer", () => {
 
 test("the read is told which rows hold logic, and not only which hold values", () => {
   // What a row may publish is asked of the answer it holds, so the read has to
-  // know that a condition, a flow or a script is behind a row -- none of those
-  // three is a binding, and the server would otherwise see an unanswered input
+  // know that a condition, a flow or an automation is behind a row -- none of
+  // those three is a binding, and the server would otherwise see an unanswered
+  // input
   // where a person has a piece of logic running.
   const written = [{ condition: "state", entity_id: ["input_text.home_state"], state: "sleep" }];
   /** One row, under its own input name, so the lists can be told apart. */
@@ -304,17 +308,17 @@ test("the read is told which rows hold logic, and not only which hold values", (
   const rows = castRowNames([
     named("when_asleep", { castMode: "condition", condition: written }),
     named("hall_light", { castMode: "nodered" }),
-    named("lux", { castMode: "script", script: "work_out_the_lux" }),
-    // A script row nobody has picked a script for is not answered by one, so it
-    // is not offered as something the module publishes.
-    named("unpicked", { castMode: "script" }),
+    // An automation row is an answer the moment the menu is on it: the helper
+    // arrives with the module and the input reads it from the first moment, so
+    // there is nothing half-picked to leave out.
+    named("lux", { castMode: "automation", automation: "open_house_dim_a_light_lux" }),
     // A template is a binding, and travels in `bindings` where it belongs.
     named("dim", { castMode: "template", cast: "{{ 1 }}" }),
   ]);
   assert.deepEqual(rows, {
     casts: ["when_asleep"],
     flows: ["hall_light"],
-    scripts: ["lux"],
+    automations: ["lux"],
   });
 });
 
@@ -488,7 +492,7 @@ function hosted_(slug: string, keys: string[]): HostedModule {
     configs: ["Default"],
     derived: {},
     flows: {},
-    scripts: {},
+    automations: {},
     inputs: [],
     settings: [],
     outputs: keys.map((key) => ({
@@ -774,7 +778,7 @@ function seed_(rest: Partial<ModuleEditSeed> = {}): ModuleEditSeed {
     settings: [],
     casts: {},
     flows: {},
-    scripts: {},
+    automations: {},
     picks: [],
     installs: [{ slug: "dim_a_light_kitchen", room_id: "kitchen", room_name: "Kitchen" }],
     ...rest,
@@ -911,9 +915,9 @@ test("a flow comes back on the flow editor with its own answer under it", () => 
   // rebuild the flow out of nothing.
   const seed = seed_({
     // The seed's flows are a map of input name to flow id, which is what lets
-    // `editDecision` tell a row answered by a *flow* from one answered by a
-    // script: both arrive as an editor rather than as a value, and only one of
-    // the two editors exists for each.
+    // `editDecision` tell a row answered by a *flow* from one answered by an
+    // automation: both arrive as an editor rather than as a value, and only one
+    // of the two editors exists for each.
     flows: { heat_demand: "flow_heat" },
     bindings: { heat_demand: { kind: "entity", value: "sensor.living_room_temperature" } },
   });
@@ -943,84 +947,76 @@ test("a value with a template in it comes back as a template", () => {
   assert.equal(editDecision(input_("text", { name: "message" }), seed).how, "template");
 });
 
-test("a script comes back on the script editor, and stops the row there", () => {
-  // **A script is not a flow, and the difference is what the row holds.** A flow
-  // keeps the row's own answer because that answer is the entity it watches; a
-  // script is *called* and hands its answer back, so nothing is wired into it
-  // and there is no binding under it to read -- which is why the decision returns
-  // here rather than falling through to the bindings below.
+test("an automation comes back on the automation editor, and stops the row there", () => {
+  // **An automation is not a flow, and the difference is what the row holds.** A
+  // flow keeps the row's own answer because that answer is the entity it watches;
+  // an automation writes a helper Open House made, so there is no binding under
+  // the row to read -- which is why the decision returns here rather than falling
+  // through to the bindings below.
   const seed = seed_({
-    scripts: { heat_demand: "work_out_the_heat" },
+    automations: { heat_demand: "open_house_dim_a_light_heat_demand" },
     bindings: { heat_demand: { kind: "entity", value: "sensor.living_room_temperature" } },
   });
   const decision = editDecision(input_("entity", { name: "heat_demand" }), seed);
-  assert.equal(decision.castMode, "script");
-  assert.equal(decision.script, "work_out_the_heat");
-  assert.equal(bindingFor(decision), null, "a script is not also a binding");
-  // The row's own `script_id` is the other half of the answer, and the two are
-  // read together because a definition may name an input a room has not picked a
-  // script for: the name is the module's, the id is the house's.
+  assert.equal(decision.castMode, "automation");
+  assert.equal(decision.automation, "open_house_dim_a_light_heat_demand");
+  assert.equal(bindingFor(decision), null, "an automation is not also a binding");
+  // The row's own `automation_id` is the other half of the answer, and the two
+  // are read together because a definition may name an input a house has not
+  // built yet: the name is the module's, the id is the house's.
   const row = editDecision(
-    input_("entity", { name: "heat_demand", script_id: "work_it_out_again" }),
+    input_("entity", {
+      name: "heat_demand",
+      automation_id: "open_house_heat_kitchen",
+      automation_entity: "input_number.open_house_heat_kitchen",
+    }),
     seed_(),
   );
-  assert.equal(row.castMode, "script");
-  assert.equal(row.script, "work_it_out_again");
+  assert.equal(row.castMode, "automation");
+  assert.equal(row.automation, "open_house_heat_kitchen");
+  assert.equal(row.helper, "input_number.open_house_heat_kitchen");
 });
 
-test("the inputs answered by a script are sent as a name and an id", () => {
-  // **A mapping and not the list the flows are**, because nothing fills in the
-  // half that is missing: a flow is pushed at save and its id is minted then, so
-  // a name is the whole of it, while a script already exists in this house and a
-  // name with no id behind it is a call to something nobody named -- so an empty
-  // answer is left out rather than sent as a name to be resolved later.
+test("the inputs answered by an automation are sent as a name", () => {
+  // **A list of names, exactly as the flows are**, because nothing fills in the
+  // half that is missing: the helper and the automation are made by the server
+  // when it builds the module, so the id is minted *there* and recorded on that
+  // house's record rather than sent by this screen -- which is also why a row
+  // showing the cast is an answer even before the module exists.
   const decision_ = (
     name: string,
-    castMode: "script" | "nodered",
-    script?: string,
+    castMode: "automation" | "nodered",
+    automation?: string,
   ): InputDecision => ({
     input: input_("entity", { name }),
     how: "entity",
     value: undefined,
     expose: false,
     castMode,
-    ...(script ? { script } : {}),
+    ...(automation ? { automation } : {}),
   });
   const decisions: InputDecision[] = [
-    decision_("heat_demand", "script", "work_out_the_heat"),
-    decision_("other", "script"),
+    decision_("heat_demand", "automation", "open_house_dim_a_light_heat_demand"),
+    decision_("other", "automation"),
     decision_("third", "nodered"),
   ];
-  assert.deepEqual(castScriptAnswers(decisions), {
-    heat_demand: "work_out_the_heat",
-  });
-  // The flows' half of the same answer is a list of names, and the two do not
+  assert.deepEqual(castAutomationAnswers(decisions), ["heat_demand", "other"]);
+  // The flows' half of the same answer is the same shape, and the two do not
   // overlap: a row is answered by one of them or by neither.
   assert.deepEqual(castFlowAnswers(decisions), ["third"]);
 });
 
-test("the id inside a script picker's answer is read either way", () => {
-  // The picker holds `script.turn_it_on` and a `script.` call takes
-  // `turn_it_on`, but the value may arrive with the domain already off or as
-  // something unreadable -- and a form that threw here would lose a whole screen
-  // to one field.
-  assert.equal(scriptIdOf("script.turn_it_on"), "turn_it_on");
-  assert.equal(scriptIdOf("turn_it_on"), "turn_it_on");
-  assert.equal(scriptIdOf("  script.turn_it_on  "), "turn_it_on");
-  assert.equal(scriptIdOf(undefined), "");
-  assert.equal(scriptIdOf(7), "");
-});
-
 test("a cast answers a row, so the card does not call it waiting", () => {
   // **The banner this feeds is the one that says a module is not running.** A
-  // condition and a script leave no binding behind -- Open House makes the entity
-  // or makes the call, and neither is a value the person sent -- so a row they
+  // condition and an automation leave no binding behind -- Open House makes the
+  // entity, or makes the helper, and neither is a value the person sent -- so a
+  // row they
   // answer would be named as a setting to go and fill in, about logic that is
   // already built and running.
   const module = hosted_("dim_a_light", []);
   module.settings = [
     input_("number", { name: "condition_row", cast: { condition: "state" } }),
-    input_("entity", { name: "script_row", script_id: "work_it_out" }),
+    input_("entity", { name: "automation_row", automation_id: "open_house_kitchen_lux" }),
     input_("number", { name: "flow_row", flow_id: "flow_1", bound: true }),
     input_("number", { name: "really_waiting" }),
   ];

@@ -40,13 +40,14 @@ test("a row holding a plain value holds no cast", () => {
   assert.equal(castHeldBy(row_({ value: 42, selector: "number" })), "none");
 });
 
-test("a record's condition, flow and script are all casts it holds", () => {
-  // Read off the record's own fields rather than off the binding: a condition
-  // and a flow are answered by an *entity* the person never chose, and a script
-  // by a call, so none of the three is visible in the row's value at all.
+test("a record's condition, flow and automation are all casts it holds", () => {
+  // Read off the record's own fields rather than off the binding: a condition, a
+  // flow and an automation are each answered by an *entity* the person never
+  // chose -- one Open House makes, one a flow writes, one a helper their own
+  // automation writes -- so none of the three is visible in the row's value.
   assert.equal(castHeldBy(row_({ cast: { condition: "state" } })), "condition");
   assert.equal(castHeldBy(row_({ flow_id: "abc123" })), "nodered");
-  assert.equal(castHeldBy(row_({ script_id: "hall_lux" })), "script");
+  assert.equal(castHeldBy(row_({ automation_id: "open_house_lux_hall" })), "automation");
 });
 
 test("a template row is a cast the module holds and not an editor to open", () => {

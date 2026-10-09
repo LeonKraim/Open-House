@@ -997,14 +997,18 @@ export interface HostedModule {
    */
   flows: Record<string, { flow_id: string; entity_id: string; url?: string }>;
   /**
-   * The inputs this module answers with a **script**, by input name.
+   * The inputs this module answers with an **automation**, by input name.
    *
-   * The fourth kind of thing, and the only one with no entity behind it: what the
-   * input reads is what the script hands back when the automation runs, so the
-   * only thing to show is which script it calls and where to open it. `url` is
-   * Home Assistant's own script editor on that script.
+   * The same shape as a flow, with a Home Assistant automation in place of a
+   * Node-RED one: what the input reads is the *helper* the automation writes, so
+   * `entity_id` is what the row is bound to, `automation_id` is which automation
+   * writes it, and `url` is Home Assistant's own automation editor on that
+   * automation.
    */
-  scripts: Record<string, { script_id: string; url?: string }>;
+  automations: Record<
+    string,
+    { automation_id: string; entity_id?: string; url?: string }
+  >;
   /** The blueprint's inputs as the person filled them. */
   inputs: { name: string; value: unknown }[];
   /**
@@ -1090,24 +1094,23 @@ export interface ModuleInputRow {
   /** That flow, opened in the Node-RED editor, or `""` when none is configured. */
   flow_url?: string;
   /**
-   * The **script** this input is answered by, as the id a `script.` call takes
-   * (`turn_it_on`), or `""`.
+   * The **automation** this input is answered by, as Open House's own id for it
+   * (`open_house_<module>_<input>`), or `""`.
    *
-   * Without the domain, because that is what the call is built from and what the
-   * card holds: the panel strips it on the way in and puts it back for the
-   * picker, which names whole entities. Set on a setting whose answer is a script
-   * rather than a value: `bound_kind` is `script` and `bound_to` is that script's
-   * entity id, which is where the answer *comes from* and not something anybody
-   * edits here. What is theirs is the script, and this is the id the card opens
-   * Home Assistant's script editor on.
+   * Set on a setting whose answer is an automation rather than a value:
+   * `bound_kind` is `automation` and `bound_to` is the *helper* the automation
+   * writes, which is where the answer comes from and not something anybody edits
+   * here. What is theirs is the automation, and this is the id the card opens
+   * Home Assistant's automation editor on.
    *
-   * A script returns rather than holds -- `stop:` with `response_variable` is how
-   * one hands a value back -- which is what makes it a cast and not just another
-   * thing that writes an entity.
+   * An automation runs on its own and holds a value between runs, which is what
+   * makes it a cast and not just another thing that writes an entity.
    */
-  script_id?: string;
-  /** That script, opened in Home Assistant's editor, or `""`. */
-  script_url?: string;
+  automation_id?: string;
+  /** The helper that automation writes, bound to this input, or `""`. */
+  automation_entity?: string;
+  /** That automation, opened in Home Assistant's editor, or `""`. */
+  automation_url?: string;
   /**
    * What this row's own logic is **published as**, or `""` for one that is not.
    *
@@ -1266,11 +1269,11 @@ export interface ModuleEditSeed {
    */
   flows: Record<string, string>;
   /**
-   * The inputs the module answers with a script, by name, and the id of the
-   * script each is answered by -- `""` for a name the module's definition
-   * carries and this house has not picked a script for.
+   * The inputs the module answers with an automation, by name, and the id of the
+   * automation each is answered by -- `""` for a name the module's definition
+   * carries and this house has not built yet.
    */
-  scripts: Record<string, string>;
+  automations: Record<string, string>;
   /** The output candidates the module was told to publish, each with its key. */
   picks: { name: string; key: string }[];
   /**
@@ -1318,14 +1321,14 @@ export interface ModuleOfferRow {
    */
   flows: string[];
   /**
-   * The inputs it answers with a **script**, by name.
+   * The inputs it answers with an **automation**, by name.
    *
    * The same split as the flows, and the same reason: which inputs are answered
-   * by a program is a property of the module, so the *names* travel with the
-   * file -- while the `script.<id>` belongs to the Home Assistant that picked
-   * it, and that house names its own script when it installs this.
+   * by a program is a property of the module, so the *names* travel with the file
+   * -- while the helper and the automation's id belong to the Home Assistant that
+   * installs it, and that house makes its own when it builds the module.
    */
-  scripts: string[];
+  automations: string[];
   /**
    * The ones the placement being asked about has no device for.
    *

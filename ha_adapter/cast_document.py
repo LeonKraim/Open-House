@@ -9,8 +9,9 @@ another module published".
 
 Three things about a cast, and only two of them travel:
 
-* **The logic travels.** A template is its text, a condition is its condition, a
-  script is the call, and a flow is the entity it writes.
+* **The logic travels.** A template is its text, a condition is its condition, an
+  automation is the helper it writes, a flow is the entity it writes, and a script
+  is the call.
 * **The name and the room are new**, and they are the person's- because a module
   is placed, and the placement is the whole of what makes it a module rather than
   a value in a record.
@@ -19,10 +20,10 @@ Three things about a cast, and only two of them travel:
   whenever its host automation happens to run, which is why a cast costs nothing
   to add. A module of its own has no such run, so a detached cast has to be told
   what starts it. Where the cast names the entities itself -- a condition carries
-  the `entity_id`s it decides about, and a flow writes an entity Open House made
-  -- the trigger is *derived* from the cast. Where it does not -- a template, a
-  script -- the person is asked, because nothing here can work out what a
-  sequence of their own should watch.
+  the `entity_id`s it decides about, and a flow and an automation each write an
+  entity Open House made -- the trigger is *derived* from the cast. Where it does
+  not -- a template, a script -- the person is asked, because nothing here can work
+  out what a sequence of their own should watch.
 
 Nothing in this module talks to Home Assistant. A cast goes in and a document
 comes out, and `modules.async_host` hosts it: the same path an import takes. A
@@ -47,8 +48,15 @@ __all__ = [
     "watched_by",
 ]
 
-#: The four casts a row may hold, in the spelling the panel and the record use.
-CASTS = ("condition", "template", "flow", "script")
+#: The casts a row may hold, in the spelling the panel and the record use.
+#:
+#: `automation` is what a module *input* row offers in place of `script` (a script
+#: only runs when called, so it can keep nothing current; an automation triggers on
+#: its own and writes into a helper the row reads). `script` is still here because a
+#: *slot rule* still offers it -- a slot's device is decided inside the pack's own
+#: run, where a called script is the right shape -- so the document builder knows
+#: both. See `slot_rules.KINDS`.
+CASTS = ("condition", "template", "flow", "script", "automation")
 
 #: The variable a detached cast's value is written into, and so the candidate its
 #: output is picked from.
@@ -135,20 +143,21 @@ def detached_document(
     condition: object = None,
     script: str = "",
     flow_entity: str = "",
+    automation_entity: str = "",
     trigger: Iterable[str] = (),
 ) -> Detached:
     """One cast as an automation of its own, with the output it publishes.
 
     `trigger` is the person's answer where the cast cannot supply one -- and it is
-    *added to* what a condition or a flow derives rather than replacing it, so a
-    row watching three entities of its own can be given a fourth thing to watch
-    without losing the three it had.
+    *added to* what a condition, a flow or an automation derives rather than
+    replacing it, so a row watching three entities of its own can be given a fourth
+    thing to watch without losing the three it had.
     """
     if cast not in CASTS:
         raise AuthoringError(
             f"{cast!r} is not a cast: a row is answered with a condition, a "
-            "template, a flow or a script, and there is nothing to detach from "
-            "a row that holds a value"
+            "template, a flow, an automation or a script, and there is nothing to "
+            "detach from a row that holds a value"
         )
     actions: list[Any] = []
     derived: tuple[str, ...] = ()
@@ -191,6 +200,20 @@ def detached_document(
         # between a flow and the other three, and it is why detaching one needs no
         # answer from the person.
         actions.append({"variables": {VALUE: f"{{{{ states('{flow_entity}') }}}}"}})
+    elif cast == "automation":
+        if not automation_entity:
+            raise AuthoringError(
+                "this row's automation has no helper yet: the helper is made when "
+                "the module is built, so build it first and detach it after"
+            )
+        # An automation already runs on its own and writes its helper, so nothing
+        # starts this module -- it *follows* the automation, exactly as a flow cast
+        # follows its flow. That is why detaching one needs no answer from the
+        # person: the entity to watch is the one the automation writes.
+        derived = (automation_entity,)
+        actions.append(
+            {"variables": {VALUE: f"{{{{ states('{automation_entity}') }}}}"}}
+        )
     else:
         call = _script_id(script)
         actions.append({"action": f"script.{call}", "response_variable": RESPONSE})

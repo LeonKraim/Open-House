@@ -256,19 +256,26 @@ add-on does), and a Home Assistant *server* node in Node-RED, which any instance
 that has used Node-RED with Home Assistant already has. Nothing is written into
 the input until the flow itself writes it, so a flow you have not finished
 building leaves the input reading `unknown` — which is visible, and not the same
-as a value of zero. **HAOS script logic** is the fourth, and it is the one for
-logic that is a *sequence* rather than an expression: pick it and the row asks
-for a script of yours — one you already have, or one you make in the same place.
-Open House calls the script when the module runs and binds the input to what it
-hands back (`stop:` with `response_variable`, which is how Home Assistant returns
-a value to whoever called it), so the answer can be an if, a loop and a call to
-something else, which no single template can say. It is *called* rather than
-watched, so — unlike a flow — there is nothing to wire in and no trigger to
-connect, and the row says so instead of leaving you looking for one. **Home
-Assistant's own script editor is embedded in the row**, the same editor rather
-than a link to it, and it opens on the script you picked or on a new one. A
-script cannot be written where a trigger names an entity, for the reason a
-condition cannot. A slot is the
+as a value of zero. **HAOS automation** is the fourth, and it is the one for an
+input that should be *current* — a value that something keeps up to date rather
+than one you type or one the module reads off a device. Pick it and Open House
+makes two things: a **helper** for the input — a real Home Assistant helper, the
+kind the input's selector asks for (a number, a switch, a piece of text, a menu),
+visible in **Settings → Devices & Helpers** like any other — and an **automation**
+that already contains the action writing that helper, aliased `Open House <module>
+<name>` so you can find it again. The input then reads the helper, so it has a
+real value from the first moment rather than sitting at `unknown`. **Home
+Assistant's own automation editor is embedded in the row**, the same editor rather
+than a link to it, and it opens on *that* automation — the one Open House made —
+so there is nothing to name and no second automation to end up with. What it
+wants from you is the trigger: the action that sets the helper is already written
+in, as the visual syntax, and you replace it with whatever should drive the input
+— the house moving, a time, a button, one of your own automations finishing. An
+automation is the cast this is for because it *runs on its own*; a script is only
+run when something calls it, so it can never keep an input up to date between
+runs. Open House writes the automation once, when the module is built, and never
+again — so your triggers and edits survive every later change to the module. A
+slot is the
 answer that makes a module reusable: answer the lux input with the room's ambient
 light sensor, and
 one module works in every room, acting on whichever device that room binds for
@@ -291,13 +298,14 @@ that exists nowhere in the blueprint as a name.
 
 **A row you answered with logic is offered there too, and ticking it is what
 "expose it" means.** Beside the source's own values, the publish list carries
-every row holding a cast — a condition, a template, a flow, a script — because
-each of those is already a value the module works out. Tick one and it becomes an
-entity of its own (`sensor.open_house_<module>_<key>`, the same shape every other
-output has), which any automation, dashboard or module in the house can read by
-name. Nothing is duplicated: it is *that* answer published, not a second one to
-keep in step — the binary sensor Open House makes for a condition, the value a
-flow writes, the value a script returns, the expression you typed. A cast on a
+every row holding a cast — a condition, a template, a flow, an automation —
+because each of those is already a value the module works out. Tick one and it
+becomes an entity of its own (`sensor.open_house_<module>_<key>`, the same shape
+every other output has), which any automation, dashboard or module in the house
+can read by name. Nothing is duplicated: it is *that* answer published, not a
+second one to keep in step — the binary sensor Open House makes for a condition,
+the value a flow writes, the helper an automation sets, the expression you typed.
+A cast on a
 row of a module you have already installed is offered in the same list when you
 open the module's own Edit screen, so exposing something you built last month is
 the same tick as exposing something you are building now.
@@ -358,9 +366,12 @@ The four are:
   is an entity id: *that* is the device this module acts on. It is re-rendered
   whenever anything the template reads changes, so it follows the house by
   itself and there is no "when" to give it.
-* **HAOS script logic** — the same script cast the input rows offer, and it
-  *returns* the device: the script is called, and the entity id it hands back is
-  what the slot becomes. Because a script runs only when somebody calls it, this
+* **HAOS script logic** — a script of yours that *returns* the device: the script
+  is called, and the entity id it hands back is what the slot becomes. It is the
+  one place a script still appears; an input row offers an automation instead,
+  because an input has to keep reading a value, while a slot only has to be told
+  which device it is — and that is a call, which is what a script is for. Because
+  a script runs only when somebody calls it, this
   one asks for a **when** — the entities whose change should call it — and says so
   rather than leaving you looking for a trigger. What the script hands back is
   read under the name `oh_value`, so its `stop:` action has to be written

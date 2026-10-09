@@ -791,7 +791,7 @@ export class OpenHouseClient {
     handle: { key?: string; text?: string },
     bindings: Record<string, ModuleBinding> = {},
     module = "",
-    castRows: { casts?: string[]; flows?: string[]; scripts?: string[] } = {},
+    castRows: { casts?: string[]; flows?: string[]; automations?: string[] } = {},
   ): Promise<ModuleReadReply> {
     return this.call(COMMANDS.modulesRead, {
       kind,
@@ -822,7 +822,7 @@ export class OpenHouseClient {
     settings: string[] = [],
     roomId = "",
     flows: string[] = [],
-    scripts: Record<string, string> = {},
+    automations: string[] = [],
   ): Promise<{ module: string; modules: HostedModule[] }> {
     return this.call(COMMANDS.modulesHost, {
       kind,
@@ -833,7 +833,7 @@ export class OpenHouseClient {
       settings,
       room_id: roomId,
       flows,
-      scripts,
+      automations,
     });
   }
 
@@ -845,12 +845,12 @@ export class OpenHouseClient {
    * already answers, so sending only the exposed settings is what the screen is
    * meant to do.
    *
-   * `casts`, `flows` and `scripts` are the three kinds of *logic* a setting may
-   * be answered with rather than by a value, and each travels in its own shape
-   * for the reason `protocol.ts` gives: a condition is a config the server turns
-   * into an entity, a flow is a set of names because the id is Node-RED's to
-   * assign, and a script is a map of names to ids because the script already
-   * exists in this house and Open House only ever names it.
+   * `casts`, `flows` and `automations` are the three kinds of *logic* a setting
+   * may be answered with rather than by a value, and each travels in its own
+   * shape for the reason `protocol.ts` gives: a condition is a config the server
+   * turns into an entity, and a flow and an automation are each a set of *names*
+   * because the id is Node-RED's or the server's to assign when the module is
+   * built.
    */
   modulesSettings(
     module: string,
@@ -858,7 +858,7 @@ export class OpenHouseClient {
     settings?: string[],
     casts?: Record<string, unknown>,
     flows?: string[],
-    scripts?: Record<string, string>,
+    automations?: string[],
     revision?: number,
   ): Promise<{ module: string; modules: HostedModule[] }> {
     return this.call(COMMANDS.modulesSettings, {
@@ -867,7 +867,7 @@ export class OpenHouseClient {
       settings,
       casts,
       flows,
-      scripts,
+      automations,
       ...withRevision(revision),
     });
   }
@@ -910,7 +910,7 @@ export class OpenHouseClient {
       settings: string[];
       casts: Record<string, unknown>;
       flows: string[];
-      scripts: Record<string, string>;
+      automations: string[];
     },
   ): Promise<{
     module: string;
@@ -1061,15 +1061,12 @@ export class OpenHouseClient {
        */
       flows?: string[];
       /**
-       * The inputs answered with a **script**, by input name and script id.
+       * The inputs answered with an **automation**, by input name.
        *
-       * A map rather than the list the flows are, and the difference is which
-       * half there is to carry: nothing pushes a script and nothing assigns it
-       * an id, because a script is a thing the house already has -- so a name
-       * with no id behind it is not a promise to fill in later, it is a call to
-       * something nobody named.
+       * Names, like the flows: nothing carries an id here, because the helper and
+       * the automation are made by whichever house installs this.
        */
-      scripts?: Record<string, string>;
+      automations?: string[];
     },
   ): Promise<{ module: string; store: ModuleOfferRow[] }> {
     return this.call(COMMANDS.modulesDefine, { kind, ...handle, ...definition });
@@ -1088,7 +1085,7 @@ export class OpenHouseClient {
     settings?: string[],
     casts?: Record<string, unknown>,
     flows?: string[],
-    scripts?: Record<string, string>,
+    automations?: string[],
   ): Promise<{ module: string; modules: HostedModule[]; store: ModuleOfferRow[] }> {
     return this.call(COMMANDS.modulesDeploy, {
       module,
@@ -1097,7 +1094,7 @@ export class OpenHouseClient {
       settings,
       casts,
       flows,
-      scripts,
+      automations,
     });
   }
 
