@@ -39,6 +39,7 @@ from typing import Any
 
 import yaml
 from homeassistant.core import HomeAssistant
+from homeassistant.util.yaml import dump as yaml_dump
 
 from engine import vocabulary as engine_vocabulary
 from engine.binding import HouseScope, RoomScope, resolve_slot
@@ -206,6 +207,19 @@ async def source_text(hass: HomeAssistant, kind: str, key: str) -> str:
     reading. The round trip through YAML is lossless for the shapes Home
     Assistant permits, and it is what makes a paste, a file and a picker the same
     thing to `pack_authoring.read_source`.
+
+    **Home Assistant's own dumper, and not `yaml.safe_dump`.** An automation's
+    `raw_config` is the document Home Assistant's editor holds, and it is
+    *annotated*: every key and value is a `NodeStrClass`/`NodeListClass`/
+    `NodeDictClass` -- subclasses of `str`/`list`/`dict` carrying the line and
+    column they were parsed from, which is what the editor uses to point at the
+    line a mistake is on. PyYAML has no representer for those, so `safe_dump`
+    raises `RepresenterError` on the first key. It also only unwraps the
+    outermost mapping, and the nested nodes go just as unrepresented, so a
+    deep-copy would not have been enough either. `homeassistant.util.yaml.dump`
+    is the same function Home Assistant itself writes `automations.yaml` with,
+    and it registers a representer for exactly those classes -- so the text this
+    hands the importer is the text a person would see.
     """
 
     if kind == "automation":
@@ -222,7 +236,17 @@ async def source_text(hass: HomeAssistant, kind: str, key: str) -> str:
             raise pack_authoring.AuthoringError(
                 f"the automation {key!r} carries no configuration to read"
             )
-        return yaml.safe_dump(dict(raw), sort_keys=False, allow_unicode=True)
+        try:
+            return yaml_dump(dict(raw))
+        except Exception as err:  # noqa: BLE001 -- reported, never swallowed
+            # The refusal is `AuthoringError` because the caller only catches
+            # that (`websocket_api.ws_modules_read`): anything else leaves the
+            # panel with Home Assistant's generic "Unknown error" and a stack
+            # trace in the log, when what the person needs is a sentence saying
+            # this one automation could not be read.
+            raise pack_authoring.AuthoringError(
+                f"the automation {key!r} could not be written back out as YAML: {err}"
+            ) from err
     if kind == "blueprint":
         from homeassistant.components.automation.helpers import async_get_blueprints
 
