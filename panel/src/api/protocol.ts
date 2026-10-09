@@ -585,15 +585,32 @@ export const COMMANDS = {
    *
    * Whether this house has a published Store to talk to at all.
    *
-   * `url` is `""` until somebody names one in the integration's settings, and
-   * **that is the ordinary state of every install**: a Store is a server
-   * somebody runs, so nothing here opens a connection until an address is given,
-   * and every other command below refuses politely while there is none. `name`
-   * is this install's publisher name -- `""` until it has claimed one -- and it
-   * is what makes "your name, once" visible on the screen rather than only in a
-   * file.
+   * `url` is `""` only when the address is defined *nowhere* -- neither in the
+   * integration's settings nor in the default this build of Open House ships
+   * with -- and **that is the one state the panel has to ask about**: every other
+   * command below refuses politely while there is no address, and nothing here
+   * opens a connection until there is one. `name` is this install's publisher
+   * name -- `""` until it has claimed one -- and it is what makes "your name,
+   * once" visible on the screen rather than only in a file.
    */
   publishedStatus: "open_house/published/status",
+
+  /**
+   * `{ url }` -> `{ url, name }`, the new status.
+   *
+   * Point this house at a Store, or away from one with an empty address.
+   *
+   * The address is an option of the integration either way, and this is its
+   * second writer beside the Configure screen -- the panel writes it so that
+   * pressing Publish on a module you have never published can *be* how a house
+   * gets a Store, rather than a button that sends you somewhere else first.
+   *
+   * **A changed address forgets the publisher name claimed on the old one**, for
+   * the reason the name is unique in the first place, and the new status says so
+   * by answering with the name it now has: `""`. So a caller sets an address and
+   * claims a name in that order, and the order is not a formality.
+   */
+  publishedConfigure: "open_house/published/configure",
 
   /**
    * `{ name }` -> `{ name }`.

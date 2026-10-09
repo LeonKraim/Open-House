@@ -1238,10 +1238,16 @@ const STORED_MODULES: ModuleOfferRow[] = [
  * that starts empty so the claim form is on screen, and a small list of rows
  * that covers the shapes the screen has to draw differently -- one this house
  * published, one it did not, one nobody has rated, and one it already holds as a
- * definition. `PUBLISHED_URL` is a name rather than a live address because
+ * definition. `publishedUrl` is a name rather than a live address because
  * nothing here opens a connection.
+ *
+ * The address is a `let` because it is no longer fixed: a house with no Store is
+ * the state the Publish button now has to be able to walk out of, and the way to
+ * reach it here is to send `publishedConfigure` an empty address -- the very
+ * command the screen sends. So the mock needs no test-only seam, and the blank
+ * address is reached the way the panel reaches it.
  */
-const PUBLISHED_URL = "https://store.openhouse.example";
+let publishedUrl = "https://store.openhouse.example";
 
 /**
  * The name a second person asking for it would be refused.
@@ -2348,7 +2354,27 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
       };
     }
     case COMMANDS.publishedStatus:
-      return { url: PUBLISHED_URL, name: publisherName } satisfies StoreStatus;
+      return { url: publishedUrl, name: publisherName } satisfies StoreStatus;
+    case COMMANDS.publishedConfigure: {
+      // Setting the address, or clearing it with `""`. Changing it forgets the
+      // claimed name, which is the Store's rule and not the screen's: a name
+      // belongs to the Store that issued it, so a claim carried to another one
+      // authenticates as a stranger -- or as whoever holds that name there.
+      //
+      // A *missing* address is refused rather than read as a blank one, the way
+      // the server requires the field. The difference matters because this
+      // command mutates: the protocol sweep in the test file sends every command
+      // with an empty payload, and a mock that read that as "clear the Store"
+      // would leave the Store cleared for every test after it -- which is
+      // exactly what it did.
+      if (typeof payload.url !== "string") {
+        throw refuse(REFUSALS.invalidFormat, "a Store address is required, even an empty one");
+      }
+      const url = payload.url.trim();
+      if (url !== publishedUrl) publisherName = "";
+      publishedUrl = url;
+      return { url: publishedUrl, name: publisherName } satisfies StoreStatus;
+    }
     case COMMANDS.publisherClaim: {
       // Claiming is once, and the mock keeps one name back so the refusal the
       // Store makes -- "that name is taken, please pick another name" -- can be

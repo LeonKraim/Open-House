@@ -15,11 +15,12 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import type { PublishedRow } from "../api/models.ts";
+import type { PublishedRow, StoreStatus } from "../api/models.ts";
 import {
   browseRows,
   claimProblem,
   installRefusal,
+  publishBlockers,
   ratingLabel,
   starBand,
 } from "./store.ts";
@@ -131,4 +132,42 @@ test("a lower case name with dashes and digits is accepted", () => {
   // Surrounding space is trimmed rather than refused: the button sends the
   // trimmed name, so a name a person pasted with a stray space is a name.
   assert.equal(claimProblem("  marqbarq  "), null);
+});
+
+/** A status with only the two fields the publish pre-flight reads. */
+function status(over: Partial<StoreStatus> = {}): StoreStatus {
+  return { url: "https://store.example", name: "sam", ...over };
+}
+
+test("a house with a Store and a name has nothing to ask for", () => {
+  // The button publishes straight away here, which is the case that must not
+  // regress into opening a dialog: a person who is set up should never see it.
+  assert.deepEqual(publishBlockers(status()), []);
+});
+
+test("the address is asked for before the name", () => {
+  // **The order is the substance of this function.** Setting an address that
+  // replaces an earlier one forgets the name claimed against it, so a dialog
+  // that asked for the name first would be asking for something the very next
+  // answer threw away. This is the assertion a reordering would break.
+  assert.deepEqual(publishBlockers(status({ url: "", name: "" })), [
+    "address",
+    "name",
+  ]);
+});
+
+test("a name on its own is asked for on its own", () => {
+  assert.deepEqual(publishBlockers(status({ name: "" })), ["name"]);
+});
+
+test("an address on its own is asked for on its own", () => {
+  assert.deepEqual(publishBlockers(status({ url: "" })), ["address"]);
+});
+
+test("a status that has not been read is not a missing address", () => {
+  // `null` is "no answer yet", not "nothing configured": asking for an address
+  // because a read had not landed would be asking for something that may well
+  // already be set. Nothing is known to be missing, so nothing is asked for and
+  // the publish itself answers if it turns out something was.
+  assert.deepEqual(publishBlockers(null), []);
 });

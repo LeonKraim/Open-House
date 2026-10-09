@@ -244,6 +244,85 @@ def test_claiming_with_no_address_is_refused_rather_than_posted() -> None:
     assert hass.written == []
 
 
+def test_the_address_falls_back_to_the_one_this_build_ships_with(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The address a house does not have to type, and why it is a fallback.
+
+    `DEFAULT_URL` is empty in this repository today, which is what makes an
+    unconfigured house ask for one. Filled in, it is how every house is pointed
+    at the Store without anybody typing anything -- so this pins the *seam* rather
+    than the value, and it would still pass on the day the value arrives.
+    """
+    monkeypatch.setattr(store_module, "DEFAULT_URL", "https://store.example")
+    assert store_module.store_url({}) == "https://store.example"
+    # Whitespace-only is no address, and so is where the default takes over.
+    assert store_module.store_url({"store_url": "   "}) == "https://store.example"
+
+
+def test_a_configured_address_wins_over_the_shipped_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A person running their own Store is not overruled by the shipped one.
+
+    The default is chosen for houses that have not chosen, so an address that
+    *has* been chosen has to be the one that is used -- otherwise pointing this
+    build at a Store would quietly make every self-hosted Store unreachable.
+    """
+    monkeypatch.setattr(store_module, "DEFAULT_URL", "https://store.example")
+    assert store_module.store_url({"store_url": "http://192.168.1.9:8090"}) == (
+        "http://192.168.1.9:8090"
+    )
+
+
+def test_a_changed_address_forgets_the_claimed_name() -> None:
+    """The rule both writers of the option share, and the reason for the order.
+
+    A publisher identity belongs to the Store that issued it. Carried to another
+    Store it authenticates as a stranger -- or, where somebody else holds that
+    name, as *that person*, which is the one thing the uniqueness of a name
+    exists to prevent. So the claim goes, and the tab asks for a name again.
+    """
+    options = {
+        "store_url": "https://old.example",
+        "store_publisher": {"name": "sam", "password": "secret"},
+        "room_order": ["kitchen"],
+    }
+    updated = store_module.with_url(options, "https://new.example")
+    assert updated["store_url"] == "https://new.example"
+    assert "store_publisher" not in updated
+    # Everything that is not the address or the claim is left alone: this is an
+    # edit to two keys, not a rewrite of the entry's options.
+    assert updated["room_order"] == ["kitchen"]
+
+
+def test_an_unchanged_address_keeps_the_claimed_name() -> None:
+    """Re-saving the same address is not a move, and must not cost a name.
+
+    The Configure screen submits its whole form every time, so a person who
+    changes nothing but presses Save would lose their publisher name if this
+    compared anything other than the address -- and lose it to a no-op.
+    """
+    options = {"store_url": "https://store.example", "store_publisher": {"name": "sam"}}
+    assert store_module.with_url(options, "https://store.example") == options
+    # Surrounding space is trimmed before the comparison, so a stray space does
+    # not read as a different Store.
+    assert store_module.with_url(options, "  https://store.example  ") == options
+
+
+def test_clearing_the_address_forgets_the_name_too() -> None:
+    """A house pointed back away from a Store is a house with no publisher.
+
+    Empty is a real answer rather than a missing one -- it is how a house that
+    was pointed at a Store is pointed back away from it -- and it is a change
+    like any other, so the claim attached to the old address goes with it.
+    """
+    options = {"store_url": "https://store.example", "store_publisher": {"name": "sam"}}
+    cleared = store_module.with_url(options, "")
+    assert cleared["store_url"] == ""
+    assert "store_publisher" not in cleared
+
+
 # -- Claiming a name ---------------------------------------------------------
 
 

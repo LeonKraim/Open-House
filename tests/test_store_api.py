@@ -179,6 +179,34 @@ def test_a_summary_is_the_definitions_own_description_when_none_is_given() -> No
     )
 
 
+def test_a_summary_longer_than_the_row_holds_is_cut_rather_than_refused() -> None:
+    # PocketBase refuses the create with a bare "Failed to create record" that
+    # names neither the field nor the length, so a module written with a few
+    # paragraphs of prose could not be published at all -- and the sentence the
+    # person got said nothing about why.
+    definition = module_definitions.ModuleDefinition(
+        slug="s", title="t", source="x: 1\n", description="word " * 200
+    )
+    summary = store_api.publish_payload(definition, publisher_id="p")["summary"]
+    assert len(summary) <= store_api.SUMMARY_LIMIT
+    assert summary.endswith("…")
+    # Cut on a word, so the row ends on a word rather than halfway through one.
+    assert summary[:-1].endswith("word")
+    # What was cut is the blurb. The document is what a person installs, and it
+    # carries the description whole.
+    assert store_api.publish_payload(definition, publisher_id="p")["document"][
+        "definition"
+    ]["description"] == definition.description
+
+
+def test_a_description_that_fits_is_left_alone() -> None:
+    # Whitespace a person left in is the one thing that does not survive: the
+    # field is one paragraph on a row.
+    assert store_api.summary_text("  Brings the lights\n  down at dusk.  ") == (
+        "Brings the lights down at dusk."
+    )
+
+
 def test_a_publisher_claims_a_name_with_a_secret_and_two_copies_of_it() -> None:
     # PocketBase requires the confirmation field, and the secret is the account:
     # there is no email to give and no second sign-up, which is what makes "one

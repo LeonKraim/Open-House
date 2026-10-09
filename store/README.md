@@ -52,6 +52,15 @@ Two volumes matter: `pb_data` is the whole Store (the database, the uploaded
 files, the logs), and `pb_hooks` is this directory. Nothing else needs backing
 up, and nothing else needs deleting to start over.
 
+**Telling a house which Store this is.** The address is the integration's
+`store_url` option, and there are two ways to set it: the Configure screen, or
+the Publish button on a module, which asks for it when it does not know one. A
+build of Open House can also *ship* pointed at a Store, through `DEFAULT_URL` in
+`custom_components/open_house/store.py` -- empty today, and filling it in is how
+every house gets a Store without anybody typing an address. A configured address
+always wins over the shipped one, so pointing the build at a public Store does
+not stop a person running their own.
+
 ## What the backend enforces
 
 The Store's honesty is in the collection rules, not in the client. `store_api.py`
@@ -73,6 +82,16 @@ second opinion.
 `stacktrace`-free refusals matter here: a create that fails a rule answers with
 the field and the reason, and `store_api.name_taken` reads PocketBase's own
 `validation_not_unique` rather than treating every 400 as "the name is gone".
+
+**One cap is mirrored rather than read.** `summary` holds 400 characters, and a
+version of it that a *publisher* sends is refused with a bare "Failed to create
+record. Code: invalid_format" -- PocketBase keeps the field and the length to
+itself for anybody who is not the Store's own admin, so the sentence a person
+sees cannot name what was wrong. A module written with a few paragraphs of prose
+was therefore a module that could not be published at all, and nothing said why.
+So the integration cuts the blurb to fit before sending it
+(`store_api.summary_text`), and the description travels whole in the `document`,
+which is what anybody who installs it reads.
 
 ## Why there is a hook at all
 

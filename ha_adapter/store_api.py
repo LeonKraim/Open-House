@@ -357,6 +357,26 @@ def _mapping(value: object) -> Mapping[str, Any]:
 
 # -- What is sent ------------------------------------------------------------
 
+#: How much prose a Store row's `summary` holds. The schema in
+#: `store/collections.json` caps the field at 400 characters and PocketBase is
+#: what enforces it -- and it enforces it *silently*, because a create made by a
+#: publisher rather than by the Store's own admin is refused with a bare "Failed
+#: to create record. Code: invalid_format" that names neither the field nor the
+#: length. So the cap is kept here, where the description being cut is still
+#: whole: the module's own `description` travels in the `document` untouched, and
+#: what is cut is the blurb on the row. A module with a few paragraphs of prose
+#: was otherwise a module that could not be published at all.
+SUMMARY_LIMIT = 400
+
+
+def summary_text(text: str) -> str:
+    """A description cut to what a Store row holds, ending on a word."""
+    squashed = " ".join(str(text or "").split())
+    if len(squashed) <= SUMMARY_LIMIT:
+        return squashed
+    cut = squashed[: SUMMARY_LIMIT - 1].rsplit(" ", 1)[0]
+    return f"{cut or squashed[: SUMMARY_LIMIT - 1]}…"
+
 
 def publish_payload(
     definition: module_definitions.ModuleDefinition,
@@ -378,7 +398,7 @@ def publish_payload(
     return {
         "slug": definition.slug,
         "title": definition.title,
-        "summary": summary or definition.description,
+        "summary": summary_text(summary or definition.description),
         "publisher": publisher_id,
         "version": definition.version,
         "tier": "community",

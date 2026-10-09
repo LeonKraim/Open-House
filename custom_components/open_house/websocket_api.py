@@ -141,6 +141,7 @@ MODULES_CONFIG_ADD = "open_house/modules/configs/add"
 MODULES_CONFIG_RENAME = "open_house/modules/configs/rename"
 MODULES_CONFIG_REMOVE = "open_house/modules/configs/remove"
 PUBLISHED_STATUS = "open_house/published/status"
+PUBLISHED_CONFIGURE = "open_house/published/configure"
 PUBLISHED_CLAIM = "open_house/published/claim"
 PUBLISHED_BROWSE = "open_house/published/browse"
 PUBLISHED_PUBLISH = "open_house/published/publish"
@@ -4389,6 +4390,46 @@ async def ws_published_status(
 
 
 @websocket_api.websocket_command(
+    {
+        vol.Required("type"): PUBLISHED_CONFIGURE,
+        # Required, and an empty string is a real answer rather than a missing
+        # one: it is how a house that has been pointed at a Store is pointed back
+        # away from it, and it leaves `DEFAULT_URL` as the address when this build
+        # ships with one. Required rather than defaulted because a *mutating*
+        # command must not read a request that forgot the field as "clear it" --
+        # the blank address is the same word as the absent one only by accident,
+        # and a caller who sends neither is a caller with a bug.
+        vol.Required("url"): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_published_configure(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Set which Store this house publishes to, from the panel.
+
+    The address is an option of the integration either way -- this is the second
+    writer of it, beside the Configure screen -- and it writes through
+    `store.with_url`, so both writers agree about the one part that is easy to get
+    wrong: a changed address forgets the publisher name claimed on the old one.
+
+    Answered with the whole new status rather than with the address alone, because
+    the reason a person is here is that they were missing one of the two, and the
+    claim the address change may just have dropped is the other.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    options = store.with_url(host.entry.options, str(msg["url"]))
+    hass.config_entries.async_update_entry(host.entry, options=options)
+    connection.send_result(
+        msg["id"],
+        {"url": store.store_url(options), "name": store.publisher_name(options)},
+    )
+
+
+@websocket_api.websocket_command(
     {vol.Required("type"): PUBLISHED_CLAIM, vol.Required("name"): str}
 )
 @websocket_api.async_response
@@ -4728,6 +4769,7 @@ _HANDLERS: tuple[Any, ...] = (
     ws_modules_export,
     ws_modules_import,
     ws_published_status,
+    ws_published_configure,
     ws_published_claim,
     ws_published_browse,
     ws_published_publish,

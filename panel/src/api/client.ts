@@ -980,6 +980,19 @@ export class OpenHouseClient {
   }
 
   /**
+   * Point this house at a Store, or away from one with an empty address.
+   *
+   * The second writer of the integration's `store_url` option, beside the
+   * Configure screen, and it is what lets the Publish button's own setup step be
+   * the way a house gets a Store. Answers with the new status, because the name
+   * the caller is about to need is the one this may just have forgotten: an
+   * address that changed drops the claim made against the old one.
+   */
+  publishedConfigure(url: string): Promise<StoreStatus> {
+    return this.call(COMMANDS.publishedConfigure, { url });
+  }
+
+  /**
    * Claim this install's publisher name.
    *
    * Once: the name is this install's afterwards, and the Store refuses a second

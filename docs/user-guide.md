@@ -570,6 +570,13 @@ and until one is given the panel opens no connection and the Store tab is the
 house's own store of modules plus nothing else. This is deliberate: a Store is
 public, and no install should be reachable outward because it was installed.
 
+You are not sent to that settings screen to set one, though — **the Publish
+button asks for the address itself**, and so does *Connect a Store* on the Store
+tab. What you type is written to the same option the Configure screen writes, so
+the two are one setting with two doors. A build of Open House can also ship
+*pointed* at a Store, in which case there is nothing to ask for and neither
+screen appears; an address you set yourself always wins over one that shipped.
+
 ### Your name, once
 
 The first thing a Store needs from you is the **name you publish under**. You
@@ -592,8 +599,17 @@ blueprint inside it — so what somebody installs is exactly what you published.
 Publishing again replaces your own module on the Store, which is what a corrected
 typo and a new version both are.
 
-The button only appears once a Store is configured and you have a name; a button
-whose only outcome would be a refusal is worse than no button.
+**The button is always there, and pressing it is how you set publishing up.** If
+Open House does not yet know which Store to publish to or what name to publish
+under, the button asks for whichever is missing and then publishes — so the
+first thing you publish is also the last step of the setup. The address is asked
+for before the name, and that order is not a preference: changing the address
+forgets the name claimed on the old one, so a name given first would be thrown
+away by the address that followed it.
+
+If a refusal comes back — the name is taken, the Store cannot be reached — it
+appears in the same dialog, which stays open so you can correct it and press
+Publish again.
 
 ### Browsing, and the two lists
 

@@ -494,3 +494,57 @@ test("installing a module the house already holds is refused, and replace settle
   })) as { replaced: boolean };
   assert.equal(again.replaced, true);
 });
+
+// -- the Publish button's setup step -------------------------------------------
+//
+// These run last and in this order on purpose. The mock's Store is module-level
+// state shared by every test in this file, and the two below deliberately walk it
+// into a house with no Store and back out again -- so anything ordered after them
+// would be reading a mock somebody else had reconfigured.
+
+test("an empty address is a house with no Store, and drops the claimed name", async () => {
+  // The state the Publish button now has to be able to leave from, and the only
+  // way to reach it in the mock: the same `publishedConfigure` command the screen
+  // sends. Clearing the address forgets the name, because a name belongs to the
+  // Store that issued it -- the rule that makes the dialog ask for the address
+  // *before* the name.
+  const conn = connection();
+  const cleared = (await conn.sendMessagePromise({
+    type: COMMANDS.publishedConfigure,
+    url: "",
+  })) as { url: string; name: string };
+  assert.equal(cleared.url, "");
+  assert.equal(cleared.name, "");
+
+  const status = (await conn.sendMessagePromise({
+    type: COMMANDS.publishedStatus,
+  })) as { url: string; name: string };
+  assert.equal(status.url, "");
+});
+
+test("connecting a Store and claiming a name is what makes a publish go through", async () => {
+  // The dialog's three steps, in the order it performs them: set the address,
+  // claim the name, publish. Before the address there is nothing to publish to,
+  // so the first two are what the third needs rather than a formality before it.
+  const conn = connection();
+  const connected = (await conn.sendMessagePromise({
+    type: COMMANDS.publishedConfigure,
+    url: "https://store.example",
+  })) as { url: string; name: string };
+  assert.equal(connected.url, "https://store.example");
+  assert.equal(connected.name, "");
+
+  await conn.sendMessagePromise({ type: COMMANDS.publisherClaim, name: "walkhouse" });
+
+  const status = (await conn.sendMessagePromise({
+    type: COMMANDS.publishedStatus,
+  })) as { url: string; name: string };
+  assert.equal(status.url, "https://store.example");
+  assert.equal(status.name, "walkhouse");
+
+  const reply = (await conn.sendMessagePromise({
+    type: COMMANDS.publishedPublish,
+    module: "evening_lighting",
+  })) as { published: PublishedRow };
+  assert.equal(reply.published.publisher, "walkhouse");
+});

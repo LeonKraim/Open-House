@@ -49,6 +49,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from ha_adapter import module_definitions, store_api
 
 __all__ = [
+    "DEFAULT_URL",
     "OPTION_PUBLISHER",
     "OPTION_URL",
     "Store",
@@ -58,12 +59,23 @@ __all__ = [
     "no_store_sentence",
     "publisher_name",
     "store_url",
+    "with_url",
 ]
 
 _LOGGER = logging.getLogger(__name__)
 
+#: The Store this build of Open House ships pointed at, used when no address is
+#: configured. **Empty today**, which is what makes an unconfigured house ask for
+#: an address; filling this in with a real Store is how a house gets one without
+#: anybody typing it. It is deliberately *below* the option rather than instead of
+#: it, so a person who wants a Store of their own -- a self-hosted one, a test one
+#: -- sets the option and it wins.
+#:
+#: `store_url` is the only reader, which is what keeps "is an address defined?" a
+#: single question: the panel asks only when that answer is `""`.
+DEFAULT_URL = ""
 #: The key the Store's address lives under in a config entry's options. Empty is
-#: the ordinary state: see the module docstring.
+#: the ordinary state when `DEFAULT_URL` is too: see the module docstring.
 OPTION_URL = "store_url"
 #: The key this install's claimed publisher identity lives under: a mapping of
 #: `name` to the password generated for it. Written only by a claim that
@@ -101,8 +113,14 @@ class StoreError(Exception):
 
 
 def store_url(options: Mapping[str, Any]) -> str:
-    """The Store's address from an entry's options, or `""` when none is set."""
-    return str(options.get(OPTION_URL) or "").strip()
+    """The Store's address: the configured one, or the one this build ships with.
+
+    A configured address always wins, so a person running their own Store is not
+    overruled by a `DEFAULT_URL` that was chosen for people who are not. `""` out
+    of here means the address is defined *nowhere*, which is the only state the
+    panel has to ask about.
+    """
+    return str(options.get(OPTION_URL) or "").strip() or DEFAULT_URL
 
 
 def publisher_name(options: Mapping[str, Any]) -> str:
@@ -110,18 +128,41 @@ def publisher_name(options: Mapping[str, Any]) -> str:
     return str(_publisher(options).get("name") or "")
 
 
+def with_url(options: Mapping[str, Any], url: str) -> dict[str, Any]:
+    """An entry's options with the Store's address set to `url`.
+
+    **A changed address forgets the claimed name**, and this is the one place that
+    rule is written. A publisher identity belongs to the Store that issued it: a
+    claim carried across to a different Store authenticates as a stranger -- or,
+    on a Store where somebody else holds the same name, *as that person*, which is
+    the one thing the uniqueness of a name exists to prevent. So changing the
+    address drops the claim and the tab asks for a name again, which is the screen
+    that can settle who this house is on the new Store.
+
+    Left as a plain function rather than a method because both writers need it --
+    the options flow (`config_flow.OpenHouseOptionsFlow`) and the panel's own
+    `published/configure` command -- and two copies of this rule would be one copy
+    per way to get it wrong.
+    """
+    merged = {**options, OPTION_URL: url.strip()}
+    was = str(options.get(OPTION_URL) or "").strip()
+    if was != merged[OPTION_URL]:
+        merged.pop(OPTION_PUBLISHER, None)
+    return merged
+
+
 def no_store_sentence() -> str:
     """Where to set the address, in the words every refusal uses.
 
     One phrase, because it is written into every command's refusal and a person
-    who reads it twice should read the same place twice. The address is the
-    integration's own option, so the way to it is the integration's own Configure
-    screen, not a Store page the browser would have to find.
+    who reads it twice should read the same place twice. Both the panel's own
+    Publish button and the integration's Configure screen write the same option,
+    so the sentence names the act rather than the screen.
     """
     return (
         "no published Store is set for this house: put its address in Settings > "
-        "Devices & Services > Open House > Configure, and leave that empty to go "
-        "on without one"
+        "Devices & Services > Open House > Configure, or press Publish on one of "
+        "your modules, and leave it empty to go on without a Store"
     )
 
 

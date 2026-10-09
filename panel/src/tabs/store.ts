@@ -20,8 +20,19 @@
  * apart: a pack is a catalog's, a module is this house's own, and a published
  * module is somebody else's, reached over a server this house has to name. The
  * whole section is drawn only once an address exists, because every command
- * under it refuses politely with no address and a screen of buttons whose only
- * outcome is an error is worse than a sentence saying where to set one.
+ * under it refuses politely with no address.
+ *
+ * ## The Publish button is always there, and it asks for what it needs
+ *
+ * The button used to be hidden until a house had both a Store address and a
+ * claimed name, on the reasoning that a button whose only outcome is an error is
+ * worse than no button. But the person who most needs it is the one who has
+ * never set a Store up, and hiding it from them hid the whole idea of publishing.
+ * So it is drawn on every module this house made, and pressing it opens a dialog
+ * asking for whichever of the two is missing -- the address first, because an
+ * address that *changes* forgets the name claimed on the old one -- and then
+ * publishes. The same dialog is what the Connect button on the section below
+ * opens, so a house with no Store can get one from either end of the tab.
  *
  * The reasoning a walk cannot check lives in the exported helpers below -- the
  * split the filter reads, the rating in words, the star band, the sentence a
@@ -201,6 +212,38 @@ export function installRefusal(error: unknown): {
   };
 }
 
+/**
+ * The two things a publish needs that a house may not have yet.
+ *
+ * `"address"` is a Store to publish to and `"name"` is the name it publishes
+ * under, and they are returned in that order because the order is not a
+ * preference: setting an address that *replaces* an earlier one forgets the name
+ * claimed against it, so a name claimed first would be thrown away by the address
+ * that followed.
+ */
+export type PublishBlock = "address" | "name";
+
+/**
+ * What a publish still needs, in the order it must be answered. Empty means go.
+ *
+ * The whole decision behind the setup dialog, kept out of the element so it can
+ * be pinned without a browser -- and kept as a *list* rather than the two booleans
+ * a caller would otherwise test separately, because the order is the part that is
+ * easy to get wrong and the list is what carries it.
+ *
+ * `null` is a status that has not been read, which is not the same as a missing
+ * address: nothing is known to be missing, so nothing is asked for, and the
+ * publish itself answers with the server's own sentence if it turns out to be
+ * right that something was.
+ */
+export function publishBlockers(status: StoreStatus | null): PublishBlock[] {
+  if (status === null) return [];
+  const missing: PublishBlock[] = [];
+  if (status.url === "") missing.push("address");
+  if (status.name === "") missing.push("name");
+  return missing;
+}
+
 export class StoreTab extends OpenHouseElement {
   // `confirming` is a click that only arms a button, `tierFilter` and the
   // per-module pickers are choices; all are invisible to Lit as plain fields
@@ -228,6 +271,12 @@ export class StoreTab extends OpenHouseElement {
     claimName: { state: true },
     claimError: { state: true },
     claiming: { state: true },
+    setupOpen: { state: true },
+    setupOffer: { state: true },
+    setupUrl: { state: true },
+    setupName: { state: true },
+    setupError: { state: true },
+    setupBusy: { state: true },
     side: { state: true },
     search: { state: true },
     split: { state: true },
@@ -279,6 +328,25 @@ export class StoreTab extends OpenHouseElement {
   /** The refusal the Store gave, shown verbatim under the claim form. */
   private claimError: string | null = null;
   private claiming = false;
+
+  /**
+   * The setup dialog: open or not, and the module it will publish when it closes.
+   *
+   * `setupOffer` is `null` when the dialog was opened from the section's Connect
+   * button rather than from a module's Publish -- the same two fields, asked for
+   * the same reason, but with nothing to publish at the end of it. That is why
+   * this is a flag plus a row rather than one nullable field: "closed" and "open
+   * with nothing to publish" are different states and a single `null` would spell
+   * both of them.
+   */
+  private setupOpen = false;
+  private setupOffer: ModuleOfferRow | null = null;
+  /** What has been typed into the setup dialog, before it is sent. */
+  private setupUrl = "";
+  private setupName = "";
+  /** The refusal the Store gave during setup, shown verbatim in the dialog. */
+  private setupError: string | null = null;
+  private setupBusy = false;
   /** Which half of the published list is showing. Remembered across renders. */
   private side: StoreSide = "not_installed";
   private search = "";
@@ -491,6 +559,15 @@ export class StoreTab extends OpenHouseElement {
 
   /** Publish one of this house's own modules to the Store, by its name. */
   private async publish(offer: ModuleOfferRow): Promise<void> {
+    // A publish needs a Store and a name, and neither may be here yet. Rather
+    // than a button that could only fail, the same press opens the dialog that
+    // asks for whichever is missing; answering it comes back through here, by
+    // which time the pre-flight passes. So the button is pressed twice at most,
+    // and the person never has to go and find a settings screen first.
+    if (publishBlockers(this.status).length > 0) {
+      this.openSetup(offer);
+      return;
+    }
     this.busy = offer.slug;
     this.error = null;
     this.notice = null;
@@ -508,6 +585,83 @@ export class StoreTab extends OpenHouseElement {
     }
   }
 
+  /** Open the setup dialog, for a module to publish or (`null`) to just connect. */
+  private openSetup(offer: ModuleOfferRow | null): void {
+    const status = this.status;
+    this.setupOpen = true;
+    this.setupOffer = offer;
+    // Prefilled with what is already known, so a dialog asking for one thing
+    // does not blank the other, and so somebody who is only fixing the address
+    // sees the name they already hold rather than an empty box.
+    this.setupUrl = status?.url ?? "";
+    this.setupName = status?.name ?? "";
+    this.setupError = null;
+  }
+
+  /**
+   * The fields the open dialog should ask for.
+   *
+   * The address alone when the dialog was opened from the section's Connect
+   * button: there is nothing to publish, and the name is asked for by the claim
+   * form the section draws as soon as the address exists. From a module's
+   * Publish, both, because both are what publishing needs.
+   */
+  private setupFields(): PublishBlock[] {
+    const blockers = publishBlockers(this.status);
+    return this.setupOffer === null
+      ? blockers.filter((block) => block === "address")
+      : blockers;
+  }
+
+  /**
+   * Answer the setup dialog: set the address, claim the name, publish.
+   *
+   * **The order is forced, not chosen.** `publishedConfigure` forgets a claimed
+   * name when the address changes, so a name claimed before the address would be
+   * thrown away by the address that followed it. Address, then name, then
+   * publish -- and each step runs only when the dialog was actually asking for it,
+   * so somebody who already holds a name is not made to claim a second one.
+   *
+   * A refusal anywhere leaves the dialog open with the Store's own sentence in
+   * it, because that is the form the person can fix the answer in: "that name is
+   * taken, please pick another name" is a thing to retype, not a banner on a
+   * screen that has already closed.
+   */
+  private async submitSetup(): Promise<void> {
+    const offer = this.setupOffer;
+    const fields = this.setupFields();
+    this.setupBusy = true;
+    this.setupError = null;
+    this.requestUpdate();
+    try {
+      if (fields.includes("address")) {
+        this.status = await this.requireClient().publishedConfigure(this.setupUrl.trim());
+      }
+      if (fields.includes("name")) {
+        const problem = claimProblem(this.setupName);
+        if (problem !== null) {
+          this.setupError = problem;
+          return;
+        }
+        const reply = await this.requireClient().publisherClaim(this.setupName.trim());
+        if (this.status !== null) this.status = { ...this.status, name: reply.name };
+      }
+    } catch (error) {
+      this.setupError = asPanelError(error).message;
+      return;
+    } finally {
+      this.setupBusy = false;
+    }
+    this.setupOpen = false;
+    this.setupOffer = null;
+    if (offer !== null) {
+      await this.publish(offer);
+    } else {
+      this.notice = `Publishing to ${this.status?.url ?? "the Store"}.`;
+      await this.loadBrowse();
+    }
+  }
+
   /** Rewrite one published row in whichever half of the split it is in. */
   private patchRow(id: string, change: Partial<PublishedRow>): void {
     if (this.split === null) return;
@@ -517,11 +671,6 @@ export class StoreTab extends OpenHouseElement {
       installed: apply(this.split.installed),
       not_installed: apply(this.split.not_installed),
     };
-  }
-
-  /** Whether this house may publish at all: an address, and a name to publish under. */
-  private get canPublish(): boolean {
-    return this.status !== null && this.status.url !== "" && this.status.name !== "";
   }
 
   /** Stop offering a definition. What is installed from it keeps running. */
@@ -643,7 +792,7 @@ export class StoreTab extends OpenHouseElement {
       ${this.errorBanner(this.error)}
       ${this.notice ? html`<div class="banner info">${this.notice}</div>` : null}
       <h1>Store</h1>
-      ${this.renderPublished()} ${this.renderModules()}
+      ${this.renderSetup()} ${this.renderPublished()} ${this.renderModules()}
       ${this.cached
         ? html`<div class="banner warn">
             Showing a cached index${this.generatedAt
@@ -705,12 +854,173 @@ export class StoreTab extends OpenHouseElement {
     const status = this.status;
     if (status === null) return html``;
     if (status.url === "") {
-      return html`<p class="muted">
-        No Store is configured yet. Its address is set in
-        <em>Settings &rarr; Devices &amp; Services &rarr; Open House &rarr; Configure</em>.
-      </p>`;
+      return this.renderConnect();
     }
     return html`${this.renderPublisher()} ${this.renderBrowse()}`;
+  }
+
+  /**
+   * The section before this house has a Store to talk to.
+   *
+   * One sentence and one button that opens the address form, which is the same
+   * dialog a module's Publish opens -- so "which Store?" is one form wherever a
+   * person meets the question, rather than a settings screen in one place and a
+   * dialog in another. The sentence under the button still names the Configure
+   * screen, because a house that has no modules of its own yet has no Publish
+   * button to press and should not be stuck for it.
+   */
+  private renderConnect(): TemplateResult {
+    return html`<section class="card">
+      <h2>The Store</h2>
+      <p class="help">
+        No Store is configured yet. Publishing your own modules, and installing
+        other people's, needs one: give Open House its address and it will
+        remember it.
+      </p>
+      <button
+        type="button"
+        class="primary"
+        id="store-connect"
+        @click=${() => this.openSetup(null)}
+      >
+        Connect a Store
+      </button>
+      <p class="help">
+        The same address can be set in
+        <em
+          >Settings &rarr; Devices &amp; Services &rarr; Open House &rarr;
+          Configure</em
+        >.
+      </p>
+    </section>`;
+  }
+
+  /** Whether the open dialog's questions have been answered enough to submit. */
+  private get setupAnswered(): boolean {
+    const fields = this.setupFields();
+    if (fields.includes("address") && this.setupUrl.trim() === "") return false;
+    if (fields.includes("name") && this.setupName.trim() === "") return false;
+    return true;
+  }
+
+  /**
+   * The setup dialog: ask for the Store, the name, or both, then publish.
+   *
+   * Drawn from `setupOpen` rather than from a click, so it survives every
+   * re-render a command landing in the middle of it causes -- including the one
+   * that reports a refusal, which is the render the person then has to correct.
+   * The fields are the ones `setupFields` says are missing and nothing else, so
+   * somebody who already holds a name is asked only for the address.
+   */
+  private renderSetup(): TemplateResult | typeof nothing {
+    if (!this.setupOpen) return nothing;
+    const fields = this.setupFields();
+    const publishing = this.setupOffer !== null;
+    return html`<open-house-dialog
+      .heading=${publishing
+        ? `Publish "${this.setupOffer?.title ?? ""}"`
+        : "Connect a Store"}
+      .open=${true}
+      @dialog-closed=${() => {
+        this.setupOpen = false;
+        this.setupOffer = null;
+      }}
+    >
+      <p class="help">
+        ${publishing
+          ? html`Before this can be published, Open House has to know which Store
+              to publish to and what name to publish under. Both are asked once.`
+          : html`Open House will remember this address, and use it for every
+              module you publish to the Store and install from it.`}
+      </p>
+      ${fields.includes("address")
+        ? html`<div class="field">
+            <div class="label-row">
+              <span class="label">Store address</span>
+            </div>
+            <input
+              type="text"
+              id="store-setup-url"
+              autocomplete="off"
+              placeholder="https://store.example"
+              .value=${this.setupUrl}
+              ?disabled=${this.setupBusy}
+              @input=${(event: Event) => {
+                this.setupUrl = (event.target as HTMLInputElement).value;
+              }}
+            />
+          </div>`
+        : nothing}
+      ${fields.includes("name")
+        ? this.renderNameField({
+            id: "store-setup-name",
+            value: this.setupName,
+            disabled: this.setupBusy,
+            set: (name) => {
+              this.setupName = name;
+            },
+          })
+        : nothing}
+      <div class="row">
+        <button
+          type="button"
+          class="primary"
+          id="store-setup-submit"
+          ?disabled=${this.setupBusy || !this.setupAnswered}
+          @click=${() => void this.submitSetup()}
+        >
+          ${this.setupBusy
+            ? "Working..."
+            : publishing
+              ? "Publish"
+              : "Connect"}
+        </button>
+        <button
+          type="button"
+          id="store-setup-cancel"
+          @click=${() => {
+            this.setupOpen = false;
+            this.setupOffer = null;
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+      ${this.setupError
+        ? html`<p class="help" role="alert">${this.setupError}</p>`
+        : nothing}
+    </open-house-dialog>`;
+  }
+
+  /**
+   * The publisher-name field, with the input's id and state given by the caller.
+   *
+   * One field, two places: the section's own claim form and the setup dialog both
+   * ask for a name, and two live inputs sharing one id is an invalid document
+   * that a `querySelector` answers unpredictably. So the id travels as an
+   * argument and the markup is written once.
+   */
+  private renderNameField(field: {
+    id: string;
+    value: string;
+    disabled: boolean;
+    set: (name: string) => void;
+  }): TemplateResult {
+    return html`<div class="field">
+      <div class="label-row">
+        <span class="label">Publisher name</span>
+      </div>
+      <input
+        type="text"
+        id=${field.id}
+        autocomplete="off"
+        placeholder="marqbarq"
+        .value=${field.value}
+        ?disabled=${field.disabled}
+        @input=${(event: Event) =>
+          field.set((event.target as HTMLInputElement).value)}
+      />
+    </div>`;
   }
 
   /**
@@ -737,22 +1047,14 @@ export class StoreTab extends OpenHouseElement {
         and it is what the modules you publish show as their author. If somebody
         has already claimed the name you want, the Store will say so.
       </p>
-      <div class="field">
-        <div class="label-row">
-          <span class="label">Publisher name</span>
-        </div>
-        <input
-          type="text"
-          id="store-claim-name"
-          autocomplete="off"
-          placeholder="marqbarq"
-          .value=${this.claimName}
-          ?disabled=${this.claiming}
-          @input=${(event: Event) => {
-            this.claimName = (event.target as HTMLInputElement).value;
-          }}
-        />
-      </div>
+      ${this.renderNameField({
+        id: "store-claim-name",
+        value: this.claimName,
+        disabled: this.claiming,
+        set: (name) => {
+          this.claimName = name;
+        },
+      })}
       <button
         type="button"
         class="primary"
@@ -1033,10 +1335,6 @@ export class StoreTab extends OpenHouseElement {
   private renderModule(offer: ModuleOfferRow): TemplateResult {
     const busy = this.busy === offer.slug;
     const armed = this.removing === offer.slug;
-    // The publish button is drawn only when there is somewhere to publish to
-    // and a name to publish under. With no Store configured it would be a button
-    // whose only outcome is an error, which is worse than no button at all.
-    const publishable = this.canPublish;
     // Addressed by slug rather than by position: a store row is one module, and
     // a walk that clicked "the second Remove button" would be a walk that broke
     // the day a module was added above it.
@@ -1089,17 +1387,15 @@ export class StoreTab extends OpenHouseElement {
         >
           Download the file
         </button>
-        ${publishable
-          ? html`<button
-              type="button"
-              class="primary"
-              id="store-publish-${offer.slug}"
-              ?disabled=${busy}
-              @click=${() => void this.publish(offer)}
-            >
-              ${busy ? "Publishing..." : "Publish"}
-            </button>`
-          : nothing}
+        <button
+          type="button"
+          class="primary"
+          id="store-publish-${offer.slug}"
+          ?disabled=${busy}
+          @click=${() => void this.publish(offer)}
+        >
+          ${busy ? "Publishing..." : "Publish"}
+        </button>
         ${armed
           ? html`<button
                 type="button"

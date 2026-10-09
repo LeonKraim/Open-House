@@ -58,6 +58,7 @@ from ha_adapter.setup_flow import (
     plan_setup,
 )
 
+from . import store
 from .const import (
     DATA_AREA_ID,
     DATA_BINDINGS,
@@ -68,7 +69,6 @@ from .const import (
 )
 from .host import entity_ids_in_area
 from .node_red import OPTION_EDITOR_URL, OPTION_TOKEN, OPTION_URL
-from .store import OPTION_PUBLISHER as STORE_OPTION_PUBLISHER
 from .store import OPTION_URL as STORE_OPTION_URL
 
 __all__ = ["OpenHouseConfigFlow", "RoomSubentryFlow"]
@@ -382,19 +382,24 @@ class OpenHouseOptionsFlow(OptionsFlow):
             # Laid over the entry's options rather than swapped for them: the
             # publisher identity a claim stored (`store.OPTION_PUBLISHER`) is not
             # a field on this form, and an update built from the form alone would
-            # drop a name this house has already claimed.
-            merged = {**self.config_entry.options, **user_input}
-            # *Unless the Store itself was changed*, in which case that name is
-            # the previous Store's to give and not this one's. Carried across, it
-            # authenticates as a stranger -- or, on a Store where somebody else
-            # holds the same name, as that person, which is the one thing the
-            # uniqueness of a name exists to prevent. So a changed address forgets
-            # the claim and the tab asks for a name again, which is the screen
-            # that can settle who this house is on the new Store.
-            was = str(self.config_entry.options.get(STORE_OPTION_URL) or "").strip()
-            now = str(user_input.get(STORE_OPTION_URL) or "").strip()
-            if was != now:
-                merged.pop(STORE_OPTION_PUBLISHER, None)
+            # drop a name this house has already claimed. *Unless the Store itself
+            # was changed*, in which case dropping it is the point -- and that
+            # rule is `store.with_url`'s, because the panel's own Publish button
+            # writes this same option and the two must not disagree about it.
+            # `with_url` is given the options *as they were*, so it can see
+            # whether the address actually changed; the form's other fields are
+            # laid over what it answers. The address is not among them, because
+            # `with_url` has already set it.
+            merged = store.with_url(
+                self.config_entry.options, str(user_input.get(STORE_OPTION_URL) or "")
+            )
+            merged.update(
+                {
+                    key: value
+                    for key, value in user_input.items()
+                    if key != STORE_OPTION_URL
+                }
+            )
             return self.async_create_entry(data=merged)
         options = self.config_entry.options
         return self.async_show_form(
