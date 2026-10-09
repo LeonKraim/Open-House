@@ -1689,7 +1689,9 @@ def _helper_collection(hass: HomeAssistant, domain: str) -> Any | None:
     registered = commands.get(f"{domain}/list")
     if not isinstance(registered, tuple) or not registered:
         return None
-    collection = getattr(getattr(registered[0], "__self__", None), "storage_collection", None)
+    collection = getattr(
+        getattr(registered[0], "__self__", None), "storage_collection", None
+    )
     return collection
 
 
@@ -1753,7 +1755,9 @@ async def _async_drop_helper(hass: HomeAssistant, entity_id: str) -> None:
     try:
         await collection.async_delete_item(entry.unique_id)
     except Exception as failure:
-        _LOGGER.warning("a helper could not be removed from Home Assistant: %s", failure)
+        _LOGGER.warning(
+            "a helper could not be removed from Home Assistant: %s", failure
+        )
 
 
 async def _async_withdraw_automation(hass: HomeAssistant, config_id: str) -> None:

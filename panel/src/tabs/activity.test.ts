@@ -78,6 +78,28 @@ test("an outcome filter keeps only that outcome", () => {
   );
 });
 
+test("the Actions default keeps everything the house did, and only that", () => {
+  // The filter the tab opens on. It is not a panel outcome -- it is the
+  // negation of a skip -- so it is asked as one, which is what makes a ninth
+  // outcome added to the wire appear here rather than vanish.
+  const entries = [
+    entry_("kitchen", "skipped"),
+    entry_("kitchen", "applied"),
+    entry_(null, "blocked"),
+    entry_(null, "overridden"),
+    entry_("bedroom", "error"),
+  ];
+  assert.deepEqual(
+    visibleEntries(entries, "", "actions").map((one) => one.outcome),
+    ["applied", "blocked", "overridden", "error"],
+  );
+  // And it narrows with a room like any other outcome filter.
+  assert.deepEqual(
+    visibleEntries(entries, "kitchen", "actions").map((one) => one.outcome),
+    ["applied"],
+  );
+});
+
 test("the two filters narrow together, not one over the other", () => {
   // The case both being present is for: a room and an outcome, and the row that
   // answers both is the only one left.

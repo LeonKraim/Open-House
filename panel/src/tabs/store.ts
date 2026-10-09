@@ -1,26 +1,19 @@
 /**
- * The Store tab: browse, install, update.
+ * The Store tab: publish this house's modules, and browse the published Store.
  *
- * Phase 5 only has to show the tab and talk to the index; the registry itself
- * is Phase 7, so this screen is written against the *answer* a registry would
- * give (`StoreEntry`) and a cached index it can render offline. Two of the
- * Phase 7 rules are already visible in what it refuses to hide:
+ * Two things are drawn here and the screen keeps them apart. A module this house
+ * made is drawn from the house's own module store; a module somebody else
+ * published is drawn from the *published* Store -- a server this house has to
+ * name. The published section is drawn only once an address exists, because
+ * every command under it refuses politely with no address.
  *
- *   * `update_requires_review` gates an update behind an explicit confirmation,
- *     because a version that widens a pack's permissions is a version the user
- *     has not consented to yet.
- *   * `available: false` marks a stale cached entry, so an offline install is a
- *     choice rather than a surprise.
+ * ## What was here, and is gone
  *
- * ## The third thing the tab draws, and why it is separate
- *
- * Below the pack index and the modules this house made there is now the
- * *published* Store -- the one other people publish to and this house installs
- * from. It is a different thing from the two above it and the screen keeps it
- * apart: a pack is a catalog's, a module is this house's own, and a published
- * module is somebody else's, reached over a server this house has to name. The
- * whole section is drawn only once an address exists, because every command
- * under it refuses politely with no address.
+ * The tab used to open on a *bundled* pack index: every pack this repository
+ * shipped, filtered by tier, installed by name. Open House no longer ships a
+ * corpus -- a house is built from the blueprints a person imports -- so there is
+ * nothing to browse and the shelf is retired. A house that wants something new
+ * imports it here or installs it from the published Store below.
  *
  * ## The Publish button is always there, and it asks for what it needs
  *
@@ -60,16 +53,14 @@ const TIER_CHIP: Record<StoreEntry["tier"], string> = {
 };
 
 /**
- * The tier as a menu choice, and as a chip: one value, one word.
+ * The tier as a chip: one value, one word.
  *
  * The wire's tier is a lower-case key (`official`, `local`); a person reads a
- * capitalised word in both the filter and the chip beside the pack, so the
- * thing they filtered for is the thing they then see. "All tiers" rather than
- * "all" for the same reason Activity's "Any outcome" is spelled out: a bare
- * value in a menu reads as a setting that failed to load.
+ * capitalised word beside the module, so the label says what the key means. This
+ * was once the bundled index's filter as well, and the "all" row it carried is
+ * gone with the shelf.
  */
-const TIERS: readonly { value: StoreEntry["tier"] | "all"; label: string }[] = [
-  { value: "all", label: "All tiers" },
+const TIERS: readonly { value: StoreEntry["tier"]; label: string }[] = [
   { value: "official", label: "Official" },
   { value: "verified", label: "Verified" },
   { value: "community", label: "Community" },
@@ -87,6 +78,16 @@ const TIER_LABELS = new Map(TIERS.map((tier) => [tier.value, tier.label]));
  */
 const STAR = "★";
 const OPEN_STAR = "☆";
+
+/**
+ * How much prose a published row's blurb holds.
+ *
+ * The same 400 that `store_api.SUMMARY_LIMIT` holds the field to, and the server
+ * is what enforces it -- this is here only so the sentence under the box can say
+ * it *before* anything is sent, which is the difference between a person trimming
+ * their own words and the server doing it for them.
+ */
+export const SUMMARY_LIMIT = 400;
 
 /** The two halves of the published list, as `browse` answers them. */
 export interface PublishedSplit {
@@ -213,53 +214,45 @@ export function installRefusal(error: unknown): {
 }
 
 /**
- * The two things a publish needs that a house may not have yet.
+ * Something the setup dialog can ask for.
  *
- * `"address"` is a Store to publish to and `"name"` is the name it publishes
- * under, and they are returned in that order because the order is not a
- * preference: setting an address that *replaces* an earlier one forgets the name
- * claimed against it, so a name claimed first would be thrown away by the address
- * that followed.
+ * `"address"` is a Store to publish to and `"name"` is the name this house
+ * publishes under. They are no longer asked together: the address ships with the
+ * build, so the only screen that still asks for one is the Store tab's own
+ * Connect, which is for pointing a house at a Store of its own.
  */
 export type PublishBlock = "address" | "name";
 
 /**
- * What a publish still needs, in the order it must be answered. Empty means go.
+ * What a publish still asks for, in the order it must be answered. Empty means go.
  *
- * The whole decision behind the setup dialog, kept out of the element so it can
- * be pinned without a browser -- and kept as a *list* rather than the two booleans
- * a caller would otherwise test separately, because the order is the part that is
- * easy to get wrong and the list is what carries it.
+ * **The address is deliberately not on this list.** It is the address the build
+ * ships with (`store.DEFAULT_URL`), which is answered before any screen draws --
+ * so asking for it here made a person type out a question the repository had
+ * already answered, and made the first thing a publish said be about the Store
+ * rather than about their module. A house that wants a Store of its own sets the
+ * option instead, which always wins.
  *
  * `null` is a status that has not been read, which is not the same as a missing
- * address: nothing is known to be missing, so nothing is asked for, and the
- * publish itself answers with the server's own sentence if it turns out to be
- * right that something was.
+ * name: nothing is known to be missing, so nothing is asked for, and the publish
+ * itself answers with the server's own sentence if it turns out to be right that
+ * something was.
  */
 export function publishBlockers(status: StoreStatus | null): PublishBlock[] {
   if (status === null) return [];
-  const missing: PublishBlock[] = [];
-  if (status.url === "") missing.push("address");
-  if (status.name === "") missing.push("name");
-  return missing;
+  return status.name === "" ? ["name"] : [];
 }
 
 export class StoreTab extends OpenHouseElement {
-  // `confirming` is a click that only arms a button, `tierFilter` and the
-  // per-module pickers are choices; all are invisible to Lit as plain fields
+  // The per-module pickers are choices and are invisible to Lit as plain fields
   // (see base.ts). The published Store's state is the same kind of thing -- a
   // chosen filter side, a search, an open comment tray -- and every one of them
   // is a click, so every one of them is declared here.
   static override properties = {
     ...OpenHouseElement.properties,
-    entries: { state: true },
-    generatedAt: { state: true },
-    cached: { state: true },
     isLoading: { state: true },
     error: { state: true },
     busy: { state: true },
-    confirming: { state: true },
-    tierFilter: { state: true },
     offers: { state: true },
     removing: { state: true },
     moduleReplace: { state: true },
@@ -290,14 +283,9 @@ export class StoreTab extends OpenHouseElement {
     commentDraft: { state: true },
   };
 
-  private entries: StoreEntry[] = [];
-  private generatedAt: string | null = null;
-  private cached = false;
   private isLoading = true;
   private error: ReturnType<OpenHouseElement["toError"]> | null = null;
   private busy: string | null = null;
-  private confirming: string | null = null;
-  private tierFilter: StoreEntry["tier"] | "all" = "all";
 
   /** The modules this house made: what an import saved rather than installed. */
   private offers: ModuleOfferRow[] = [];
@@ -344,6 +332,12 @@ export class StoreTab extends OpenHouseElement {
   /** What has been typed into the setup dialog, before it is sent. */
   private setupUrl = "";
   private setupName = "";
+  /**
+   * The blurb the published row will carry, prefilled from the module's own
+   * description and editable at every publish -- which is the whole reason the
+   * dialog opens even when there is nothing to claim.
+   */
+  private setupSummary = "";
   /** The refusal the Store gave during setup, shown verbatim in the dialog. */
   private setupError: string | null = null;
   private setupBusy = false;
@@ -375,13 +369,12 @@ export class StoreTab extends OpenHouseElement {
   }
 
   /**
-   * Read the tab: the pack index, this house's modules, and the published
-   * Store.
+   * Read the tab: this house's modules, and the published Store.
    *
-   * The published status is *started* before the other two are awaited, so the
-   * three reads overlap rather than queue: a house with no Store at all should
-   * not wait for the index to answer before being told so, and the status read
-   * is the one that decides whether anything else on the section is drawn.
+   * The published status is *started* before the modules are awaited, so the two
+   * reads overlap rather than queue: a house with no Store at all should not wait
+   * for its own modules to answer before being told so, and the status read is
+   * the one that decides whether anything more on the section is drawn.
    */
   private async load(): Promise<void> {
     this.isLoading = true;
@@ -397,17 +390,9 @@ export class StoreTab extends OpenHouseElement {
         },
       );
     try {
-      const index = await this.requireClient().storeIndex();
-      this.entries = index.entries;
-      this.generatedAt = index.generated_at;
-      this.cached = index.cached;
-    } catch (error) {
-      this.error = this.toError(error);
-    }
-    try {
-      // Asked separately, and its failure kept separate: the modules half is an
-      // addition to a screen whose subject is the pack index, and a house that
-      // cannot answer for its own modules still has an index worth showing.
+      // Asked separately, and its failure kept separate: the modules half is
+      // this house's own, and a house that cannot answer for its modules can
+      // still be shown the published Store below.
       const store = await this.requireClient().modulesStore();
       this.offers = store.store;
     } catch (error) {
@@ -557,22 +542,34 @@ export class StoreTab extends OpenHouseElement {
     }
   }
 
-  /** Publish one of this house's own modules to the Store, by its name. */
-  private async publish(offer: ModuleOfferRow): Promise<void> {
-    // A publish needs a Store and a name, and neither may be here yet. Rather
-    // than a button that could only fail, the same press opens the dialog that
-    // asks for whichever is missing; answering it comes back through here, by
-    // which time the pre-flight passes. So the button is pressed twice at most,
-    // and the person never has to go and find a settings screen first.
-    if (publishBlockers(this.status).length > 0) {
-      this.openSetup(offer);
+  /**
+   * Publish one of this house's own modules to the Store, by its name.
+   *
+   * The press opens the dialog rather than sending straight away, because the
+   * blurb the Store row carries is a thing to set *at* publish time: a default
+   * nobody was shown is a default nobody chose. The dialog also asks for the
+   * publisher name, but only until this house has claimed one.
+   */
+  private publish(offer: ModuleOfferRow): void {
+    if (this.status !== null && this.status.url === "") {
+      // Nothing to publish to. This is a build that ships no address of its own,
+      // and the section above is already asking for one -- so the press says why
+      // it did nothing rather than opening a dialog that could only refuse.
+      this.error = this.toError(
+        new Error("Open House has no Store address to publish to yet."),
+      );
       return;
     }
+    this.openSetup(offer);
+  }
+
+  /** Send a publish, once the dialog has answered what it needed to. */
+  private async send(offer: ModuleOfferRow, summary: string): Promise<void> {
     this.busy = offer.slug;
     this.error = null;
     this.notice = null;
     try {
-      const reply = await this.requireClient().publishedPublish(offer.slug);
+      const reply = await this.requireClient().publishedPublish(offer.slug, summary);
       this.notice =
         `Published ${reply.published.title} to the Store as ` +
         `${reply.published.publisher}. It is on the published list below.`;
@@ -591,10 +588,11 @@ export class StoreTab extends OpenHouseElement {
     this.setupOpen = true;
     this.setupOffer = offer;
     // Prefilled with what is already known, so a dialog asking for one thing
-    // does not blank the other, and so somebody who is only fixing the address
-    // sees the name they already hold rather than an empty box.
+    // does not blank the other, and so a person who is only changing the blurb
+    // sees the description their module already carries rather than an empty box.
     this.setupUrl = status?.url ?? "";
     this.setupName = status?.name ?? "";
+    this.setupSummary = offer?.description ?? "";
     this.setupError = null;
   }
 
@@ -602,15 +600,12 @@ export class StoreTab extends OpenHouseElement {
    * The fields the open dialog should ask for.
    *
    * The address alone when the dialog was opened from the section's Connect
-   * button: there is nothing to publish, and the name is asked for by the claim
-   * form the section draws as soon as the address exists. From a module's
-   * Publish, both, because both are what publishing needs.
+   * button: that is a house pointing itself at a Store of its own, which is the
+   * one act that changes the address. From a module's Publish, only the name --
+   * and only until this house has claimed one.
    */
   private setupFields(): PublishBlock[] {
-    const blockers = publishBlockers(this.status);
-    return this.setupOffer === null
-      ? blockers.filter((block) => block === "address")
-      : blockers;
+    return this.setupOffer === null ? ["address"] : publishBlockers(this.status);
   }
 
   /**
@@ -630,6 +625,7 @@ export class StoreTab extends OpenHouseElement {
   private async submitSetup(): Promise<void> {
     const offer = this.setupOffer;
     const fields = this.setupFields();
+    const summary = this.setupSummary.trim();
     this.setupBusy = true;
     this.setupError = null;
     this.requestUpdate();
@@ -655,11 +651,35 @@ export class StoreTab extends OpenHouseElement {
     this.setupOpen = false;
     this.setupOffer = null;
     if (offer !== null) {
-      await this.publish(offer);
+      await this.send(offer, summary);
     } else {
       this.notice = `Publishing to ${this.status?.url ?? "the Store"}.`;
       await this.loadBrowse();
     }
+  }
+
+  /**
+   * Whether this house has already put this module on the Store.
+   *
+   * Read from the rows the Store answered with rather than remembered from the
+   * last press, because a press is not the only way to arrive here: a reload, a
+   * second tab, and a publish that landed while this one was open all have to
+   * agree, and a flag set by a click would agree with none of them. `mine` is the
+   * server's own answer -- it expands the publisher and compares it with the id
+   * this install holds -- so a module somebody else published under the same name
+   * is still somebody else's.
+   *
+   * A Store that could not be read has no rows, and so reports nothing as
+   * published. That leaves the button where it was, which is the failure worth
+   * having: a button that is wrong about the Store is worse than one that is
+   * merely unhelpful, because the first offers something it cannot do.
+   */
+  private publishedHere(slug: string): boolean {
+    const rows = [
+      ...(this.split?.installed ?? []),
+      ...(this.split?.not_installed ?? []),
+    ];
+    return rows.some((row) => row.slug === slug && row.mine);
   }
 
   /** Rewrite one published row in whichever half of the split it is in. */
@@ -766,66 +786,20 @@ export class StoreTab extends OpenHouseElement {
     }
   }
 
-  private async install(entry: StoreEntry): Promise<void> {
-    this.busy = entry.pack;
-    this.error = null;
-    try {
-      await this.requireClient().storeInstall(entry.pack, entry.tier);
-      this.confirming = null;
-      await this.load();
-    } catch (error) {
-      this.error = this.toError(error);
-    } finally {
-      this.busy = null;
-      this.requestUpdate();
-    }
-  }
-
   protected override render(): TemplateResult {
-    if (this.isLoading && this.entries.length === 0 && this.offers.length === 0) {
-      return this.loading("Reading the pack index...");
+    if (
+      this.isLoading &&
+      this.offers.length === 0 &&
+      this.split === null &&
+      this.status === null
+    ) {
+      return this.loading("Reading the Store...");
     }
-    const visible = this.entries.filter(
-      (entry) => this.tierFilter === "all" || entry.tier === this.tierFilter,
-    );
     return html`
       ${this.errorBanner(this.error)}
       ${this.notice ? html`<div class="banner info">${this.notice}</div>` : null}
       <h1>Store</h1>
       ${this.renderSetup()} ${this.renderPublished()} ${this.renderModules()}
-      ${this.cached
-        ? html`<div class="banner warn">
-            Showing a cached index${this.generatedAt
-              ? html` from ${this.generatedAt}`
-              : null}. It may be out of date.
-          </div>`
-        : null}
-      <div class="row spread wrap" style="margin-bottom:12px">
-        <span class="label" id="store-tier-label">Tier</span>
-        <select
-          aria-labelledby="store-tier-label"
-          @change=${(event: Event) => {
-            this.tierFilter = (event.target as HTMLSelectElement)
-              .value as StoreEntry["tier"] | "all";
-          }}
-        >
-          ${TIERS.map(
-            (tier) => html`<option value=${tier.value} ?selected=${tier.value === this.tierFilter}>
-              ${tier.label}
-            </option>`,
-          )}
-        </select>
-      </div>
-      ${visible.length === 0
-        ? this.emptyState(
-            "Nothing here",
-            this.tierFilter === "all"
-              ? "The pack index is empty. The community registry arrives in a later phase."
-              : `No ${this.tierFilter} packs are listed.`,
-          )
-        : html`<div class="grid">
-            ${visible.map((entry) => this.renderEntry(entry))}
-          </div>`}
     `;
   }
 
@@ -841,7 +815,7 @@ export class StoreTab extends OpenHouseElement {
    * index or the house's own modules down with it -- the same rule the modules
    * half already follows.
    */
-  private renderPublished(): TemplateResult {
+  private renderPublished(): TemplateResult | typeof nothing {
     if (this.statusError) {
       return html`<section class="card">
         <h2>The Store</h2>
@@ -862,14 +836,16 @@ export class StoreTab extends OpenHouseElement {
   /**
    * The section before this house has a Store to talk to.
    *
-   * One sentence and one button that opens the address form, which is the same
-   * dialog a module's Publish opens -- so "which Store?" is one form wherever a
-   * person meets the question, rather than a settings screen in one place and a
-   * dialog in another. The sentence under the button still names the Configure
-   * screen, because a house that has no modules of its own yet has no Publish
-   * button to press and should not be stuck for it.
+   * One sentence and one button that opens the address form, which is the one
+   * place in the panel an address is still asked for -- a house pointing itself
+   * at a Store of its own, which is the only thing that changes it. The sentence
+   * under the button names the Configure screen too, because a house with no
+   * modules of its own has nothing on this tab to start from.
    */
-  private renderConnect(): TemplateResult {
+  private renderConnect(): TemplateResult | typeof nothing {
+    // The dialog it opens asks for the same address, and a section asking for a
+    // thing beside a dialog asking for it reads as the dialog having failed.
+    if (this.setupOpen) return nothing;
     return html`<section class="card">
       <h2>The Store</h2>
       <p class="help">
@@ -928,11 +904,12 @@ export class StoreTab extends OpenHouseElement {
     >
       <p class="help">
         ${publishing
-          ? html`Before this can be published, Open House has to know which Store
-              to publish to and what name to publish under. Both are asked once.`
+          ? html`The description below is what the Store shows beside this
+              module. It is asked every time, so the blurb can be changed.`
           : html`Open House will remember this address, and use it for every
               module you publish to the Store and install from it.`}
       </p>
+      ${publishing ? this.renderSummaryField() : nothing}
       ${fields.includes("address")
         ? html`<div class="field">
             <div class="label-row">
@@ -993,6 +970,39 @@ export class StoreTab extends OpenHouseElement {
   }
 
   /**
+   * The blurb the published row will carry.
+   *
+   * Prefilled from the module's own description, and editable, because the two
+   * are written for different readers: a module's description is a note to the
+   * house that owns it, and the row's summary is what a stranger reads before
+   * deciding to install somebody's work. Editing this changes the row alone --
+   * the description travels whole inside the published document, which is what
+   * anybody installing it reads afterwards.
+   */
+  private renderSummaryField(): TemplateResult {
+    return html`<div class="field">
+      <div class="label-row">
+        <span class="label">Description</span>
+      </div>
+      <textarea
+        id="store-setup-summary"
+        rows="3"
+        aria-label="Description for the Store"
+        .value=${this.setupSummary}
+        ?disabled=${this.setupBusy}
+        @input=${(event: Event) => {
+          this.setupSummary = (event.target as HTMLTextAreaElement).value;
+        }}
+      ></textarea>
+      <p class="help">
+        The Store shows this beside the module. Past ${SUMMARY_LIMIT} characters
+        it is trimmed on the row; the description the module carries travels
+        whole with the file.
+      </p>
+    </div>`;
+  }
+
+  /**
    * The publisher-name field, with the input's id and state given by the caller.
    *
    * One field, two places: the section's own claim form and the setup dialog both
@@ -1032,7 +1042,12 @@ export class StoreTab extends OpenHouseElement {
    * server refuses. The sentence under it says the thing a person cannot
    * otherwise see: this is what their modules carry as their author.
    */
-  private renderPublisher(): TemplateResult {
+  private renderPublisher(): TemplateResult | typeof nothing {
+    // The setup dialog is asking the same question while it is open -- what name
+    // does this house publish under -- and two live boxes for one question is
+    // the question twice: the box behind the dialog is the one that gets read as
+    // "did that not work?". So the card stands down until the dialog is gone.
+    if (this.setupOpen && this.setupFields().includes("name")) return nothing;
     const status = this.status;
     if (status !== null && status.name !== "") {
       return html`<p class="muted small">
@@ -1387,15 +1402,19 @@ export class StoreTab extends OpenHouseElement {
         >
           Download the file
         </button>
-        <button
-          type="button"
-          class="primary"
-          id="store-publish-${offer.slug}"
-          ?disabled=${busy}
-          @click=${() => void this.publish(offer)}
-        >
-          ${busy ? "Publishing..." : "Publish"}
-        </button>
+        ${this.publishedHere(offer.slug)
+          ? html`<button type="button" id="store-published-${offer.slug}" disabled>
+              Published
+            </button>`
+          : html`<button
+              type="button"
+              class="primary"
+              id="store-publish-${offer.slug}"
+              ?disabled=${busy}
+              @click=${() => void this.publish(offer)}
+            >
+              ${busy ? "Publishing..." : "Publish"}
+            </button>`}
         ${armed
           ? html`<button
                 type="button"
@@ -1464,73 +1483,6 @@ export class StoreTab extends OpenHouseElement {
     </div>`;
   }
 
-  private renderEntry(entry: StoreEntry): TemplateResult {
-    const review = this.confirming === entry.pack;
-    return html`<div class="card">
-      <div class="row spread wrap">
-        <div class="grow">
-          <h3>${entry.name || entry.pack}</h3>
-          <p
-            class="muted small"
-            title=${entry.sha256 ? `SHA-256 ${entry.sha256}` : ""}
-          >
-            ${entry.author} &middot; v${entry.version} &middot; ${entry.license}
-          </p>
-        </div>
-        <span class="chip ${TIER_CHIP[entry.tier]}"
-          >${TIER_LABELS.get(entry.tier) ?? entry.tier}</span
-        >
-      </div>
-      <p>${entry.description}</p>
-      <div class="row wrap">
-        ${entry.abandoned
-          ? html`<span class="chip warn">Abandoned</span>`
-          : nothing}
-        ${entry.installed_version
-          ? html`<span class="chip">Installed v${entry.installed_version}</span>`
-          : nothing}
-        ${entry.update_available
-          ? html`<span class="chip warn">Update available</span>`
-          : nothing}
-        ${!entry.available ? html`<span class="chip warn">Not in index</span>` : nothing}
-      </div>
-      ${entry.update_requires_review && !review
-        ? html`<div class="banner warn">
-            This update widens the pack's permissions. Review before installing.
-          </div>`
-        : null}
-      <div class="row" style="margin-top:8px">
-        ${review
-          ? html`<button
-              type="button"
-              class="danger"
-              ?disabled=${this.busy === entry.pack}
-              @click=${() => void this.install(entry)}
-            >
-              ${this.busy === entry.pack ? "Installing..." : "Yes, install this update"}
-            </button>
-            <button type="button" @click=${() => (this.confirming = null)}>
-              Cancel
-            </button>`
-          : html`<button
-              type="button"
-              class="primary"
-              ?disabled=${!this.admin || !entry.available}
-              title=${entry.available ? "" : "This pack is not in the index right now."}
-              @click=${() => {
-                if (entry.update_requires_review) this.confirming = entry.pack;
-                else void this.install(entry);
-              }}
-            >
-              ${entry.installed_version
-                ? entry.update_available
-                  ? "Update"
-                  : "Reinstall"
-                : "Install"}
-            </button>`}
-      </div>
-    </div>`;
-  }
 }
 
 if (!customElements.get("open-house-tab-store")) {

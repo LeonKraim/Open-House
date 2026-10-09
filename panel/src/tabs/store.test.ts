@@ -139,33 +139,30 @@ function status(over: Partial<StoreStatus> = {}): StoreStatus {
   return { url: "https://store.example", name: "sam", ...over };
 }
 
-test("a house with a Store and a name has nothing to ask for", () => {
-  // The button publishes straight away here, which is the case that must not
-  // regress into opening a dialog: a person who is set up should never see it.
+test("a house that has a Store and a name has nothing left to ask for", () => {
+  // Not the same as "the dialog does not open": it opens on every publish,
+  // because the description is a thing to set each time. What is empty here is
+  // the set of *facts* it has to collect before it can send anything.
   assert.deepEqual(publishBlockers(status()), []);
 });
 
-test("the address is asked for before the name", () => {
-  // **The order is the substance of this function.** Setting an address that
-  // replaces an earlier one forgets the name claimed against it, so a dialog
-  // that asked for the name first would be asking for something the very next
-  // answer threw away. This is the assertion a reordering would break.
-  assert.deepEqual(publishBlockers(status({ url: "", name: "" })), [
-    "address",
-    "name",
-  ]);
-});
-
-test("a name on its own is asked for on its own", () => {
+test("the name is asked for until this house has claimed one", () => {
   assert.deepEqual(publishBlockers(status({ name: "" })), ["name"]);
 });
 
-test("an address on its own is asked for on its own", () => {
-  assert.deepEqual(publishBlockers(status({ url: "" })), ["address"]);
+test("the address is never something a publish asks for", () => {
+  // The address is answered before any screen draws: it is the one this build
+  // ships with, so a publish has one whether or not anybody typed it. Asking
+  // here made a person retype a question the repository had already answered,
+  // and put the Store in front of the module they pressed Publish on. A house
+  // wanting a Store of its own sets the option, which is the Connect form and
+  // not this.
+  assert.deepEqual(publishBlockers(status({ url: "", name: "" })), ["name"]);
+  assert.deepEqual(publishBlockers(status({ url: "" })), []);
 });
 
-test("a status that has not been read is not a missing address", () => {
-  // `null` is "no answer yet", not "nothing configured": asking for an address
+test("a status that has not been read is not a missing name", () => {
+  // `null` is "no answer yet", not "nothing configured": asking for a name
   // because a read had not landed would be asking for something that may well
   // already be set. Nothing is known to be missing, so nothing is asked for and
   // the publish itself answers if it turns out something was.

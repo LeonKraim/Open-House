@@ -1,4 +1,4 @@
-// Scratch: the Store tab, walked from an install that has never seen a Store.
+// Scratch: the Store tab, walked from an install that has never claimed a name.
 //
 // The server half of the published Store is walked by `_published.mjs` over the
 // websocket; what that cannot say is whether a person *sees* any of it. Unit
@@ -9,19 +9,21 @@
 //
 // This walk is about the **Publish button**, which is drawn on every module this
 // house made and asks for whatever publishing still needs rather than being
-// hidden until a person has found the settings screen. So it starts by putting
-// the house back to the state a fresh install is in -- no address, no name --
-// and drives the whole setup with the mouse: a press on Publish, the dialog, the
-// address, a refused name, the corrected one, and the module on the Store.
+// hidden until a person has found the settings screen. What it asks for is the
+// publisher name -- once, ever -- and the description the Store row will carry,
+// which is prefilled from the module and asked every time so it can be changed.
+// **The Store address is not asked for at all**: it is the one this build ships
+// with (`store.DEFAULT_URL`), so a fresh install already has a Store and the
+// only thing missing is a name.
 //
 // Two setup facts, both about the Store the walk publishes to:
 //
-//   * The house talks to it from *inside the Home Assistant container*, so the
-//     address it is given is `STORE_URL` -- `http://host.docker.internal:8090`
+//   * The house talks to it from *inside* the Home Assistant container*, so the
+//     address it uses is the container's name for it -- `DEFAULT_URL` in
+//     `custom_components/open_house/store.py`, `http://host.docker.internal:8090`
 //     for a Store running in `store/` beside the stack. The walk reaches the
-//     same Store from the host at `STORE_ADMIN_URL`, which is where the two
-//     names it claims are cleared from first so that the walk reads the same
-//     twice.
+//     same Store from the host at `STORE_ADMIN_URL`, which is where the name it
+//     claims is cleared from first so that the walk reads the same twice.
 //   * That clearing reads `store/.env`, the admin of the Store -- the account
 //     that imports the schema. Publishers make their own accounts, and those are
 //     what the walk claims through the panel.
@@ -36,13 +38,15 @@ const TAB = '#tab-store'
 const SCREEN = 'open-house-tab-store'
 /** Any tab that is not Store, for leaving and coming back. */
 const AWAY = '#tab-house'
-/** The address the house is given: the Store, as the container reaches it. */
-const STORE = process.env.STORE_URL ?? 'http://host.docker.internal:8090'
+/** The address this build ships pointed at, as the container reaches it. */
+const SHIPPED = process.env.STORE_URL ?? 'http://host.docker.internal:8090'
 /** The same Store, as this walk reaches it. */
 const STORE_ADMIN_URL = process.env.STORE_ADMIN_URL ?? 'http://127.0.0.1:8090'
 /** The name this walk claims for the house, and one somebody else holds. */
 const PUBLISHER = 'walkhouse'
 const TAKEN = 'marqbarq'
+/** What the walk writes into the description box, to prove it travels. */
+const BLURB = 'Walked end to end by the panel smoke test.'
 
 const failures = []
 let checked = 0
@@ -124,7 +128,7 @@ async function clearPublisher(token) {
 }
 
 /**
- * Set -- or clear -- this house's Store address, over the panel's own client.
+ * Set this house's Store address, over the panel's own client.
  *
  * Through the client and not `hass.callWS`, because writing the options reloads
  * the entry (`__init__._async_reload_entry`) and a command that lands during
@@ -139,34 +143,52 @@ const reset = (page, url) =>
     url,
   )
 
+/**
+ * Put the house back to the state a fresh install is in: a shipped Store, no
+ * claimed name.
+ *
+ * Two writes, because a write only forgets the name when the address it writes
+ * *differs* from the one the house is holding (`store.with_url`). The first
+ * moves the house off whatever it was on, the second puts it back to the address
+ * the build ships with -- so this reads the same from any starting state, which
+ * is what a walk that runs twice needs.
+ */
+async function fresh(page) {
+  await reset(page, 'http://127.0.0.1:8090')
+  return reset(page, '')
+}
+
 const { browser, page, events } = await openPanel()
 try {
   const token = await authToken()
   const cleared = await clearPublisher(token)
   console.log(`(cleared ${cleared} of the walk's own records from the Store)`)
 
-  const start = await reset(page, '')
+  const start = await fresh(page)
   check(
-    'the house starts with no Store and no name',
-    start.url === '' && start.name === '',
+    'the house starts on the Store it ships with, and a name no one has claimed',
+    start.url === SHIPPED && start.name === '',
     JSON.stringify(start),
   )
 
   await click(page, TAB)
   await sleep(3000)
 
-  // -- the section, before there is anything to publish to ------------------
+  // -- the section, which has a Store before anybody asked for one ----------
   const screens = await all(page, SCREEN)
   check('the Store tab draws', screens.length === 1, `found ${screens.length}`)
 
   let seen = await text(page, SCREEN)
   check('the tab is not empty', seen.trim().length > 40, seen.trim().slice(0, 120))
   check(
-    'it says there is no Store yet',
-    /No Store is configured yet/.test(seen),
+    'it does not ask for an address it was built with',
+    !/No Store is configured yet/.test(seen),
     seen.slice(0, 300),
   )
-  check('the Connect a Store button draws', (await all(page, '#store-connect')).length === 1)
+  check(
+    'and the Connect button is not drawn',
+    (await all(page, '#store-connect')).length === 0,
+  )
 
   // -- the Publish button is drawn on every module this house made ----------
   const slugs = await page.evaluate(() =>
@@ -175,7 +197,7 @@ try {
     ),
   )
   check(
-    'a Publish button is drawn with no Store configured',
+    'a Publish button is drawn on a fresh install',
     slugs.length >= 2,
     `found ${slugs.length}`,
   )
@@ -184,29 +206,40 @@ try {
   }
   const [first, second] = slugs
 
-  // -- pressing it asks, rather than refusing --------------------------------
+  // -- pressing it asks for the name and the description, and nothing else ---
   await click(page, `#store-publish-${first}`)
   await sleep(1000)
   check('pressing Publish opens a dialog', (await all(page, 'open-house-dialog[open]')).length === 1)
   let dialog = await text(page, 'open-house-dialog')
   check('the dialog is headed for that module', /^Publish "/.test(dialog), dialog.slice(0, 80))
-  check('it asks for the Store address', (await all(page, '#store-setup-url')).length === 1)
-  check('and for the publisher name', (await all(page, '#store-setup-name')).length === 1)
+  check('it asks for the publisher name', (await all(page, '#store-setup-name')).length === 1)
+  check(
+    'it does not ask for a Store address',
+    (await all(page, '#store-setup-url')).length === 0,
+  )
+  check(
+    'it asks for the description',
+    (await all(page, '#store-setup-summary')).length === 1,
+  )
   await page.screenshot({ path: 'shots/store-publish-setup.png' })
 
-  // Neither is known, so the primary button has nothing to send yet.
+  // The one box it must not have repeated: the section's own claim form is
+  // drawn under the dialog, and the same question in two places is the question
+  // twice.
+  check(
+    'the name is asked for in one place only',
+    (await all(page, '#store-claim-name')).length === 0,
+  )
+
   const disabled = () =>
     page.evaluate(() => window.__deepAll('#store-setup-submit')[0]?.disabled ?? null)
-  check('the button is disabled while both boxes are empty', (await disabled()) === true)
-
-  await type(page, '#store-setup-url', STORE)
-  await sleep(200)
-  check('an address alone is not enough', (await disabled()) === true)
+  check('the button is disabled while the name box is empty', (await disabled()) === true)
 
   // A name somebody else holds, which is the refusal this dialog exists to show.
   await type(page, '#store-setup-name', TAKEN)
+  await type(page, '#store-setup-summary', BLURB)
   await sleep(200)
-  check('both answers arm the button', (await disabled()) === false)
+  check('a name arms the button', (await disabled()) === false)
   await click(page, '#store-setup-submit')
   await sleep(4000)
 
@@ -227,11 +260,11 @@ try {
     dialog.slice(0, 300),
   )
   await page.screenshot({ path: 'shots/store-publish-refused.png' })
-  check(
-    'the address it accepted is no longer asked for',
-    (await all(page, '#store-setup-url')).length === 0,
-  )
   check('the name it refused is still asked for', (await all(page, '#store-setup-name')).length === 1)
+  check(
+    'and the description typed so far is still there',
+    (await page.evaluate(() => window.__deepAll('#store-setup-summary')[0]?.value ?? '')) === BLURB,
+  )
 
   // -- the corrected name publishes ------------------------------------------
   await type(page, '#store-setup-name', PUBLISHER)
@@ -246,72 +279,67 @@ try {
     seen.slice(0, 400),
   )
   check('the house now holds the name', /Publishing as\s*walkhouse/.test(seen), seen.slice(0, 600))
-  check('the Store section has replaced the Connect button', (await all(page, '#store-connect')).length === 0)
+  check(
+    'the claim form is gone, so the name is asked once ever',
+    (await all(page, '#store-claim-name')).length === 0,
+  )
+  // It is on the Store now, so the row says that instead of offering to do it
+  // again -- the button that was there is a statement once it has been acted on.
+  check(
+    'the module it published reads as published instead',
+    (await all(page, `#store-publish-${first}`)).length === 0 &&
+      (await all(page, `#store-published-${first}`)).length === 1,
+  )
 
-  // -- a second module is published with no questions ------------------------
+  // -- a second module is published, and asked only for its description ------
   await click(page, `#store-publish-${second}`)
-  await sleep(5000)
-  check('a second Publish asks nothing', (await all(page, 'open-house-dialog')).length === 0)
-  seen = await text(page, SCREEN)
-  check(
-    'and publishes straight away',
-    /Published .* as walkhouse/.test(seen),
-    seen.slice(0, 400),
-  )
-
-  // -- the address is not asked for once it is defined ------------------------
-  // The one thing this walk does outside a click. A house that has just been
-  // handed an address is exactly the state a build shipping a `DEFAULT_URL`
-  // would be in, and the claim below is that the dialog then asks for the *name*
-  // and not for an address it already has.
-  await reset(page, '')
-  const again = await reset(page, STORE)
-  check(
-    'the name goes with a Store the house was moved off',
-    again.url === STORE && again.name === '',
-    JSON.stringify(again),
-  )
-  await clearPublisher(token)
-  // Away and back, because the tab read its status when it was mounted and this
-  // house's was changed from underneath it -- which is the same thing that
-  // happens when a person sets the address on the Configure screen.
-  await click(page, AWAY)
-  await sleep(1500)
-  await click(page, TAB)
-  await sleep(3000)
-
-  seen = await text(page, SCREEN)
-  check('the section knows the Store now', !/No Store is configured yet/.test(seen))
-  check('and asks for a publisher name instead', (await all(page, '#store-claim-name')).length === 1)
-
-  await click(page, `#store-publish-${first}`)
   await sleep(1000)
-  check('pressing Publish opens a dialog again', (await all(page, 'open-house-dialog[open]')).length === 1)
+  check('a second Publish opens the dialog', (await all(page, 'open-house-dialog[open]')).length === 1)
   check(
-    'it does not ask for an address it was given',
-    (await all(page, '#store-setup-url')).length === 0,
+    'it does not ask for the name it holds',
+    (await all(page, '#store-setup-name')).length === 0,
   )
-  check('it asks only for the name', (await all(page, '#store-setup-name')).length === 1)
-
-  await type(page, '#store-setup-name', PUBLISHER)
+  const prefilled = await page.evaluate(
+    () => window.__deepAll('#store-setup-summary')[0]?.value ?? '',
+  )
+  check(
+    'and the description is prefilled from the module',
+    prefilled.length > 0,
+    prefilled.slice(0, 80),
+  )
+  await type(page, '#store-setup-summary', BLURB)
   await click(page, '#store-setup-submit')
   await sleep(5000)
   check('answering it publishes', (await all(page, 'open-house-dialog')).length === 0)
   seen = await text(page, SCREEN)
   check(
-    'with the name it was just given',
+    'with the name it holds',
     /Published .* as walkhouse/.test(seen),
     seen.slice(0, 400),
   )
+  check(
+    'and now both of them read as published',
+    (await all(page, `#store-published-${first}`)).length === 1 &&
+      (await all(page, `#store-published-${second}`)).length === 1,
+  )
+  check(
+    'while a module nobody has published still offers to',
+    (await all(page, '[id^="store-publish-"]')).length >= 1,
+  )
 
   // -- the Store's own list, which is what the address bought ---------------
-  await click(page, '#store-side-not_installed')
+  await click(page, '#store-side-installed')
   await sleep(2500)
   seen = await text(page, SCREEN)
   check('the tab keeps drawing after all of that', seen.trim().length > 40)
   check(
     'the module it published is on the Store under its name',
     /walkhouse/.test(seen) && /yours/.test(seen),
+    seen.slice(0, 800),
+  )
+  check(
+    'and carries the description that was typed, not the module\'s own',
+    seen.includes(BLURB),
     seen.slice(0, 800),
   )
 

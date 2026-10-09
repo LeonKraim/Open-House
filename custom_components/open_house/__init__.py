@@ -39,7 +39,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from aiohttp import web
 from homeassistant.components import panel_custom
+from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
@@ -57,7 +59,6 @@ from .const import (
     DOMAIN,
     PLATFORMS,
     SUBENTRY_ROOM,
-    VERSION,
 )
 from .repairs import async_sync_startup_issues
 from .rooms_sync import async_import_areas
@@ -77,15 +78,64 @@ _LOGGER = logging.getLogger(__name__)
 #: is named once here rather than spelled at each call site.
 PANEL_URL_PATH = "open-house"
 PANEL_WEBCOMPONENT = "open-house-panel"
-#: Where the built bundle is served from. `panel/dist/open-house-panel.js` is
-#: mounted into `/config/www/`, which Home Assistant serves at `/local/`, so the
-#: panel is a file the instance already knows how to hand to a browser.
-PANEL_MODULE_URL = "/local/open-house-panel.js"
+#: Where the built bundle is served from, and by *this* integration rather than
+#: by Home Assistant's `/local/`.
+#:
+#: `/local/` is sent with a `max-age` of 31 days, so the panel a browser first
+#: fetched is the panel it runs for a month. A cache-busting query string built
+#: from the file's size and mtime was tried and is not enough, because the
+#: registration that builds that query happens once, at startup: a bundle
+#: rebuilt afterwards keeps the URL it had, and the browser answers that URL
+#: from its own cache with the bytes from before. The screen is then old while
+#: every fresh browser -- every test, every walk -- shows the new one, which is
+#: the most confusing failure this project has. Serving the file ourselves costs
+#: one view and removes the whole class of it: `PanelBundleView` reads the
+#: bundle on each request and forbids caching it.
+PANEL_MODULE_URL = "/open_house/panel.js"
 #: The path the same file is served *from*, relative to Home Assistant's config
-#: directory -- what `_panel_version` stats to build the cache-busting query.
+#: directory: `panel/dist/open-house-panel.js` is mounted into `/config/www/`.
 PANEL_BUNDLE_PATH = Path("www") / "open-house-panel.js"
 #: `hass.data` key holding the panel paths this component has registered.
 DATA_PANELS = f"{DOMAIN}_panels"
+
+
+class PanelBundleView(HomeAssistantView):
+    """The sidebar panel's bundle, read from disk for every request.
+
+    **Not caching it is the whole point.** The file is the build artefact, and a
+    browser that holds a copy of it holds a panel that no longer matches the
+    integration it is talking to -- rebuilt controls that are missing, commands
+    that are no longer sent, and no way to tell from the screen that this is
+    what is wrong. Reading it per request and saying `no-store` makes every page
+    load the current build, so there is nothing left to bust.
+
+    The reader is the same file the search-free path served (`/config/www/`, the
+    mount point the compose file names), so nothing about the build changed --
+    only how it is handed over. Authentication is off because the bundle is
+    client-side code with no secrets in it, which is what `/local/` already
+    assumed of it.
+    """
+
+    url = PANEL_MODULE_URL
+    name = "open_house:panel"
+    requires_auth = False
+
+    async def get(self, request: web.Request) -> web.Response:
+        """The bundle as it is now, or a sentence if it has not been built."""
+        hass: HomeAssistant = request.app["hass"]
+        path = Path(hass.config.path(str(PANEL_BUNDLE_PATH)))
+        try:
+            body = await hass.async_add_executor_job(path.read_bytes)
+        except OSError:
+            return web.Response(
+                status=404, text="the Open House panel has not been built"
+            )
+        return web.Response(
+            body=body,
+            content_type="text/javascript",
+            headers={"Cache-Control": "no-store"},
+        )
+
 
 #: The `hass.data` key holding each entry's live automation, keyed by entry id.
 #: A dict of its own rather than a field on the runtime because the automation is
@@ -205,13 +255,14 @@ async def async_setup(hass: HomeAssistant, config: Mapping[str, Any]) -> bool:
     async_register_services(hass)
     registered: set[str] = hass.data.setdefault(DATA_PANELS, set())
     if PANEL_URL_PATH not in registered:
+        hass.http.register_view(PanelBundleView())
         await panel_custom.async_register_panel(
             hass,
             frontend_url_path=PANEL_URL_PATH,
             webcomponent_name=PANEL_WEBCOMPONENT,
             sidebar_title="Open House",
             sidebar_icon="mdi:home-assistant",
-            module_url=f"{PANEL_MODULE_URL}?v={_panel_version(hass)}",
+            module_url=PANEL_MODULE_URL,
             require_admin=True,
             handle_safe_area=True,
         )
@@ -439,36 +490,6 @@ def _build_room(data: Mapping[str, Any], transport: HassTransport) -> RoomRuntim
         bindings=_bindings(data),
         read_state=transport.state,
     )
-
-
-def _panel_version(hass: HomeAssistant) -> str:
-    """A token that changes whenever the served bundle changes.
-
-    Home Assistant serves `/local/` with a 31-day `max-age`, so a browser that has
-    loaded the panel once keeps it for a month unless the *URL* changes -- which
-    is not a hypothetical: it is why a rebuilt panel kept failing in a browser
-    that had the previous build cached, with an error whose text named the code
-    the browser was running rather than the code on disk. The query string makes
-    the URL change, so the browser fetches the new bundle and the old one is never
-    referenced again.
-
-    The token is the served file's size and modification time rather than the
-    integration's version: a version moves on release, and during development a
-    bundle is rebuilt many times under one version, which is exactly when a stale
-    copy is most confusing. Size and mtime change on every build that changes the
-    bytes, and they are two fields from one `stat` rather than a hash of a
-    megabyte.
-
-    Falls back to the integration's version when the file cannot be read, which
-    is the honest answer for an install that ships the integration without the
-    bundle: the panel will not work either way, and a constant is better than a
-    crash in `async_setup` that would take the config flow down with it.
-    """
-    try:
-        info = Path(hass.config.path(str(PANEL_BUNDLE_PATH))).stat()
-    except OSError:
-        return VERSION
-    return f"{VERSION}-{info.st_size:x}-{info.st_mtime_ns:x}"
 
 
 def _bindings(data: Mapping[str, Any]) -> Mapping[str, str]:

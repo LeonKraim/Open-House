@@ -191,19 +191,6 @@ async function refusalOf(message: Record<string, unknown>): Promise<unknown> {
   throw new Error(`the mock answered ${String(message.type)} instead of refusing it`);
 }
 
-test("installing a store pack installs the pack that was asked for", async () => {
-  // This answered `MODULES[0]` whatever button was pressed, so every pack in the
-  // Store installed "Motion lighting" and the pack actually asked for was
-  // nowhere in the house.
-  const conn = connection();
-  const reply = (await conn.sendMessagePromise({
-    type: COMMANDS.storeInstall,
-    pack: "bedtime_button",
-    tier: "official",
-  })) as { installed: { pack: string } };
-  assert.equal(reply.installed.pack, "bedtime_button");
-});
-
 test("publishing a row answers with the store as well as the house", async () => {
   // The server rewrites the definition behind a published row, so its reply
   // carries the store too -- and the client's own return type says so. The mock

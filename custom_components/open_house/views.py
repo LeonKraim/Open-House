@@ -93,7 +93,6 @@ __all__ = [
     "room_detail",
     "room_summaries",
     "room_summary",
-    "store_index",
 ]
 
 #: The severity the engine's own repairs are reported at. A room that cannot be
@@ -1150,27 +1149,7 @@ def _room_for_entity(host: OpenHouseHost, entity_id: str) -> str | None:
     return None
 
 
-# -- Store ------------------------------------------------------------------
-
-
-def store_index(hass: HomeAssistant, host: OpenHouseHost) -> Mapping[str, object]:
-    """The Store tab's one answer: every pack the registry knows, with verdicts.
-
-    Built from the catalog the host read at setup, so a Store tab is a join and
-    not a disk read. A pack whose manifest could not be read is still listed, with
-    its `available` flag false: an entry that vanished from the list would read as
-    a pack that was withdrawn, and "the file is not on this machine" is a
-    different and much more ordinary thing to be true of a checkout.
-    """
-    entries = [_store_entry(record, host) for record in host.catalog.records]
-    return {
-        "entries": entries,
-        "generated_at": dt_util.utcnow().isoformat(),
-        # Nothing is fetched, so nothing is ever stale in the sense this flag
-        # means. It is `False` rather than absent because the panel shows an
-        # offline badge from it, and an absent field is a broken template.
-        "cached": False,
-    }
+# -- The pack registry -------------------------------------------------------
 
 
 def pack_path(
@@ -1178,12 +1157,9 @@ def pack_path(
 ) -> Path | None:
     """The manifest file a registry entry for `pack` names, or `None`.
 
-    Not part of the panel's model: `StoreEntry` carries no path, because a path is
-    a fact about this machine and the panel must not depend on one. Installing a
-    pack needs it, so it is a second read of the same index the Store tab is built
-    from -- one that resolves *the row a person clicked* rather than whatever
-    `packs/` happens to hold, which is what makes "you can install what the Store
-    lists" true.
+    Resolves *the row a person chose* rather than whatever `packs/` happens to
+    hold, which is what makes "you can install what was offered" true. A `tier`
+    narrows it to one registry entry when a name is listed more than once.
     """
     for record in host.catalog.records:
         if record.get("name") != pack:
@@ -1192,62 +1168,6 @@ def pack_path(
             continue
         return host.catalog.paths.get(pack)
     return None
-
-
-def _store_entry(
-    record: Mapping[str, Any], host: OpenHouseHost
-) -> Mapping[str, object]:
-    """One registry record, joined to the pack file and the installed set."""
-    name = str(record.get("name", ""))
-    version = str(record.get("version", ""))
-    installed = host.session.installed.get(name)
-    manifest = host.catalog.manifests.get(name, {})
-    return {
-        "pack": name,
-        "name": _localized(manifest, "pack", name),
-        "description": _localized(
-            manifest, "description", str(manifest.get("description", ""))
-        ),
-        "version": version,
-        "author": str(manifest.get("author", "")),
-        "tier": str(record.get("tier", "community")),
-        "license": str(manifest.get("license", "")),
-        "available": bool(manifest),
-        "installed_version": None if installed is None else installed.version,
-        "update_available": installed is not None and installed.version != version,
-        "update_requires_review": _widens_permissions(installed, manifest),
-        "abandoned": False,
-        "sha256": str(record.get("sha256", "")),
-    }
-
-
-def _localized(manifest: Mapping[str, Any], key: str, fallback: str) -> str:
-    """A manifest's English string for `key`, from its `i18n.default` block."""
-    block = manifest.get("i18n")
-    if isinstance(block, Mapping):
-        default = block.get("default")
-        if isinstance(default, Mapping) and isinstance(default.get(key), str):
-            return str(default[key])
-    return fallback
-
-
-def _widens_permissions(installed: Any, manifest: Mapping[str, Any]) -> bool:
-    """Whether an available update asks for something the installed one did not.
-
-    The spec makes a widening update opt-in, so the panel has to be told before
-    it offers one. `installed` is the record the engine holds; its declared
-    permissions are what the running pack was allowed, and anything the manifest
-    asks for that the running one did not is a new permission.
-    """
-    if installed is None:
-        return False
-    held = getattr(installed, "permissions", None)
-    if not isinstance(held, (list, tuple, set, frozenset)):
-        return False
-    declared = manifest.get("permissions")
-    if not isinstance(declared, (list, tuple)):
-        return False
-    return any(item not in held for item in declared)
 
 
 # -- The catalog, read once --------------------------------------------------
@@ -1265,10 +1185,10 @@ class Catalog:
 
     Read from the checkout at setup and never re-read, which is what makes a
     request pure. The registry is carried as *parsed* manifests rather than as
-    paths, for the same reason: a `store/index` that re-parsed ten YAML files
-    would be ten blocking reads per screen, and the ten files do not change while
-    Home Assistant is running -- installing a pack writes the engine's record of
-    it, not the registry.
+    paths, for the same reason: a screen that re-parsed ten YAML files would be
+    ten blocking reads per request, and the ten files do not change while Home
+    Assistant is running -- installing a pack writes the engine's record of it,
+    not the registry.
 
     Empty is a real value and means the checkout has no catalog, which
     `async_setup_host` already treats as "no session": a `Catalog` with nothing in

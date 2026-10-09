@@ -65,17 +65,23 @@ __all__ = [
 _LOGGER = logging.getLogger(__name__)
 
 #: The Store this build of Open House ships pointed at, used when no address is
-#: configured. **Empty today**, which is what makes an unconfigured house ask for
-#: an address; filling this in with a real Store is how a house gets one without
-#: anybody typing it. It is deliberately *below* the option rather than instead of
-#: it, so a person who wants a Store of their own -- a self-hosted one, a test one
-#: -- sets the option and it wins.
+#: configured. **This is the address, not a question**: it is filled in, so a
+#: house talks to a Store without anybody typing one, and the panel never asks.
+#: Publishing to somebody else's Store is how the published Store is meant to
+#: work -- a person who wants one of their own, a self-hosted one, a test one,
+#: sets the option instead and it wins.
+#:
+#: The value is the development Store that `store/docker-compose.yml` stands up,
+#: named from *inside* the Home Assistant container (which is where the
+#: integration runs, so `localhost` there is the container). It is a placeholder
+#: for a real Store's address and lives in one line for exactly that reason.
 #:
 #: `store_url` is the only reader, which is what keeps "is an address defined?" a
-#: single question: the panel asks only when that answer is `""`.
-DEFAULT_URL = ""
+#: single question.
+DEFAULT_URL = "http://host.docker.internal:8090"
 #: The key the Store's address lives under in a config entry's options. Empty is
-#: the ordinary state when `DEFAULT_URL` is too: see the module docstring.
+#: the ordinary state, because the shipped address is what a house uses until
+#: somebody sets one of their own: see the module docstring.
 OPTION_URL = "store_url"
 #: The key this install's claimed publisher identity lives under: a mapping of
 #: `name` to the password generated for it. Written only by a claim that
@@ -155,14 +161,14 @@ def no_store_sentence() -> str:
     """Where to set the address, in the words every refusal uses.
 
     One phrase, because it is written into every command's refusal and a person
-    who reads it twice should read the same place twice. Both the panel's own
-    Publish button and the integration's Configure screen write the same option,
-    so the sentence names the act rather than the screen.
+    who reads it twice should read the same place twice. It is reachable only in
+    a build whose `DEFAULT_URL` is empty -- a house that has an address anywhere
+    never sees it -- so it names the one door that is always there.
     """
     return (
         "no published Store is set for this house: put its address in Settings > "
-        "Devices & Services > Open House > Configure, or press Publish on one of "
-        "your modules, and leave it empty to go on without a Store"
+        "Devices & Services > Open House > Configure, and leave it empty to go on "
+        "without a Store"
     )
 
 

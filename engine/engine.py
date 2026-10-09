@@ -1068,6 +1068,7 @@ class _Draft:
             commands=self.commands,
             outcome=self.outcome(),
             state_delta=tuple(self.delta),
+            room=self.scope.room_id if isinstance(self.scope, RoomScope) else None,
         )
 
     def outcome(self) -> Outcome:

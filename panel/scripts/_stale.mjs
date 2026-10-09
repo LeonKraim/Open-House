@@ -179,7 +179,22 @@ try {
 
   const form = `ha-form[data-module="${slug}"][data-setting="max_brightness_percent"]`
 
+  // A card's settings form lives in a `<details>` that is shut by default, and a
+  // shut one renders none of its controls -- so the field is not merely scrolled
+  // away, it is unreachable, and `typeField` correctly refuses to click a control
+  // that is behind nothing at all. Open it the way a person does. It is done
+  // immediately before every write rather than once, because a save rebuilds the
+  // card and the rebuilt `<details>` comes back shut.
+  const openSettings = async () => {
+    await one.page.evaluate((sel) => {
+      const details = window.__deepAll(sel)[0]
+      if (details && !details.open) details.open = true
+    }, `details.nested[data-kind="settings"][data-module="${slug}"]`)
+    await sleep(400)
+  }
+
   // -- a save that lands, so the refusal below is about the switch ----------
+  await openSettings()
   await typeField(one.page, { form, label: null }, '60')
   await sleep(3000)
   const saved = await hosted(TAB, slug)
@@ -215,6 +230,7 @@ try {
   )
 
   // -- the card saves itself again, and the write must be refused -----------
+  await openSettings()
   await typeField(one.page, { form, label: null }, '70')
   await sleep(3500)
   const shown = await notice(TAB)

@@ -44,7 +44,6 @@ import type {
   RoomDetail,
   RoomSummary,
   StoreCommentRow,
-  StoreEntry,
   StoreStatus,
 } from "./models.ts";
 
@@ -603,58 +602,50 @@ export class OpenHouseClient {
     return this.call(COMMANDS.profileImport, { document, replace });
   }
 
-  // -- store ---------------------------------------------------------------
-
-  storeIndex(): Promise<{
-    entries: StoreEntry[];
-    generated_at: string | null;
-    cached: boolean;
-  }> {
-    return this.call(COMMANDS.storeIndex);
-  }
-
-  storeInstall(
-    pack: string,
-    tier: string,
-  ): Promise<{ installed: InstalledModule }> {
-    return this.call(COMMANDS.storeInstall, { pack, tier });
-  }
-
   // -- activity and health -------------------------------------------------
 
   /**
-   * The decision log, newest first.
+   * The decision log, newest first, narrowed by the tab's filters.
    *
-   * The default window is wide on purpose, and the number is not a screenful.
-   * The engine records one row per behaviour per scope per tick and a real house
-   * reaches about three hundred of them -- so a window of a hundred rows is a
-   * slice of one tick, and the outcome filter, which filters what was *read*,
-   * then has almost nothing to filter. A person asking "why did the house turn
-   * that light on" was reading the tail of the very tick that did it and seeing
-   * only the rows that came after the answer. A thousand rows covers several
-   * ticks in the example house and at least one in a house many times its size,
-   * which is the smallest window that can be relied on to contain the decision;
-   * the tab's own filters are what make that much log readable.
+   * The filters are asked of the *server*, not applied to an already-read page,
+   * and that is the whole point of them here: the engine records one row per
+   * behaviour per scope per tick and a large house reaches thousands of them, so
+   * a page of a thousand is a sub-slice of a single tick. Filtering on the
+   * server narrows the log *before* the window, so a filtered page fills with
+   * matching rows instead of returning the few that happen to fall inside one
+   * tick. `limit` bounds how many matching rows come back.
    */
-  async activity(limit = 1000): Promise<DecisionLogEntry[]> {
+  async activity(
+    filters: { outcome?: string; room?: string } = {},
+    limit = 1000,
+  ): Promise<DecisionLogEntry[]> {
     const response = await this.call<ListResponse<DecisionLogEntry>>(
       COMMANDS.activityList,
-      { limit },
+      {
+        limit,
+        ...(filters.outcome ? { outcome: filters.outcome } : {}),
+        ...(filters.room ? { room: filters.room } : {}),
+      },
     );
     return response.entries ?? [];
   }
 
   /**
-   * Stream new decision-log entries.
+   * Stream new decision-log entries, narrowed by the tab's filters.
    *
    * The one command answered by a subscription rather than a reply. It requires
    * a `connection` and cannot go through `callWS`, which is why it is the one
    * method that does not use `call`. The caller owns the returned unsubscribe
    * and must call it when the element disconnects, or the connection keeps a
    * callback pointing at a removed element.
+   *
+   * The filters are sent with the subscription so the server drops non-matching
+   * records before pushing them: a tick can append thousands, and pushing them
+   * all for the panel to discard is the traffic this avoids.
    */
   subscribeActivity(
     onEvent: (event: ActivityStreamEvent) => void,
+    filters: { outcome?: string; room?: string } = {},
   ): Promise<UnsubscribeFunc> {
     const connection = this.hass.connection;
     if (!connection) {
@@ -669,6 +660,8 @@ export class OpenHouseClient {
     return connection
       .subscribeMessage<ActivityStreamEvent>(onEvent, {
         type: COMMANDS.activitySubscribe,
+        ...(filters.outcome ? { outcome: filters.outcome } : {}),
+        ...(filters.room ? { room: filters.room } : {}),
       })
       .catch((error: unknown) => {
         throw asPanelError(error);

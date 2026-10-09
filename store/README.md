@@ -52,14 +52,14 @@ Two volumes matter: `pb_data` is the whole Store (the database, the uploaded
 files, the logs), and `pb_hooks` is this directory. Nothing else needs backing
 up, and nothing else needs deleting to start over.
 
-**Telling a house which Store this is.** The address is the integration's
-`store_url` option, and there are two ways to set it: the Configure screen, or
-the Publish button on a module, which asks for it when it does not know one. A
-build of Open House can also *ship* pointed at a Store, through `DEFAULT_URL` in
-`custom_components/open_house/store.py` -- empty today, and filling it in is how
-every house gets a Store without anybody typing an address. A configured address
-always wins over the shipped one, so pointing the build at a public Store does
-not stop a person running their own.
+**Telling a house which Store this is.** A build of Open House *ships* pointed at
+a Store: `DEFAULT_URL` in `custom_components/open_house/store.py`, which is how
+every house gets a Store without anybody typing an address, and why the panel
+never asks for one. A configured address always wins over the shipped one, so
+somebody running their own Store is not overruled -- that one is the
+integration's `store_url` option, set on the Configure screen. Pressing Publish
+on a module asks for the publisher name and the description, and for nothing
+else.
 
 ## What the backend enforces
 

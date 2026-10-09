@@ -143,7 +143,9 @@ class OpenHouseHost:
         #: is a blocking call.
         self.catalog = catalog
         self._store = store
-        self._activity_listeners: list[Callable[[Mapping[str, object]], None]] = []
+        self._activity_listeners: list[
+            tuple[Callable[[Mapping[str, object]], None], str | None, str | None]
+        ] = []
         #: The last decision record handed to a subscriber, so the next publish
         #: can tell what is new. Identity is by value: `DecisionRecord` is a
         #: frozen dataclass, and two records that compare equal *are* the same
@@ -884,14 +886,27 @@ class OpenHouseHost:
     # -- Activity -----------------------------------------------------------
 
     def subscribe(
-        self, listener: Callable[[Mapping[str, object]], None]
+        self,
+        listener: Callable[[Mapping[str, object]], None],
+        *,
+        outcome: str | None = None,
+        room: str | None = None,
     ) -> Callable[[], None]:
-        """Add a listener for new decision records; returns the unsubscribe."""
-        self._activity_listeners.append(listener)
+        """Add a listener for new decision records; returns the unsubscribe.
+
+        `outcome` and `room` are the same two filters `activity/list` takes, and
+        they are honoured here rather than left to the panel because a tick of a
+        large house can append thousands of records: pushing them all so the
+        panel can throw most away is the thing this avoids. The predicate is the
+        one the list read uses (`ha_adapter.live_export.wanted`), so a filtered
+        page and a filtered stream agree by construction.
+        """
+        subscription = (listener, outcome, room)
+        self._activity_listeners.append(subscription)
 
         def _remove() -> None:
-            if listener in self._activity_listeners:
-                self._activity_listeners.remove(listener)
+            if subscription in self._activity_listeners:
+                self._activity_listeners.remove(subscription)
 
         return _remove
 
@@ -911,8 +926,14 @@ class OpenHouseHost:
         records = self.session.engine.log.records()
         fresh = self._records_since(records)
         for record in fresh:
-            event = {"kind": "entry", "entry": _entry_document(record)}
-            for listener in list(self._activity_listeners):
+            # The record is projected once and shared: the projection is pure, so
+            # two subscribers that both want a record must not each pay for it.
+            event: Mapping[str, object] | None = None
+            for listener, outcome, room in list(self._activity_listeners):
+                if not _wanted(record, outcome, room):
+                    continue
+                if event is None:
+                    event = {"kind": "entry", "entry": _entry_document(record)}
                 listener(event)
         if fresh:
             self._last_published = records[-1]
@@ -986,6 +1007,17 @@ def _entry_document(record: object) -> Mapping[str, object]:
     from ha_adapter.live_export import activity_entry
 
     return activity_entry(record)
+
+
+def _wanted(record: object, outcome: str | None, room: str | None) -> bool:
+    """Whether a record answers a subscriber's filters.
+
+    Deferred for the same one-way reason `_entry_document` is, and the same
+    predicate the list read uses, so the two cannot drift.
+    """
+    from ha_adapter.live_export import wanted
+
+    return wanted(record, outcome=outcome, room=room)
 
 
 async def async_setup_host(

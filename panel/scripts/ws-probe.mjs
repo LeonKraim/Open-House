@@ -167,22 +167,6 @@ async function main() {
     }
   }
 
-  const store = await api.call("open_house/store/index");
-  check("store/index succeeds", store.success === true, JSON.stringify(store.error ?? ""));
-  if (store.success) {
-    check("store/index shape", has(store.result, ["entries", "generated_at", "cached"]).length === 0);
-    check("store/index lists packs", Array.isArray(store.result.entries) && store.result.entries.length > 0,
-      `entries=${store.result.entries?.length}`);
-    for (const entry of (store.result.entries ?? []).slice(0, 3)) {
-      const miss = has(entry, [
-        "pack", "name", "description", "version", "author", "tier", "license",
-        "available", "installed_version", "update_available",
-        "update_requires_review", "abandoned", "sha256",
-      ]);
-      check(`store entry ${entry.pack} shape`, miss.length === 0, miss.join(","));
-    }
-  }
-
   const health = await api.call("open_house/health/list");
   check("health/list succeeds", health.success === true, JSON.stringify(health.error ?? ""));
   if (health.success) {

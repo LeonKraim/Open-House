@@ -40,7 +40,6 @@ import type {
   RoomSummary,
   SlotRuleFacts,
   StoreCommentRow,
-  StoreEntry,
   StoreStatus,
 } from "../api/models.ts";
 import type { JsonSchema } from "../components/schema-spec.ts";
@@ -994,6 +993,25 @@ function moduleSettings(packs: readonly InstalledModule[]): Record<string, JsonS
   return properties;
 }
 
+/**
+ * The mock's answer to the Activity tab's two filters, mirroring
+ * `ha_adapter/live_export.wanted`: `outcome` is a panel outcome or the literal
+ * `"actions"` (everything but a skip), and `room` is a room id.
+ */
+function filterActivity(
+  entries: readonly DecisionLogEntry[],
+  message: Record<string, unknown>,
+): DecisionLogEntry[] {
+  const outcome = typeof message.outcome === "string" ? message.outcome : null;
+  const room = typeof message.room === "string" ? message.room : null;
+  return entries.filter((entry) => {
+    if (room !== null && entry.room !== room) return false;
+    if (outcome === null) return true;
+    if (outcome === "actions") return entry.outcome !== "skipped";
+    return entry.outcome === outcome;
+  });
+}
+
 const ACTIVITY: DecisionLogEntry[] = [
   {
     id: "e1",
@@ -1041,39 +1059,6 @@ const HEALTH: HealthIssue[] = [
     room_id: "bedroom",
     entity_id: "sensor.bedroom_lux",
     repairs_flow_id: null,
-  },
-];
-
-const STORE: StoreEntry[] = [
-  {
-    pack: "bedtime_button",
-    name: "Bedtime button",
-    description: "Lights off, Sleep mode, optional thermostat.",
-    version: "1.0.0",
-    author: "open-house",
-    tier: "official",
-    license: "mit",
-    available: true,
-    installed_version: "1.0.0",
-    update_available: false,
-    update_requires_review: false,
-    abandoned: false,
-    sha256: "a".repeat(64),
-  },
-  {
-    pack: "guest_mode",
-    name: "Guest mode",
-    description: "A house profile for guests staying over.",
-    version: "1.1.0",
-    author: "open-house",
-    tier: "official",
-    license: "mit",
-    available: true,
-    installed_version: "1.0.0",
-    update_available: true,
-    update_requires_review: true,
-    abandoned: false,
-    sha256: "b".repeat(64),
   },
 ];
 
@@ -2317,20 +2302,6 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
       }
       return { imported, replaced: replace ? conflicts : [], profiles: profileRows() };
     }
-    case COMMANDS.storeIndex:
-      return { entries: STORE, generated_at: new Date().toISOString(), cached: false };
-    case COMMANDS.storeInstall: {
-      // The pack the Store asked for, installed into the house, by the same road
-      // `modules/install` takes -- so the two cannot disagree about what an
-      // install produces. This used to answer `MODULES[0]` whatever button was
-      // pressed, so every pack in the Store installed "Motion lighting" and the
-      // one that was actually installed was nowhere in the house.
-      const landed = answer(COMMANDS.moduleInstall, {
-        room_id: "",
-        pack: String(payload.pack),
-      }) as ModuleInstallReply;
-      return { installed: landed.installed };
-    }
     case COMMANDS.modulesStore: {
       // The verdict is the placement's, as the server's is: the same module can
       // be missing a device in one room and not in another, so the rows are
@@ -3141,7 +3112,10 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
         blueprints: DEV_BLUEPRINTS,
       };
     case COMMANDS.activityList:
-      return { entries: ACTIVITY };
+      // The server narrows the log before the window, so the mock does the same
+      // -- otherwise the dev harness would show an unfiltered page and the dev
+      // would never see the filter the tab actually opens on.
+      return { entries: filterActivity(ACTIVITY, payload) };
     case COMMANDS.healthList:
       return { issues: HEALTH };
     case COMMANDS.dashboardGenerate:

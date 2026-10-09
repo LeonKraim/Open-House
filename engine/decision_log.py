@@ -333,6 +333,12 @@ class DecisionRecord:
     outcome: Outcome
     #: The change the resolution applied, as entity, before, after.
     state_delta: tuple[StateChange, ...]
+    #: The room the evaluation ran for, or `None` for the house scope. Derived
+    #: from the evaluation's `Scope`, and defaulting to `None` because a record
+    #: is written by more than the engine -- a scenario composes one by hand and
+    #: has no room to name. The Activity feed reads it, so a record that carries
+    #: its own room needs no second guess (`ha_adapter.live_export`).
+    room: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.outcome, Outcome):
@@ -354,6 +360,7 @@ class DecisionRecord:
             "rule": self.rule,
             "commands": [_command_document(command) for command in self.commands],
             "outcome": str(self.outcome),
+            "room": self.room,
             "state_delta": [
                 {
                     "entity_id": change.entity_id,

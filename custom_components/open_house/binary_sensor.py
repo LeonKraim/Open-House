@@ -325,7 +325,19 @@ class DerivedConditionSensor(BinarySensorEntity):
             ]
             checker = AndConditionChecker(self.hass, checkers)
             await checker.async_setup()
-        except (ConditionError, HomeAssistantError, ValueError, KeyError) as failure:
+        except (
+            ConditionError,
+            HomeAssistantError,
+            ValueError,
+            KeyError,
+            # A condition naming a target that resolves to nothing raises
+            # `AttributeError` from Home Assistant's own `TargetSelection`, not a
+            # `ConditionError` -- `condition.py` reaches `config.get(...)` on a
+            # `None` and the guard above would let it through, leaving a sensor
+            # that is never added and nothing saying why. Observed live on a
+            # derived condition whose target selector was left unresolved.
+            AttributeError,
+        ) as failure:
             # A condition that will not build is a condition this entity cannot
             # answer, and the honest reading of it is unknown. It is logged
             # because it is a refusal a person can only fix by editing the

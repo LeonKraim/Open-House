@@ -33,8 +33,7 @@ async_register_panel(
     webcomponent_name="open-house-panel",
     sidebar_title="Open House",
     sidebar_icon="mdi:home-assistant",
-    module_url="/open_house_panel/open-house-panel.js?v=<integration version>",
-    require_admin=False,
+    module_url="/open_house/panel.js",
     embed_iframe=False,
     config={"open_house": True},
 )
@@ -93,8 +92,6 @@ mirrors them in TypeScript).
 | `open_house/profiles/deactivate_house` | `{}` | `{ profiles: ProfileRef[] }` |
 | `open_house/profiles/export` | `{profile?}` | `{ document }` |
 | `open_house/profiles/import` | `{document, replace?}` | `{ imported, replaced, profiles }` |
-| `open_house/store/index` | `{}` | `{ entries, generated_at, cached }` |
-| `open_house/store/install` | `{pack, tier}` | `{ installed }` |
 | `open_house/activity/list` | `{limit?, before?}` | `{ entries: DecisionLogEntry[] }` |
 | `open_house/activity/subscribe` | `{}` | stream of `ActivityStreamEvent` |
 | `open_house/health/list` | `{}` | `{ issues: HealthIssue[] }` |

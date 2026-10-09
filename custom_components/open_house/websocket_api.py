@@ -115,8 +115,6 @@ PROFILE_REMOVE = "open_house/profiles/remove"
 PROFILE_DEACTIVATE_HOUSE = "open_house/profiles/deactivate_house"
 PROFILE_EXPORT = "open_house/profiles/export"
 PROFILE_IMPORT = "open_house/profiles/import"
-STORE_INDEX = "open_house/store/index"
-STORE_INSTALL = "open_house/store/install"
 ACTIVITY_LIST = "open_house/activity/list"
 ACTIVITY_SUBSCRIBE = "open_house/activity/subscribe"
 HEALTH_LIST = "open_house/health/list"
@@ -1809,93 +1807,6 @@ async def ws_profile_import(
     connection.send_result(msg["id"], result)
 
 
-# -- Store ------------------------------------------------------------------
-
-
-@websocket_api.websocket_command({vol.Required("type"): STORE_INDEX})
-@websocket_api.async_response
-@_admin
-async def ws_store_index(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
-    """Every pack the registry knows, from the checkout's own registry."""
-    host = _host_or_error(connection, msg)
-    if host is None:
-        return
-    connection.send_result(msg["id"], views.store_index(hass, host))
-
-
-@websocket_api.websocket_command(
-    {
-        vol.Required("type"): STORE_INSTALL,
-        vol.Required("pack"): str,
-        vol.Required("tier"): str,
-    }
-)
-@websocket_api.async_response
-@_admin
-async def ws_store_install(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
-    """Install a pack by name, as the Store's own button does.
-
-    Two steps and a deliberate split between them. `live_modules.store_pack`
-    resolves the published row and verifies the file against its pinned SHA-256
-    and the revocation list; `live_modules.install` then puts it in the house.
-    The first runs in an executor and the second does not, and that is not an
-    oversight: verification only reads, so it is safe off the loop, while the
-    install writes the session's installed set and can therefore interleave with
-    `automation._tick` if it is moved to a thread. A blocking read on a button
-    press is a cost worth paying to keep the engine single-threaded.
-
-    **The other install buttons do move it, and this is the one that does not.**
-    `ws_module_install` and the Dev tab's save both install from an executor,
-    because the read they would otherwise do on the loop is one Home Assistant
-    reports by name, every time. The interleave they accept is a tick that sees
-    a pack before its placement -- a module skipped for one tick, not a wrong
-    decision -- and that was judged the smaller cost. This handler is left as it
-    is because it is the one whose refusals are about a *verified* file and whose
-    ordering a person watches, so the smaller cost was judged the other way
-    round; a reader is owed the fact that the two choices exist rather than the
-    pretence that a rule was never broken.
-
-    A refusal from either step is sent as an error code the panel can name.
-    `missing` -- no row by that name at that tier -- is `not_found`, because the
-    thing asked for does not exist; a file that fails its pin is `invalid_format`,
-    because the thing asked for exists and this is not it.
-    """
-    host = _host_or_error(connection, msg)
-    if host is None:
-        return
-    verify = partial(
-        live_modules.store_pack, host.session.root, msg["pack"], msg["tier"]
-    )
-    try:
-        path = await hass.async_add_executor_job(verify)
-    except live_modules.StorePackMissingError as refusal:
-        # "The Store does not sell that" and "the Store sells it and this copy
-        # is not it" are different sentences to a person, so they are different
-        # codes: one is a stale panel, the other is a corrupted checkout.
-        connection.send_error(msg["id"], NOT_FOUND, str(refusal))
-        return
-    except live_modules.StorePackRefusedError as refusal:
-        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
-        return
-    try:
-        live_modules.install(host.session, path, root=host.session.root)
-    except LiveSessionError as refusal:
-        _error(connection, msg, refusal)
-        return
-    await _saved(host)
-    installed = _installed(host, msg["pack"])
-    if installed is None:
-        connection.send_error(
-            msg["id"], INVALID_FORMAT, f"the pack {msg['pack']!r} did not install"
-        )
-        return
-    connection.send_result(msg["id"], {"installed": installed})
-
-
 # -- Activity ---------------------------------------------------------------
 
 
@@ -1904,6 +1815,11 @@ async def ws_store_install(
         vol.Required("type"): ACTIVITY_LIST,
         vol.Optional("limit"): vol.All(int, vol.Range(min=1, max=_ACTIVITY_LIMIT)),
         vol.Optional("before"): str,
+        # The tab's two filters, applied by the server *before* the limit so a
+        # filtered page fills. `outcome` is the panel's vocabulary plus
+        # `live_export.ACTIONS`; `room` is a room id.
+        vol.Optional("outcome"): str,
+        vol.Optional("room"): str,
     }
 )
 @websocket_api.async_response
@@ -1916,7 +1832,11 @@ async def ws_activity_list(
     if host is None:
         return
     found = live_export.activity(
-        host.session, limit=msg.get("limit", 50), before=msg.get("before")
+        host.session,
+        limit=msg.get("limit", 50),
+        before=msg.get("before"),
+        outcome=msg.get("outcome"),
+        room=msg.get("room"),
     )
     connection.send_result(msg["id"], {"entries": list(found)})
 
@@ -1925,6 +1845,8 @@ async def ws_activity_list(
     {
         vol.Required("type"): ACTIVITY_SUBSCRIBE,
         vol.Optional("limit"): vol.All(int, vol.Range(min=1, max=_ACTIVITY_LIMIT)),
+        vol.Optional("outcome"): str,
+        vol.Optional("room"): str,
     }
 )
 @websocket_api.async_response
@@ -1948,7 +1870,9 @@ async def ws_activity_subscribe(
     def _forward(event: Mapping[str, object]) -> None:
         connection.send_event(identifier, dict(event))
 
-    connection.subscriptions[identifier] = host.subscribe(_forward)
+    connection.subscriptions[identifier] = host.subscribe(
+        _forward, outcome=msg.get("outcome"), room=msg.get("room")
+    )
     connection.send_result(identifier)
 
 
@@ -2396,7 +2320,8 @@ async def _module_to_edit(
             # the id is the house's, and the row opens the person's own
             # automation.
             "automations": {
-                name: record.automations.get(name, "") for name in definition.automations
+                name: record.automations.get(name, "")
+                for name in definition.automations
             },
             "picks": [{"name": name, "key": key} for name, key in definition.picks],
         }
@@ -4743,8 +4668,6 @@ _HANDLERS: tuple[Any, ...] = (
     ws_profile_remove,
     ws_profile_export,
     ws_profile_import,
-    ws_store_index,
-    ws_store_install,
     ws_activity_list,
     ws_activity_subscribe,
     ws_health_list,

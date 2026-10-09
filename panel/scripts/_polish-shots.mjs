@@ -1,6 +1,6 @@
 // Scratch: photograph the screens this pass is polishing, before and after.
 //
-// The served bundle at /local/open-house-panel.js is built from a `dist/` that
+// The served bundle at /open_house/panel.js is built from a `dist/` that
 // this pass must not touch (`npm run build` is off-limits), so the fresh sources
 // are built to a scratch directory and served in place of it for the walk only.
 // Nothing shared is written.
@@ -62,7 +62,7 @@ page.on('framenavigated', (f) => { if (f === page.mainFrame()) { lastNav = Date.
 page.on('pageerror', (e) => events.push(`PAGEERROR ${String(e).slice(0, 200)}`))
 page.on('console', (m) => { if (m.type() === 'error') events.push(`CONSOLE ${m.text().slice(0, 200)}`) })
 // Serve the freshly built bundle wherever the panel asks for it.
-await page.route(/\/local\/open-house-panel\.js/, (route) => {
+await page.route(/\/open_house\/panel\.js/, (route) => {
   console.log('intercepted panel module:', route.request().url().slice(0, 90))
   return route.fulfill({ status: 200, contentType: 'text/javascript', body: BUNDLE })
 })

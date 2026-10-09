@@ -2041,9 +2041,7 @@ def _number_bounds(number: Mapping[str, Any]) -> tuple[float, float, float]:
     return low, high, step
 
 
-def _number_default(
-    declared: object, low: float, high: float, step: float
-) -> float:
+def _number_default(declared: object, low: float, high: float, step: float) -> float:
     """The number a helper starts at, from the block's default and its bounds.
 
     Clamped into the range rather than refused: a default outside its own bounds

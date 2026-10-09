@@ -127,14 +127,27 @@ _PANEL_OUTCOME: Mapping[Outcome, str] = {
 
 
 def activity(
-    session: LiveSession, *, limit: int = 50, before: str | None = None
+    session: LiveSession,
+    *,
+    limit: int = 50,
+    before: str | None = None,
+    outcome: str | None = None,
+    room: str | None = None,
 ) -> tuple[Mapping[str, object], ...]:
     """The decision log as the Activity tab's rows, newest first.
 
-    `limit` bounds the read and is the panel's `{limit?}`, passed straight to the
-    log's own window rather than sliced here, so "the last fifty decisions" is
-    one query against the log's bound rather than a copy of the log in this
-    module.
+    `limit` bounds the read and is the panel's `{limit?}`. It is applied *after*
+    the filters below rather than before, and that is the whole point of them: a
+    tick of a large house writes as many records as the whole read window holds,
+    so a filter applied to a window-sized page would be a filter over a single
+    tick and would mostly return nothing. Filtering the log first and taking the
+    tail is what makes a filtered page *fill*.
+
+    `outcome` and `room` are the tab's two filters. `outcome` is the panel's own
+    vocabulary (`PANEL_OUTCOMES`), with the one addition the tab needs: the
+    literal `"actions"` means "everything except a skip", which is what the tab
+    opens on. `room` is a room id, matched against the record's own room.
+    `None` on either means "no filter".
 
     `before` is the opaque cursor the panel pages with: the `id` of the newest
     entry the caller already holds, answered with the entries strictly older
@@ -151,13 +164,56 @@ def activity(
     """
     if limit < 0:
         raise LiveSessionError(f"an activity limit cannot be negative: {limit}")
-    entries = [activity_entry(record) for record in session.engine.log.window(limit)]
+    records = tuple(
+        record
+        for record in session.engine.log.records()
+        if wanted(record, outcome=outcome, room=room)
+    )
+    # `records[-0:]` is the whole log, so a limit of zero is answered here rather
+    # than left to the slice: "no rows" and "every row" are not the same.
+    window = records[-limit:] if limit else ()
+    entries = [activity_entry(record) for record in window]
     if before is not None:
         identifiers = [entry["id"] for entry in entries]
         if before in identifiers:
             entries = entries[: identifiers.index(before)]
     entries.reverse()
     return tuple(entries)
+
+
+#: The one filter value that is not a panel outcome: everything the house *did*,
+#: which is every row but a skip. It lives here, beside `PANEL_OUTCOMES`, so the
+#: server and the tab spell it the same way.
+ACTIONS = "actions"
+
+
+def wanted(
+    record: DecisionRecord, *, outcome: str | None = None, room: str | None = None
+) -> bool:
+    """Whether a record answers the tab's two filters.
+
+    The one predicate the list read and the live push both ask, so "the rows a
+    filter leaves" is the same question however the panel reached them -- a page
+    it fetched and a record the house pushed. `None` on either means "no filter",
+    which is why the two are asked separately rather than as one lookup.
+    """
+    if outcome is not None and not _wanted_outcome(record, outcome):
+        return False
+    return room is None or _room_of(record) == room
+
+
+def _wanted_outcome(record: DecisionRecord, wanted: str) -> bool:
+    """Whether a record answers the tab's outcome filter.
+
+    `actions` is the "what did the house do" filter and is the negation of a
+    skip, so it is asked as one rather than by listing the four outcomes that are
+    not a skip -- a fifth non-skip outcome added later would otherwise go missing
+    from the default view.
+    """
+    settled = _panel_outcome(record.outcome)
+    if wanted == ACTIONS:
+        return settled != "skipped"
+    return settled == wanted
 
 
 def activity_entry(record: DecisionRecord) -> Mapping[str, object]:
@@ -171,15 +227,16 @@ def activity_entry(record: DecisionRecord) -> Mapping[str, object]:
     the first change to either.
 
     **What the record can supply, and what it cannot.** A `DecisionRecord` is
-    `(at, actor, inputs, rule, commands, outcome, state_delta)` and nothing
-    else, so three of the panel's fields are read off it and two are not:
+    `(at, actor, inputs, rule, commands, outcome, state_delta, room)` and nothing
+    else, so the panel's fields are read off it as follows:
 
     - `behaviour` is the record's `actor`, the unit whose evaluation it was;
     - `entity_id` and `action` come from what the evaluation wrote, or proposed
       writing, when it did either;
-    - `room` is `None` for most records, because a room-scoped evaluation's
-      record does not name the room it was scoped to -- only a `Repair` and a
-      single-room `HousePresence` name one, and `_room_of` reads those two;
+    - `room` is the record's own `room`, the scope the evaluation ran for, or
+      `None` for the house scope. A record written before the field existed
+      carries none, and `_room_of` falls back to the two inputs that used to be
+      the only sources -- a `Repair` and a single-room `HousePresence`;
     - `priority` is `None` always, because the engine resolves a unit's
       arbitrated priority at evaluation time and does not record it
       (`engine/engine.py`, `_Draft`). Guessing it from the behaviour's declared
@@ -245,15 +302,18 @@ def _entry_id(record: DecisionRecord) -> str:
 def _room_of(record: DecisionRecord) -> str | None:
     """The room the record names, when it names exactly one.
 
-    Two inputs name a room and no others do. `Repair` names the room whose slot
-    stopped answering; `HousePresence` names the rooms a house-emptiness was
-    decided from, and only when that list is exactly one is it "the room this
-    was about" rather than a set of rooms behind a house-level fact. Everything
-    else -- a byte-for-byte room-scoped evaluation's own record -- carries the
-    slot and the entities it read and not the room, so the answer is `None`
-    rather than a guess made from an entity id this function has no house to
-    resolve.
+    The record's own `room` is the answer whenever the engine wrote one -- it is
+    the scope the evaluation ran for, and nothing beats it. Only a record written
+    before the field existed has none, and for those two inputs still name a room
+    and no others do. `Repair` names the room whose slot stopped answering;
+    `HousePresence` names the rooms a house-emptiness was decided from, and only
+    when that list is exactly one is it "the room this was about" rather than a
+    set of rooms behind a house-level fact. Everything else carries the slot and
+    the entities it read and not the room, so the answer is `None` rather than a
+    guess made from an entity id this function has no house to resolve.
     """
+    if record.room is not None:
+        return record.room
     for entry in record.inputs:
         if isinstance(entry, Repair):
             return entry.room_id

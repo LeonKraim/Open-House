@@ -299,12 +299,6 @@ export const COMMANDS = {
    */
   profileImport: "open_house/profiles/import",
 
-  /** `{}` -> `{ entries: StoreEntry[], generated_at, cached }`. */
-  storeIndex: "open_house/store/index",
-
-  /** `{ pack, tier }` -> `{ installed: InstalledModule }`. */
-  storeInstall: "open_house/store/install",
-
   /** `{ limit?, before? }` -> `{ entries: DecisionLogEntry[] }`. */
   activityList: "open_house/activity/list",
 

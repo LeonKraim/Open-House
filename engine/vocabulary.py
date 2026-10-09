@@ -814,10 +814,19 @@ def _handwritten(root: Path) -> frozenset[str]:
     file readable by a person -- the check that reads it here and the check that
     reads it in `tools/catalog/examples.py` therefore agree on the format by
     construction rather than by both spelling a parser.
+
+    An absent marker is not an error. The listing names the official packs that
+    were written by hand rather than derived, and a checkout that ships no
+    official packs has nothing to list -- an empty allowlist is the true answer
+    and the engine composes a session from it, where raising would stop the
+    integration from loading over a directory it simply does not have. A marker
+    that is present but unreadable is still a failure: the listing exists and
+    says something, and not being able to read it is not the same as it saying
+    nothing.
     """
     path = root.joinpath(*_HANDWRITTEN_PATH)
     if not path.is_file():
-        raise MissingArtifactError(path)
+        return frozenset()
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:

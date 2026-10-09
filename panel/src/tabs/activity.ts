@@ -60,10 +60,26 @@ const OUTCOME_CHIP: Record<DecisionLogEntry["outcome"], string> = {
  * "all" as a menu option reads as a value that failed to load; "Any outcome"
  * reads as the choice it is.
  */
+/**
+ * What the outcome menu can be set to: a panel outcome, the three-value
+ * "Actions" default, or no filter at all.
+ *
+ * `"actions"` is not a panel outcome -- it is "everything but a skip" -- so it
+ * is a filter value and not a member of `DecisionLogEntry["outcome"]`. It is
+ * spelled here and on the server (`ha_adapter/live_export.ACTIONS`) the same
+ * way, because the server is what applies it.
+ */
+export type OutcomeChoice = DecisionLogEntry["outcome"] | "actions" | "all";
+
 const OUTCOME_FILTERS: readonly {
-  value: DecisionLogEntry["outcome"] | "all";
+  value: OutcomeChoice;
   label: string;
 }[] = [
+  // First, and the default: what the house *did*. A house writes far more skips
+  // than actions -- most evaluations are gated before they reach a rule -- so an
+  // unfiltered log opens on a wall of "nothing happened" and buries the answer a
+  // person came for. "Actions" is every row that is not a skip.
+  { value: "actions", label: "Actions" },
   { value: "all", label: "Any outcome" },
   { value: "applied", label: "Applied" },
   { value: "skipped", label: "Skipped" },
@@ -113,12 +129,15 @@ export function behaviourLabel(id: string): string {
 export function visibleEntries(
   entries: readonly DecisionLogEntry[],
   room: string,
-  outcome: DecisionLogEntry["outcome"] | "all",
+  outcome: OutcomeChoice,
 ): DecisionLogEntry[] {
   return entries.filter(
     (entry) =>
       (room === "" || entry.room === room) &&
-      (outcome === "all" || entry.outcome === outcome),
+      (outcome === "all" ||
+        (outcome === "actions"
+          ? entry.outcome !== "skipped"
+          : entry.outcome === outcome)),
   );
 }
 
@@ -152,7 +171,10 @@ export class ActivityTab extends OpenHouseElement {
   private liveStarting = false;
   private unsubscribe: (() => void) | null = null;
   private roomFilter = "";
-  private outcomeFilter: DecisionLogEntry["outcome"] | "all" = "all";
+  // The default the tab opens on: what the house did. `load` sends it to the
+  // server, which narrows the log *before* the window, so the page is full of
+  // actions rather than a slice of one tick's skips.
+  private outcomeFilter: OutcomeChoice = "actions";
   private expanded = new Set<string>();
 
   override connectedCallback(): void {
@@ -169,6 +191,18 @@ export class ActivityTab extends OpenHouseElement {
     void this.load();
   }
 
+  /**
+   * The outcome filter as the server spells it, or nothing for "any".
+   *
+   * Only the outcome goes to the server. The room stays a client-side narrowing
+   * on purpose: the room menu is built from the rows in hand, so a page the
+   * server had already narrowed to one room would offer that room alone and a
+   * person could not switch back.
+   */
+  private serverFilters(): { outcome?: string } {
+    return this.outcomeFilter === "all" ? {} : { outcome: this.outcomeFilter };
+  }
+
   private async load(): Promise<void> {
     this.isLoading = true;
     this.error = null;
@@ -177,13 +211,28 @@ export class ActivityTab extends OpenHouseElement {
       // No window named here on purpose: the client's default is the one sized
       // against how much the engine writes per tick (see `activity` there), and
       // a second number here would be a second answer to the same question.
-      this.entries = await this.requireClient().activity();
+      this.entries = await this.requireClient().activity(this.serverFilters());
     } catch (error) {
       this.error = this.toError(error);
     } finally {
       this.isLoading = false;
       this.requestUpdate();
     }
+  }
+
+  /**
+   * Point the outcome filter somewhere new.
+   *
+   * The server applies this filter, so a new value is a new read rather than a
+   * re-render -- and an open stream carries the filter too, so it is dropped and
+   * is the person's to reopen. Every path that changes the filter goes through
+   * here, so the two cannot disagree about which filter the rows in hand answer.
+   */
+  private setOutcomeFilter(value: OutcomeChoice): void {
+    if (value === this.outcomeFilter) return;
+    this.outcomeFilter = value;
+    if (this.live) this.stopLive();
+    void this.load();
   }
 
   private async toggleLive(): Promise<void> {
@@ -200,6 +249,7 @@ export class ActivityTab extends OpenHouseElement {
     try {
       const unsubscribe = await this.requireClient().subscribeActivity(
         (event: ActivityStreamEvent) => this.onStreamEvent(event),
+        this.serverFilters(),
       );
       opened = () => void unsubscribe();
     } catch (error) {
@@ -238,7 +288,7 @@ export class ActivityTab extends OpenHouseElement {
   /** Forget both filters, so a hidden entry comes back. */
   private clearFilters(): void {
     this.roomFilter = "";
-    this.outcomeFilter = "all";
+    this.setOutcomeFilter("all");
   }
 
   private get rooms(): string[] {
@@ -330,8 +380,9 @@ export class ActivityTab extends OpenHouseElement {
         <select
           aria-labelledby="activity-outcome-label"
           @change=${(event: Event) => {
-            this.outcomeFilter = (event.target as HTMLSelectElement)
-              .value as DecisionLogEntry["outcome"] | "all";
+            this.setOutcomeFilter(
+              (event.target as HTMLSelectElement).value as OutcomeChoice,
+            );
           }}
         >
           ${OUTCOME_FILTERS.map(
