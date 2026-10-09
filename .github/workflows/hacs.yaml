@@ -1,0 +1,40 @@
+# Open House -- the HACS Action.
+#
+# HACS is how a person installs this integration, and the repository has to be
+# acceptable to HACS before it can be listed in the default store. Two of those
+# requirements are properties of the repository rather than of any file in it --
+# a description, issues enabled, topics defined, brand assets present -- and the
+# only way to know they hold is to ask the tool that decides. The Action is that
+# tool: it runs HACS's own validation against this repository.
+#
+# There is deliberately no `ignore:` list. The store's rule is that this action
+# "must pass without any errors or ignores", so a check suppressed here would be
+# a listing that cannot be opened rather than one that can.
+#
+# The schedule is the one HACS itself recommends: the repository-side facts this
+# job reads -- topics, the description, issues -- are changed on GitHub rather
+# than in a commit, so a run triggered only by pushes would never see a
+# regression in them.
+name: HACS Action
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 0 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  hacs:
+    name: HACS validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Run the HACS Action
+        uses: hacs/action@main
+        with:
+          category: integration

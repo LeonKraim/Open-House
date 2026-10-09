@@ -1,0 +1,37 @@
+# Open House -- Hassfest.
+#
+# The integration is loaded by Home Assistant at runtime, and Home Assistant's
+# own validator reads it as one: the manifest's keys, the translation files
+# against `strings.json`, the config flow's steps and the brand assets beside
+# them. Every one of those is a way for the integration to be refused by the
+# runtime that this repository's tests do not have installed, which is exactly
+# the class of failure a CI job should catch rather than a user.
+#
+# It is also a requirement of the HACS default store, alongside the Action in
+# `hacs.yaml`, so the two run together for the same reason: to know now rather
+# than after a submission.
+#
+# Like the HACS Action, this runs on a schedule as well as on pushes --
+# Hassfest's checks track Home Assistant's own expectations, which move while
+# this repository stands still.
+name: Hassfest
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 0 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  hassfest:
+    name: Hassfest validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Run Hassfest
+        uses: home-assistant/actions/hassfest@master
