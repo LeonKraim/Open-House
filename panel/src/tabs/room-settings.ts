@@ -57,6 +57,10 @@ import {
 // The same element the Dev tab draws, because it is the same thing: a module
 // this house hosts, with its settings and its outputs.
 import "../components/hosted-module.ts";
+// The one rule for "is there a Node-RED here", shared with the two screens that
+// offer a flow cast: the slot rows below offer a Node-RED *rule*, and the three
+// have to answer the same question the same way.
+import { hasNodeRed } from "../components/casts.ts";
 import type {
   AxisRef,
   BindingStatus,
@@ -121,9 +125,17 @@ export class RoomSettings extends OpenHouseElement {
     // while the write is in flight, and a success has a line to land in.
     dashboardBusy: { state: true },
     dashboardNotice: { state: true },
+    // Where this house's Node-RED is, or `null` before it has been asked. The
+    // slot rows draw a "Set it to" menu with a Node-RED kind in it, and that
+    // kind is greyed once the house has said it has none -- so the answer is
+    // drawn from and has to be reactive.
+    nodeRedUrl: { state: true },
   };
 
   declare roomId: string;
+
+  /** The address the integration resolves for Node-RED, `""` when there is none. */
+  private nodeRedUrl: string | null = null;
 
   private room: RoomDetail | null = null;
   /**
@@ -235,6 +247,16 @@ export class RoomSettings extends OpenHouseElement {
         client.rooms(),
       ]);
       this.rooms = rooms;
+      // Read separately, and its fault swallowed, for the reason the hosted
+      // modules below are: the room is what this page is, and a menu that cannot
+      // say whether there is a Node-RED is not worth a blank page over. A fault
+      // leaves it *unknown* rather than "none" -- `hasNodeRed` reads an
+      // unanswered question as yes, because only the house's own answer may take
+      // a feature away.
+      this.nodeRedUrl = await client
+        .capabilities()
+        .then((answer) => answer.node_red_url ?? "")
+        .catch(() => null);
       // Read separately from the room's own answer, and its fault swallowed: a
       // house that cannot list its own modules still has rooms, devices and
       // bindings, and a page that went blank for that reason would hide the
@@ -1423,6 +1445,10 @@ export class RoomSettings extends OpenHouseElement {
     const slotOptions = {
       house: module.house,
       disabled: this.busy || !this.admin,
+      // Whether the "A Node-RED flow" kind of a slot rule is reachable at all.
+      // Read off the address this page fetched once, so every row of every
+      // module answers the same way.
+      nodeRedAvailable: hasNodeRed(this.nodeRedUrl),
       onPick: (slot: ModuleSlot) => void this.openSlotPicker(module, slot),
       onReset: (slot: ModuleSlot) => void this.resetSlot(module, slot),
       onRename: (slot: ModuleSlot, label: string) =>

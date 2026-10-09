@@ -42,7 +42,7 @@ import {
   castRowNames,
   castAutomationAnswers,
   castModeOf,
-  castModeSelector,
+  castMenuOptions,
   editDecision,
   fieldIndex,
   hostedOutputs,
@@ -140,8 +140,7 @@ test("a cast is offered on every row, and the menu names every editor", () => {
   // output, which meant the rows where the want arises most -- a value typed in
   // that should have been worked out, an input left to the module that should
   // have been a question about the house -- were the rows with no box.
-  const options = (castModeSelector(false).select as { options: { value: string }[] })
-    .options.map((option) => option.value);
+  const options = castMenuOptions(false, true).map((option) => option.value);
   assert.deepEqual(options, ["none", "condition", "nodered", "automation", "template"]);
 });
 
@@ -153,9 +152,7 @@ test("an automation cast is offered everywhere, and opens on the automation behi
   // writes the helper the row reads. It is offered on every row, like the other
   // three, for the reason they are: the want can arrive at any of them.
   for (const trigger of [false, true]) {
-    const options = (castModeSelector(trigger).select as {
-      options: { value: string }[];
-    }).options.map((option) => option.value);
+    const options = castMenuOptions(trigger, true).map((option) => option.value);
     assert.ok(options.includes("automation"));
   }
   // A setting an automation answers opens on the automation, exactly as one a
@@ -179,15 +176,19 @@ test("the row a trigger names keeps the template option, and says what it does",
   // matches nothing and an automation that installs and never fires. That is
   // not a reason to take the answer away -- it is the person's screen -- so the
   // option stays and its own label carries the warning.
-  const options = (castModeSelector(true).select as {
-    options: { value: string; label: string }[];
-  }).options;
+  const options = castMenuOptions(true, true);
   const template = options.find((option) => option.value === "template");
   assert.ok(template?.label.toLowerCase().includes("will not work"));
   // The condition is the one that does work here, and it is offered as it is
   // everywhere else.
   assert.ok(options.some((option) => option.value === "condition"));
-  assert.equal(castModeSelector(true).select !== castModeSelector(false).select, true);
+  // The warning is the *only* thing the trigger changes: the same menu on a row
+  // where the template works says so plainly instead.
+  const elsewhere = castMenuOptions(false, true).find(
+    (option) => option.value === "template",
+  );
+  assert.notEqual(elsewhere?.label, template?.label);
+  assert.equal(elsewhere?.disabled, false);
 });
 
 test("the Node-RED option is offered on every row, whatever it holds", () => {
@@ -197,14 +198,45 @@ test("the Node-RED option is offered on every row, whatever it holds", () => {
   // holds a number would take the cast away from exactly the inputs most worth
   // programming.
   for (const trigger of [false, true]) {
-    const options = (castModeSelector(trigger).select as {
-      options: { value: string }[];
-    }).options.map((option) => option.value);
+    const options = castMenuOptions(trigger, true).map((option) => option.value);
     assert.ok(options.includes("nodered"));
     assert.ok(options.includes("none"));
     assert.ok(options.includes("condition"));
     assert.ok(options.includes("template"));
   }
+});
+
+test("a house with no Node-RED keeps the flow cast on the menu and cannot pick it", () => {
+  // "make it so ... simply grey out any node red features until its installed".
+  // The cast is *disabled* and not removed: the menu is how a person finds out
+  // the cast is there, and one with three entries where there are four is a
+  // person who never learns what they could have. The label carries the reason,
+  // because the reason is the only useful thing about a control that cannot be
+  // used.
+  const options = castMenuOptions(false, false);
+  const flow = options.find((option) => option.value === "nodered");
+  assert.ok(flow, "the flow cast is still offered");
+  assert.equal(flow.disabled, true);
+  assert.match(flow.label, /not set up/);
+  // **And it is the only one.** A house without Node-RED still has the other
+  // three casts, and taking them away with it would be the menu answering for
+  // the person.
+  for (const other of options.filter((option) => option.value !== "nodered")) {
+    assert.equal(other.disabled, false, `${other.value} is still offered`);
+  }
+});
+
+test("a house with a Node-RED offers the flow cast, and says nothing is missing", () => {
+  // Both halves of what "has a Node-RED" means come out the same here, which is
+  // the point: the person's own Node-RED, at the address they set, and the
+  // bundled add-on are one answer to this menu -- the server resolves which one
+  // a flow is pushed to (`node_red.async_client`), and this screen only needs
+  // to know that one of them exists.
+  const flow = castMenuOptions(false, true).find(
+    (option) => option.value === "nodered",
+  );
+  assert.equal(flow?.disabled, false);
+  assert.doesNotMatch(flow?.label ?? "", /not set up/);
 });
 
 test("and what Open House builds for it narrows to the rows it can start", () => {

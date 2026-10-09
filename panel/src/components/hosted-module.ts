@@ -63,8 +63,9 @@ import {
   canFlowWatch,
   castBinding,
   castHeldBy,
+  castMenu,
   castModeForSetting,
-  castModeSelector,
+  hasNodeRed,
   isTemplate,
   writtenCondition,
   type CastMode,
@@ -298,12 +299,31 @@ export class HostedModuleCard extends OpenHouseElement {
     // that fetched the house and only the page can say which house it fetched.
     revision: { type: Number },
     stale: { type: Boolean },
+    // Where this house's Node-RED is, or `null` before it has been asked.
+    //
+    // Reactive because the cast menu and every flow's editor are drawn from it:
+    // a plain field filled from a promise is a menu that goes on offering a flow
+    // cast there is nowhere to build.
+    nodeRedUrl: { state: true },
   };
 
   declare module: HostedModule;
   declare removable: boolean;
   declare revision: number;
   declare stale: boolean;
+
+  /**
+   * The address the integration resolves for Node-RED, `""` when there is none.
+   *
+   * **`null` and `""` are different answers, and the difference is on screen.**
+   * The card is given its module and renders before this has been read, so an
+   * initial `""` would draw a house that *has* Node-RED with the flow cast
+   * greyed until the answer landed -- a control that flickers on every open. So
+   * the initial `null` is "not asked yet" and is read as *offered*: the entry
+   * goes grey only once the house has said there is no Node-RED to put it in,
+   * which is the only case where greying it is the truth.
+   */
+  private nodeRedUrl: string | null = null;
 
   private draft: Record<string, unknown> = {};
   /** A template cast typed over a setting's choice, by setting name. */
@@ -422,6 +442,7 @@ export class HostedModuleCard extends OpenHouseElement {
       </p>
       <open-house-node-red
         .client=${this.client}
+        .url=${this.nodeRedUrl ?? undefined}
         .label=${`The flow for ${setting.title || setting.name}`}
         .flow=${setting.flow_id ?? ""}
       ></open-house-node-red>`;
@@ -469,6 +490,35 @@ export class HostedModuleCard extends OpenHouseElement {
   /** Which cast editor one setting is showing: what was clicked, else what it is. */
   private modeOf(name: string, row?: ModuleInputRow): CastMode {
     return this.castModes[name] ?? (row ? castModeForSetting(row) : "none");
+  }
+
+  /**
+   * A cast picked from the menu: the row shows that editor from now on, and is saved.
+   *
+   * **The mode is all this carries, and the drafts stay where they are.** The
+   * menu used to be a field of the settings form, so a change to it arrived
+   * beside whatever the form held for the *editor* underneath -- which, when the
+   * menu was the only thing that changed, was nothing. Taking the menu out of the
+   * form makes that explicit: a template typed or a condition built is still the
+   * person's, and whether it is sent is decided where it always was, in `save` --
+   * an editor showing nothing writes nothing, so a cast picked and left empty is
+   * a row with no cast rather than a row with an empty one.
+   */
+  private chooseCast(setting: ModuleInputRow, next: CastMode): void {
+    this.castModes = { ...this.castModes, [setting.name]: next };
+    this.queueSave();
+  }
+
+  /**
+   * Whether there is a Node-RED for a flow cast to be built in.
+   *
+   * True while the house has not been asked, for the reason the field gives: this
+   * answers a question about the *screen*, and the only answer that may grey a
+   * control is the one the house itself gave. The rule is `hasNodeRed`, shared
+   * with the slot rule's menu so the two cannot read the same fact differently.
+   */
+  private get nodeRedAvailable(): boolean {
+    return hasNodeRed(this.nodeRedUrl);
   }
 
   /**
@@ -1114,6 +1164,37 @@ export class HostedModuleCard extends OpenHouseElement {
     }
   }
 
+  /**
+   * Ask whether this house has a Node-RED, once, before anything is drawn.
+   *
+   * Read here rather than handed down because the card is drawn on more than one
+   * page and the answer is one value for the whole panel -- the same reason
+   * `node-red-editor.ts` reads it for itself rather than being threaded through
+   * every card between it and the panel. Asked in `firstUpdated` and not at
+   * construction: `client` is a binding the parent commits *after* this element
+   * is in the DOM, so a read any earlier would ask a card that has no client.
+   */
+  protected override firstUpdated(): void {
+    void this.loadNodeRed();
+  }
+
+  /**
+   * Fill in whether a flow cast is reachable.
+   *
+   * **A failure is not worth a banner.** A panel that cannot read its own
+   * capabilities has no Node-RED it can point a person at, and the answer this
+   * leaves -- no address, so the entry greyed -- is the honest one either way;
+   * the row above still says what the module does.
+   */
+  private async loadNodeRed(): Promise<void> {
+    try {
+      const capabilities = await this.requireClient().capabilities();
+      this.nodeRedUrl = capabilities.node_red_url ?? "";
+    } catch {
+      this.nodeRedUrl = "";
+    }
+  }
+
   protected override willUpdate(changed: Map<string, unknown>): void {
     if (!changed.has("module")) return;
     // A fresh answer for this module has changed hands, so the two things the
@@ -1535,11 +1616,6 @@ export class HostedModuleCard extends OpenHouseElement {
         }
         const data: Record<string, unknown> = { [setting.name]: value };
         if (castOffered) {
-          schema.push({
-            name: "cast_mode",
-            selector: castModeSelector(setting.in_trigger),
-          });
-          data.cast_mode = mode;
           if (mode === "template") {
             schema.push({ name: "cast", selector: { template: {} } });
             data.cast = this.casting[setting.name] ?? "";
@@ -1556,6 +1632,16 @@ export class HostedModuleCard extends OpenHouseElement {
           <label class="label" for=${`setting-${module.slug}-${setting.name}`}>
             ${setting.title || setting.name}
           </label>
+          ${castOffered
+            ? castMenu({
+                id: `cast-menu-${module.slug}-${setting.name}`,
+                label: "Set it to",
+                value: mode,
+                inTrigger: setting.in_trigger,
+                nodeRedAvailable: this.nodeRedAvailable,
+                onChoose: (next) => this.chooseCast(setting, next),
+              })
+            : nothing}
           <ha-form
             data-module=${module.slug}
             data-setting=${setting.name}
@@ -1563,7 +1649,6 @@ export class HostedModuleCard extends OpenHouseElement {
             .data=${data}
             .schema=${schema}
             .computeLabel=${(item: { name: string }) => {
-              if (item.name === "cast_mode") return "Set it to";
               if (item.name === "cast") {
                 return mode === "condition" ? "The condition" : "The template";
               }
@@ -1583,15 +1668,17 @@ export class HostedModuleCard extends OpenHouseElement {
               // whatever else the row offers.
               this.queueSave();
               if (!castOffered) return;
-              const next = (answered.cast_mode ?? "none") as CastMode;
-              this.castModes = { ...this.castModes, [setting.name]: next };
-              if (next === "template") {
+              // The menu is no longer one of this form's fields, so the mode is
+              // read off what the form was *drawn* for: the only other control
+              // it carries is the editor of the cast that menu is showing, and
+              // what that editor reports belongs to that cast.
+              if (mode === "template") {
                 this.casting = {
                   ...this.casting,
                   [setting.name]: String(answered.cast ?? ""),
                 };
               }
-              if (next === "condition") {
+              if (mode === "condition") {
                 this.conditions = {
                   ...this.conditions,
                   [setting.name]: answered.cast,

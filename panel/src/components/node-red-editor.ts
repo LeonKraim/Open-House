@@ -220,7 +220,16 @@ export class NodeRedEditor extends OpenHouseElement {
     // flashed at every house that has one for the length of the round trip.
     if (this.url === undefined) return html``;
     if (!this.url) {
-      return html`<p class="help" data-node-red>
+      // **Greyed, not hidden: a Node-RED feature in a house without one.** The
+      // sentence is how a person finds out what to install, so it stays -- but
+      // it is drawn as the *unavailable* state rather than as an ordinary
+      // remark, which is the same reading the cast menu gives the same fact.
+      // There is no bar under it and no button in it, because there is no
+      // editor to reload and none to open in a tab; a live-looking Reload over
+      // an address that is not there is the one thing this block must not draw.
+      // Same class and same wording for every caller -- the import screen's row
+      // and the room card's -- so the two cannot drift apart.
+      return html`<p class="help unavailable" data-node-red>
         Install the Open House Node-RED add-on, or set a Node-RED address in
         this integration's options, and its editor is embedded here.
       </p>`;

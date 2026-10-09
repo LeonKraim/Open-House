@@ -139,6 +139,28 @@ export const sharedStyles = css`
     cursor: default;
   }
 
+  /*
+   * A block this house cannot reach yet -- Node-RED that is not set up.
+   *
+   * Drawn rather than hidden, because the sentence inside it is how a person
+   * finds out what to install, and greyed rather than ordinary so it does not
+   * read as a control that did not work. The same class on the editor's block
+   * and on the cast menu's disabled entry, so "not available" is one look in
+   * this panel rather than two that agree only until one is edited.
+   */
+  .unavailable {
+    opacity: 0.6;
+  }
+
+  /*
+   * A disabled entry in a menu: one a person can read and cannot pick. Engines
+   * grey it by default; restated so the cast a house has no Node-RED for cannot
+   * read as an ordinary choice in any of them.
+   */
+  option:disabled {
+    color: var(--disabled-text-color, var(--secondary-text-color));
+  }
+
   button.primary {
     background: var(--primary-color);
     border-color: var(--primary-color);

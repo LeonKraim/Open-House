@@ -29,6 +29,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { HassLike } from "../api/connection.ts";
 import type { ModuleSlot, ModuleSlotRuleKind } from "../api/models.ts";
 import { STATUS_CHIP, STATUS_LABEL } from "./binding-status.ts";
+import { NODE_RED_UNAVAILABLE } from "./casts.ts";
 import type { DetachedDetail } from "./detach.ts";
 import "./detach.ts";
 
@@ -134,6 +135,15 @@ export interface SlotRowCommon {
   rule?: (slot: ModuleSlot) => SlotRuleDraft | null;
   /** Whether a rule write is in flight for this row. */
   ruleBusy?: (slot: ModuleSlot) => boolean;
+  /**
+   * Whether this house has a Node-RED for a rule to run a flow in.
+   *
+   * Optional, and absent reads as *yes*, for the reason `hasNodeRed` gives: the
+   * page renders before it has asked, and an unanswered question must not take a
+   * feature away. A `false` is the house saying there is none, and it greys the
+   * one kind of rule that needs one.
+   */
+  nodeRedAvailable?: boolean;
   /** The server's refusal of the last rule write on this row, or `""`. */
   ruleFailed?: (slot: ModuleSlot) => string;
   onRuleDraft?: (slot: ModuleSlot, draft: SlotRuleDraft) => void;
@@ -317,7 +327,21 @@ function slotRuleRow(options: SlotDeviceRowOptions): TemplateResult | typeof not
         <option value="">A device (above)</option>
         <option value="template">A template (an expression)</option>
         <option value="condition">A condition</option>
-        <option value="flow">A Node-RED flow</option>
+        <!-- **The one kind this house may not be able to run.** A flow rule is
+             a Node-RED flow, so a house with no Node-RED can name it and not
+             build it -- and the option is *disabled* rather than dropped, so the
+             person learns the kind exists and what turns it on. Same phrase as
+             the cast menu's, because it is the same fact. A slot that already
+             holds a flow rule keeps it: the option being unpickable does not
+             stop the rule's own fields drawing the entity of one already there. -->
+        <option
+          value="flow"
+          ?disabled=${options.nodeRedAvailable === false}
+        >
+          ${options.nodeRedAvailable === false
+            ? NODE_RED_UNAVAILABLE
+            : "A Node-RED flow"}
+        </option>
         <option value="script">HAOS script logic</option>
       </select>
       ${hasRule

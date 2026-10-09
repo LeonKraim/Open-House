@@ -37,8 +37,9 @@ import { html, nothing, type TemplateResult } from "lit";
 import { OpenHouseElement } from "../base.ts";
 import {
   bySelector,
-  castModeSelector,
+  castMenu,
   entityIds,
+  hasNodeRed,
   isTemplate,
   writtenCondition,
   type CastMode,
@@ -47,7 +48,10 @@ import {
 // whichever screen it is looking at: the rule is the components module's, and
 // the import screen and the card share it rather than each writing their own.
 export {
-  castModeSelector,
+  NODE_RED_UNAVAILABLE,
+  castMenu,
+  castMenuOptions,
+  hasNodeRed,
   writtenCondition,
   type CastMode,
 } from "../components/hosted-module.ts";
@@ -1077,14 +1081,12 @@ export class HostModuleScreen extends OpenHouseElement {
     }
     if (decision.value !== undefined) baseData[`value_${index}`] = decision.value;
     // The cast, and everything it brings, addressed by the same row's index.
-    const castSchema: FormItem[] = [
-      {
-        name: `cast_mode_${index}`,
-        selector: castModeSelector(input.in_trigger),
-      },
-    ];
+    // **The menu is not one of these fields**, and that is the point: it is
+    // drawn by `castMenu`, below, because Home Assistant's select selector
+    // cannot disable the one entry a house without Node-RED cannot reach -- and
+    // a menu that offers a cast there is nowhere to build is a menu that lies.
+    const castSchema: FormItem[] = [];
     const castData: Record<string, unknown> = {
-      [`cast_mode_${index}`]: mode,
       [`expose_${index}`]: decision.expose,
     };
     if (mode === "template") {
@@ -1138,6 +1140,15 @@ export class HostModuleScreen extends OpenHouseElement {
               points the trigger at the answer.
             </p>`
           : nothing}
+        ${castMenu({
+          id: `cast-menu-${index}`,
+          label: "Cast it",
+          value: mode,
+          inTrigger: input.in_trigger,
+          nodeRedAvailable: hasNodeRed(this.nodeRedUrl),
+          onChoose: (next) =>
+            this.applyInput(index, { [`cast_mode_${index}`]: next }),
+        })}
         <ha-form
           data-input=${index}
           .hass=${this.hass}
@@ -1146,7 +1157,17 @@ export class HostModuleScreen extends OpenHouseElement {
           .computeLabel=${(item: FormItem) =>
             labelFor(item.name, decision.how, mode)}
           @value-changed=${(event: CustomEvent<{ value: Record<string, unknown> }>) => {
-            this.applyInput(index, event.detail.value);
+            // **The mode rides with the submission, because the menu is no
+            // longer a field of this form.** `applyInput` reads the menu as the
+            // marker of which of the row's two forms spoke, so a submission
+            // without it is read as the plain form's and leaves the cast alone.
+            // Stating it here rather than leaving it in `data` for the form to
+            // echo back is the part that does not depend on a form reporting a
+            // field it never drew.
+            this.applyInput(index, {
+              ...event.detail.value,
+              [`cast_mode_${index}`]: mode,
+            });
           }}
         ></ha-form>
         ${mode === "automation" && input.in_trigger
@@ -1783,15 +1804,6 @@ export function castAnswers(decisions: readonly InputDecision[]): Record<string,
   return found;
 }
 
-/**
- * The menu a row's cast offers, which is not the same menu on every row.
- *
- * `castModeSelector` is the components module's, beside the other half of the
- * cast -- what an empty condition means and what a template cast binds to -- so
- * the card and this screen offer one menu rather than two that agree today.
- */
-
-
 /** `"lights_evening_scene/gate_open"` as its two halves. */
 export function splitOutput(value: unknown): [string, string] {
   if (typeof value !== "string") return ["", ""];
@@ -2024,11 +2036,12 @@ export function labelFor(name: string, how?: How, mode?: CastMode): string {
     // this field relabelled.
     return how === "template" ? "Condition or template" : "Value";
   }
-  // The cast menu asks what to cast the answer *to*, and the editor under it is
-  // named for which one it is: a person looking at a numbered box under a
-  // condition builder should not have to work out from the box alone that they
-  // are not looking at a template.
-  if (name.startsWith("cast_mode_")) return "Cast it";
+  // The editor under the menu is named for which cast it is: a person looking at
+  // a numbered box under a condition builder should not have to work out from the
+  // box alone that they are not looking at a template. The menu's own label --
+  // "Cast it" -- is not here any more: the menu is drawn by `castMenu`, which is
+  // given its label, because a `ha-form` field cannot be the disabled entry a
+  // house without Node-RED needs.
   if (name.startsWith("cast_")) {
     if (mode === "condition") return "The condition";
     if (mode === "template") return "The template";

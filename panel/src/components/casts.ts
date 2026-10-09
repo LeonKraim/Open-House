@@ -31,6 +31,8 @@
  *     they need and adds the trigger. What the input reads is the helper's state.
  */
 
+import { html, type TemplateResult } from "lit";
+
 import type { ModuleBinding, ModuleInputRow } from "../api/models.ts";
 
 /**
@@ -82,6 +84,49 @@ export function isTemplate(value: unknown): boolean {
 }
 
 /**
+ * What a Node-RED entry says in a house that has none.
+ *
+ * Exported because more than one menu offers a Node-RED entry -- a row's cast,
+ * and a slot rule's kind -- and the same fact has to read the same way on both.
+ * A person who learns "not set up" on one screen should not read a second phrase
+ * for it on the next.
+ */
+export const NODE_RED_UNAVAILABLE = "A Node-RED flow -- Node-RED is not set up";
+
+/**
+ * Whether a resolved Node-RED address means there is one to use.
+ *
+ * **`null` is "not asked yet", and it reads as yes.** A screen is given its
+ * module (or its room) and renders before the address has been read, so an
+ * initial "no address" would grey a working house's Node-RED features for the
+ * length of a round trip -- a control flickering on every open. And the only
+ * answer entitled to take a feature away is the house's own, so an unanswered
+ * question leaves it offered. An empty string is the house saying there is none.
+ *
+ * Every screen that offers a Node-RED entry holds the address this way and asks
+ * this, so the rule is one function rather than one per screen.
+ */
+export function hasNodeRed(url: string | null): boolean {
+  return url === null || url !== "";
+}
+
+/**
+ * One entry in a cast menu: what picking it means, and what it reads as.
+ *
+ * `disabled` marks the one entry a house may not be able to reach yet -- a
+ * **Node-RED flow** in a house that has no Node-RED. It is offered rather than
+ * withheld, because the menu is how a person finds out the cast exists at all:
+ * a flow of a neighbour's that they have seen working is a thing they will look
+ * for here, and a menu of three where there are four is a person who never
+ * learns what they could have had. Its own label says what is missing.
+ */
+export interface CastOption {
+  value: CastMode;
+  label: string;
+  disabled: boolean;
+}
+
+/**
  * The menu a row's cast offers, which is not the same menu on every row.
  *
  * All four editors are offered everywhere -- a cast is something a person may
@@ -95,48 +140,133 @@ export function isTemplate(value: unknown): boolean {
  *
  * A **condition**, on the other hand, is *better* there than anywhere else: Open
  * House evaluates it itself and points the trigger at the entity it makes.
+ *
+ * **The flow is the one entry that depends on the house rather than the row**,
+ * which is why this takes a second argument. A house with no Node-RED -- no
+ * address set in the integration's options and the bundled add-on not installed
+ * -- has nowhere to build a flow and nothing to push one to, so the entry is
+ * disabled and says so. Which is also the whole rule the user asked for: every
+ * Node-RED feature uses the person's own Node-RED when they have one (see
+ * `node_red.async_client`, which prefers the configured address and falls back
+ * to the add-on), and until there is one, the cast is on the menu but out of
+ * reach.
  */
-export function castModeSelector(inTrigger: boolean): Record<string, unknown> {
-  return {
-    select: {
-      mode: "dropdown",
-      options: [
-        // The row's own field, and the default: for most settings the answer is
-        // a value or a device, and the menu is not what they are here for.
-        { value: "none", label: "Input field" },
-        // **First, and this is the whole point of the menu.** A condition is
-        // what a person reaches for when the answer is not a thing but a
-        // question about the house, and it is the only one of the four that
-        // works on a row a trigger names -- Open House works the condition out
-        // and points the trigger at the entity it makes.
-        { value: "condition", label: "A condition (Home Assistant's editor)" },
-        // **On every row, and that is deliberate.** A flow is code, and what a
-        // person does with it is theirs to decide: the output node -- the half
-        // that hands a value back to this input -- is made whichever way the row
-        // was answered, and the input node is made when the row's own answer
-        // names an entity to trigger on. A row holding a number gets the output
-        // node and an empty left-hand side to build into, which is the case this
-        // was asked for. Offering it only where Open House could guess the
-        // trigger would take the option away from the inputs most worth
-        // programming.
-        { value: "nodered", label: "A Node-RED flow (nodes, in Node-RED)" },
-        // **Home Assistant's own automation, which writes the value.** The one
-        // cast that *runs on its own*: a script only runs when something calls
-        // it, so it can never keep an input current between runs, while an
-        // automation triggers on the house moving and writes a helper the row
-        // reads. Open House makes the helper and seeds the automation with the
-        // action that sets it, so the person opens Home Assistant's own editor on
-        // it, sees the syntax, and adds the trigger.
-        { value: "automation", label: "HAOS automation (writes the value)" },
-        {
-          value: "template",
-          label: inTrigger
-            ? "A template -- will not work here, see below"
-            : "A template (an expression)",
-        },
-      ],
+export function castMenuOptions(
+  inTrigger: boolean,
+  nodeRedAvailable: boolean,
+): CastOption[] {
+  return [
+    // The row's own field, and the default: for most settings the answer is
+    // a value or a device, and the menu is not what they are here for.
+    { value: "none", label: "Input field", disabled: false },
+    // **First, and this is the whole point of the menu.** A condition is
+    // what a person reaches for when the answer is not a thing but a
+    // question about the house, and it is the only one of the four that
+    // works on a row a trigger names -- Open House works the condition out
+    // and points the trigger at the entity it makes.
+    {
+      value: "condition",
+      label: "A condition (Home Assistant's editor)",
+      disabled: false,
     },
-  };
+    // **On every row, and that is deliberate.** A flow is code, and what a
+    // person does with it is theirs to decide: the output node -- the half
+    // that hands a value back to this input -- is made whichever way the row
+    // was answered, and the input node is made when the row's own answer
+    // names an entity to trigger on. A row holding a number gets the output
+    // node and an empty left-hand side to build into, which is the case this
+    // was asked for. Offering it only where Open House could guess the
+    // trigger would take the option away from the inputs most worth
+    // programming.
+    //
+    // The label says what is missing when there is no Node-RED, so the reason
+    // is on the screen rather than in a tooltip or in nothing at all.
+    {
+      value: "nodered",
+      label: nodeRedAvailable
+        ? "A Node-RED flow (nodes, in Node-RED)"
+        : NODE_RED_UNAVAILABLE,
+      disabled: !nodeRedAvailable,
+    },
+    // **Home Assistant's own automation, which writes the value.** The one
+    // cast that *runs on its own*: a script only runs when something calls
+    // it, so it can never keep an input current between runs, while an
+    // automation triggers on the house moving and writes a helper the row
+    // reads. Open House makes the helper and seeds the automation with the
+    // action that sets it, so the person opens Home Assistant's own editor on
+    // it, sees the syntax, and adds the trigger.
+    {
+      value: "automation",
+      label: "HAOS automation (writes the value)",
+      disabled: false,
+    },
+    {
+      value: "template",
+      label: inTrigger
+        ? "A template -- will not work here, see below"
+        : "A template (an expression)",
+      disabled: false,
+    },
+  ];
+}
+
+/** What a cast menu is showing, and what to do when another entry is picked. */
+export interface CastMenu {
+  /** The id the label carries, so the select is named by the label on screen. */
+  id: string;
+  /** What the menu is called above it. */
+  label: string;
+  /** The entry showing now. */
+  value: CastMode;
+  /** Whether the row is one a trigger names, which relabels the template. */
+  inTrigger: boolean;
+  /** Whether this house has a Node-RED to build a flow in and push it to. */
+  nodeRedAvailable: boolean;
+  onChoose: (mode: CastMode) => void;
+}
+
+/**
+ * The cast menu itself, drawn by this module rather than by `ha-form`.
+ *
+ * **It left the form's schema for one reason: Home Assistant's select selector
+ * cannot disable an option.** `SelectOptionDict` is `{value, label}`, and the
+ * selector validates its options strictly -- a `disabled` key is not an unknown
+ * field it ignores, it is refused outright (`not a valid option at
+ * 'options[0].disabled'`, checked against the version the container runs), so a
+ * menu drawn from a schema has no way to offer an entry a person can see and
+ * cannot pick. A native `<select>` has exactly that, and this panel already
+ * draws its own selects wherever it needs one -- `activity.ts` and this card's
+ * own configuration menu among them -- so the cast menu is one of those, built
+ * from the same option list both screens share.
+ *
+ * **A disabled entry that is also the current answer stays selected.** A row a
+ * flow already answers goes on reading as one when the Node-RED that built it
+ * is taken away: the menu shows what the row *holds*, and moving the marker to
+ * another entry would be this screen quietly answering for the person. A
+ * browser draws a disabled option as the selected one and will not let it be
+ * picked again -- which is the right pair of behaviours for a row that is still
+ * a flow and can no longer be edited into one.
+ */
+export function castMenu(menu: CastMenu): TemplateResult {
+  return html`<div class="field">
+    <span class="label" id=${menu.id}>${menu.label}</span>
+    <select
+      aria-labelledby=${menu.id}
+      @change=${(event: Event) => {
+        menu.onChoose((event.target as HTMLSelectElement).value as CastMode);
+      }}
+    >
+      ${castMenuOptions(menu.inTrigger, menu.nodeRedAvailable).map(
+        (option) => html`<option
+          value=${option.value}
+          ?selected=${option.value === menu.value}
+          ?disabled=${option.disabled}
+        >
+          ${option.label}
+        </option>`,
+      )}
+    </select>
+  </div>`;
 }
 
 /**
