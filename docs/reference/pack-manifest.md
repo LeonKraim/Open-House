@@ -308,8 +308,9 @@ install reports one set of missing slots. Left off -- the default -- the device 
 optional, which is what lets a pack offer a fridge contact and still run without
 one.
 
-This is the clause `packs/official/fridge-guard.yaml` ships to exercise, and it
-is the only shipped pack that declares a device of its own.
+This is the clause the fridge guard — a bundled example pack, kept in the working
+tree rather than shipped — exists to exercise, and it is the only pack in that
+corpus that declares a device of its own.
 
 ## A worked example: a derived pack
 

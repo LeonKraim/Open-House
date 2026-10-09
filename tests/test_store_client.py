@@ -208,13 +208,19 @@ def _use(session: _FakeSession) -> _FakeSession:
 # -- No address, no Store ----------------------------------------------------
 
 
-def test_no_address_means_no_store_and_no_connection() -> None:
-    """The ordinary state of every install, and the reason it costs nothing.
+def test_no_address_means_no_store_and_no_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The state a build that ships no address of its own is in.
 
     A house that has never heard of the Store must not have anything opened for
     it: no session is built, no request is made, and every caller is handed
     `None` so it has one place to see that the Store simply is not there.
+
+    "No address" has to be arranged rather than assumed, because this build
+    ships one: the empty case is a build whose `DEFAULT_URL` is empty.
     """
+    monkeypatch.setattr(store_module, "DEFAULT_URL", "")
     session = _use(_FakeSession([]))
     assert asyncio.run(store_module.async_client(None, {})) is None
     # A blank address is no address, whatever whitespace it arrived with.
@@ -234,8 +240,15 @@ def test_the_refusal_names_where_the_address_goes() -> None:
     )
 
 
-def test_claiming_with_no_address_is_refused_rather_than_posted() -> None:
-    """A claim needs an address as much as a read does, and says so in words."""
+def test_claiming_with_no_address_is_refused_rather_than_posted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A claim needs an address as much as a read does, and says so in words.
+
+    "No address" has to be arranged rather than assumed: this build ships one, so
+    the empty case is a build that ships none.
+    """
+    monkeypatch.setattr(store_module, "DEFAULT_URL", "")
     entry = _Entry({})
     hass = _Hass()
     with pytest.raises(store_module.StoreError) as refused:
@@ -249,10 +262,10 @@ def test_the_address_falls_back_to_the_one_this_build_ships_with(
 ) -> None:
     """The address a house does not have to type, and why it is a fallback.
 
-    `DEFAULT_URL` is empty in this repository today, which is what makes an
-    unconfigured house ask for one. Filled in, it is how every house is pointed
-    at the Store without anybody typing anything -- so this pins the *seam* rather
-    than the value, and it would still pass on the day the value arrives.
+    This is how every house is pointed at the Store without anybody typing
+    anything, and it is why the panel never asks for an address: the address is
+    answered before a screen can ask. What is pinned is the *seam* rather than the
+    value, so that changing which Store a build ships pointed at stays one line.
     """
     monkeypatch.setattr(store_module, "DEFAULT_URL", "https://store.example")
     assert store_module.store_url({}) == "https://store.example"

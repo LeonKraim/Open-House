@@ -2050,7 +2050,9 @@ def test_a_number_default_outside_its_own_bounds_is_clamped_not_refused() -> Non
     """
     text = AUTOMATED.replace("default: 40", "default: 400")
     source = module_host.read_module_source(text)
-    helper = module_host.helper_for("kitchen", "brightness", source.inputs["brightness"])
+    helper = module_host.helper_for(
+        "kitchen", "brightness", source.inputs["brightness"]
+    )
     assert helper.data["initial"] == 90.0
 
 
@@ -2065,7 +2067,9 @@ def test_a_number_with_no_bounds_takes_the_selector_s_own_fallback() -> None:
         '          min: "{{ low }}"\n',
     )
     source = module_host.read_module_source(text)
-    helper = module_host.helper_for("kitchen", "brightness", source.inputs["brightness"])
+    helper = module_host.helper_for(
+        "kitchen", "brightness", source.inputs["brightness"]
+    )
     assert (helper.data["min"], helper.data["max"], helper.data["step"]) == (
         0.0,
         100.0,
@@ -2108,7 +2112,9 @@ def test_a_select_with_nothing_to_choose_from_falls_back_to_text() -> None:
     select with none. Text holds the value just as well -- and an input that
     expected one of no options is an input nothing could have answered anyway.
     """
-    text = AUTOMATED.replace("          options:\n            - low\n            - high\n", "")
+    text = AUTOMATED.replace(
+        "          options:\n            - low\n            - high\n", ""
+    )
     source = module_host.read_module_source(text)
     helper = module_host.helper_for("kitchen", "mode", source.inputs["mode"])
     assert helper.domain == "input_text"
@@ -2170,7 +2176,9 @@ def test_the_config_id_is_the_one_the_panel_opens_the_editor_on() -> None:
         "open_house_kitchen_brightness"
     )
     assert module_host.helper_automation(
-        "kitchen", "brightness", module_host.helper_for("kitchen", "brightness", _block("brightness"))
+        "kitchen",
+        "brightness",
+        module_host.helper_for("kitchen", "brightness", _block("brightness")),
     )["id"] == module_host.helper_config_id("kitchen", "brightness")
 
 

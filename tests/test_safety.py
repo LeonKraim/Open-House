@@ -42,7 +42,7 @@ from engine.decision_log import (
 from engine.safety import EGRESS_ACTIONS, Hazard, hazard_kind
 from engine.vocabulary import Vocabulary
 from openhouse.facade import OpenHouse, open_session
-from tools.catalog import paths
+from tools.catalog import paths, vcs
 
 ROOT = paths.ROOT
 PACKS = ROOT / "packs" / "official"
@@ -161,9 +161,20 @@ def _acted(records: Sequence[DecisionRecord]) -> list[DecisionRecord]:
 
 
 def _shipped_pack_services() -> set[str]:
-    """Every service any shipped pack's behaviours declare."""
+    """Every service any *shipped* pack's behaviours declare.
+
+    Shipped rather than present, because the bundled corpus is a working-tree
+    artifact this machine keeps and does not commit (`packs/` in `.gitignore`) --
+    so the set audited here is the one a checkout has, which is the example pack
+    and whatever else has been committed. `vcs.listed_names_in` is that answer,
+    and it is `None` where git cannot give one, in which case the directory is
+    read as it is rather than reported empty.
+    """
+    listed = vcs.listed_names_in(PACKS)
     services: set[str] = set()
     for path in sorted(PACKS.glob("*.yaml")):
+        if listed is not None and path.name not in listed:
+            continue
         loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(loaded, Mapping) or "behaviours" not in loaded:
             continue

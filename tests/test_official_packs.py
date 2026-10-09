@@ -46,11 +46,25 @@ from engine.vocabulary import (
 from openhouse.facade import open_session
 from tools.catalog import paths
 
+from .conftest import CORPUS_SENTINEL
+
 ROOT = paths.ROOT
 PACKS = ROOT / "packs" / "official"
 GUEST_MODE = PACKS / "guest-mode.yaml"
 GUEST_MODE_ARTEFACT = PACKS / "guest_mode" / "mode.yaml"
 MODE_SCHEMA = ROOT / "schemas" / "mode" / "1.0.0.json"
+
+if not CORPUS_SENTINEL.is_file():
+    # The whole module is about the *shipped* set, and the shipped set is a
+    # working-tree artifact that is not committed -- a fresh checkout has none of
+    # it. The directory itself exists in every checkout (`example-*.yaml` are
+    # tracked), so the guard is the sentinel and not `PACKS.is_dir()`: the
+    # question is whether the corpus is here, not whether the folder is.
+    pytest.skip(
+        "the shipped pack corpus is not committed; this module checks it and "
+        "there is nothing to check",
+        allow_module_level=True,
+    )
 
 #: The pack files that are phase 0 and 1's *examples* rather than phase 2's
 #: shipped set. Named here so a count of the shipped set does not include the

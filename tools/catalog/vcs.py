@@ -20,8 +20,12 @@ four reference clones and the withheld-expression store out of every scan.
 from __future__ import annotations
 
 import subprocess
+from typing import TYPE_CHECKING
 
 from . import paths
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def run_git(*args: str) -> subprocess.CompletedProcess[str]:
@@ -83,6 +87,45 @@ def listed_files() -> list[str]:
     if proc.returncode != 0:
         return []
     return [entry for entry in proc.stdout.split("\0") if entry]
+
+
+def listed_names_in(directory: Path) -> set[str] | None:
+    """The names of the listed files sitting directly inside a directory.
+
+    The shipped-pack checks ask "what pack files does this repository ship", and
+    the answer has to be about the repository rather than about whatever is lying
+    in the working tree -- a pack corpus kept on a machine for the demo house but
+    deliberately not committed is not part of the shipped set, and a check that
+    counted it would report a shipped set nobody can clone. Ignored files are
+    exactly the ones the repository is saying it does not ship, so they are the
+    ones left out here; untracked-but-unignored files are kept, so a fixture tree
+    a test wrote a moment ago is still enumerated.
+
+    `None` when the question cannot be asked -- the root is not a repository, or
+    the directory is not inside it -- because "git lists nothing here" and "git
+    could not be asked" want different answers. A directory whose entire contents
+    are the subject of a check would otherwise report a corpus that is simply not
+    under version control as an empty one.
+    """
+    if not is_repository():
+        return None
+    try:
+        relative = directory.resolve().relative_to(paths.ROOT.resolve())
+    except (OSError, ValueError):
+        return None
+    if not relative.parts:
+        return None
+    prefix = relative.as_posix().rstrip("/") + "/"
+    names: set[str] = set()
+    for entry in listed_files():
+        normalised = entry.replace("\\", "/")
+        if not normalised.startswith(prefix):
+            continue
+        rest = normalised[len(prefix) :]
+        if "/" in rest:
+            continue
+        names.add(rest)
+    return names
 
 
 def tracked_files() -> list[str]:

@@ -1,7 +1,0 @@
-# What `packs/official/house.yaml` confers, and the file its `provides` entry
-# pins. The entry declares the class `other`; this file is that artefact.
-#
-# The same reading as a room template's file, one level up: documentation rather
-# than input, and slots rather than entities. A person binds these once for the
-# house, and every room-scoped pack that requires a room slot leaves them alone.
-slots: [door_contact, leak_sensor, light_group, lock, media_player, scene_selector, vacuum]

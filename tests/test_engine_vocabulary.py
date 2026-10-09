@@ -289,20 +289,21 @@ def _policy_document() -> dict[str, Any]:
 def test_the_declared_api_version_is_the_published_one(vocabulary: Vocabulary) -> None:
     """Task 1.2: the API version is the artifact's, and not the packaging one.
 
-    `pyproject.toml` says `0.0.0`, a packaging value that moves for packaging
-    reasons; a manifest's `engine_api` range checked against it would be a check
-    in name only, and a constant in the engine would be the same promise published
-    twice. The expectation is read through the succession rule rather than spelled
-    as `"1.0.0"`, so publishing a successor leaves this test passing and a
-    hard-coded loader failing.
+    `pyproject.toml` carries a packaging version, and that is a value that moves
+    for packaging reasons; a manifest's `engine_api` range checked against it
+    would be a check in name only, and a constant in the engine would be the same
+    promise published twice. The expectation is read through the succession rule
+    rather than spelled as `"1.0.0"`, so publishing a successor leaves this test
+    passing and a hard-coded loader failing.
     """
     current = current_version(load_versions("engine-api"))
     assert current is not None, "the concept publishes no single current version"
     assert vocabulary.engine_api_version == current.version
 
     packaging = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert packaging["project"]["version"] == "0.0.0"
-    assert vocabulary.engine_api_version != packaging["project"]["version"]
+    # Not `== "0.0.0"`: the packaging version is deliberately free to move, and
+    # the only fact this test needs is that it is *not* the artifact's.
+    assert packaging["project"]["version"] != vocabulary.engine_api_version
 
 
 def test_the_api_version_is_the_tree_s_and_not_the_repository_s(

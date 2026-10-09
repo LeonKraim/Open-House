@@ -54,6 +54,19 @@ panel/dist/
 # `panel/scripts/browser-e2e.mjs`, and read by nobody.
 e2e-house.png
 
+# The developers' own scratch: the one-off browser walks (`panel/scripts/_*.mjs`),
+# the probe trees, and the working notes. Every one of them is scaffolding for a
+# session rather than part of the product: the four scripts that *do* ship are
+# `browser-e2e.mjs`, `browser-check.mjs`, `ws-probe.mjs` and `generate-types.mjs`,
+# and the walks beside them are named with a leading underscore so this rule can
+# single them out.
+panel/scripts/_*.mjs
+tmp-probe/
+claudesession.txt
+spec.txt
+stuff to add.txt
+pyright.probe.json
+
 # This run's screenshots: written by the `panel/scripts/_*.mjs` walks into
 # `shots/` while a session is looking at the house, and read by nobody after.
 # The same rule `e2e-house.png` follows -- generated, not authored.
@@ -67,3 +80,31 @@ store/pb_data/
 # The Store's admin address and password, which `docker compose` reads out of
 # `store/.env` on every command. `store/.env.example` is the committed twin.
 store/.env
+
+# The bundled pack corpus: the room templates, the hand-written module packs and
+# the generated `derived/` set. It is a working-tree artifact, not source -- this
+# machine keeps it so the demo house and the packs suite have something to run
+# against, and a fresh checkout deliberately ships none of it. Open House runs
+# without it: a house is built from the blueprints a person imports, and the
+# engine, the panel and the catalog all read the vocabulary from `catalog/`,
+# which *is* committed. See `docs/pack-author-guide.md` for what a pack is.
+#
+# The three `example-*` documents stay, and so does the artefact `example-pack`
+# pins. They are not shipped modules: they are the runtime schemas' own
+# demonstrations, named by the phase-0 spec, walked through in `docs/`, pinned by
+# `registry/`, and used by the test suite as its fixture -- so they are source,
+# and the one pack the project ships is deliberately the one that demonstrates
+# the format rather than one that does anything.
+/packs/derived/
+/packs/official/*
+!/packs/official/example-house.yaml
+!/packs/official/example-export.yaml
+!/packs/official/example-pack.yaml
+!/packs/official/example_pack/
+!/packs/official/HANDWRITTEN
+
+# The bundled packs' own scenarios: one per shipped pack, each installing a pack
+# this repository does not ship. Kept beside the corpus for the same reason, and
+# ignored for the same reason -- a scenario whose `install_pack` step names a
+# file no checkout has is a runner with nothing to run.
+/scenarios/packs/

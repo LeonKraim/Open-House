@@ -1,1 +1,0 @@
-claude-oc --resume 0bf8b0f5-3d39-4743-9438-9f36081b1d70  --dangerously-skip-permissions

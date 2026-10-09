@@ -55,6 +55,8 @@ from ha_adapter.live import LiveSession, LiveSessionError
 from ha_adapter.testing import FakeHaTransport
 from sim.clock import VirtualClock
 
+from .conftest import needs_corpus
+
 ROOT = Path(__file__).resolve().parents[1]
 
 LOCATION = Location(latitude=51.5, longitude=-0.1, time_zone="Europe/London")
@@ -69,6 +71,9 @@ EXAMPLE = ROOT / "packs" / "official" / "example-pack.yaml"
 #: vocabulary grows the word on install -- which makes it the fixture for both
 #: properties at once: a device only the override can point, and a hold that has
 #: to be measured against the device the module actually reads.
+#:
+#: Bundled rather than shipped, so the three tests built on it are `needs_corpus`
+#: and skip on a checkout that has none. `EXAMPLE` above is unaffected.
 FRIDGE = ROOT / "packs" / "official" / "fridge-guard.yaml"
 
 #: The contact the pack declares. Its own name and not a qualified key, because
@@ -227,6 +232,7 @@ def test_the_rooms_binding_is_what_everything_else_still_uses() -> None:
     assert binding.entities == ("light.hall",)
 
 
+@needs_corpus
 def test_a_hold_is_measured_against_the_device_the_module_reads() -> None:
     """An override restarts a `for` clause, because it is a different device.
 
@@ -335,6 +341,7 @@ def _split_session(transport: FakeHaTransport, clock: VirtualClock) -> LiveSessi
     )
 
 
+@needs_corpus
 def test_two_modules_on_one_part_act_on_the_one_device_it_is_bound_to() -> None:
     """**What makes a part a fact rather than a promise.**
 
@@ -445,6 +452,7 @@ def test_a_module_moved_to_another_part_moves_to_that_part_s_device() -> None:
     assert _state(transport, "light.hall") == "off"
 
 
+@needs_corpus
 def test_a_rename_moves_every_module_on_the_part_and_says_which() -> None:
     """**A rename is a rewrite, and the modules are the evidence.**
 

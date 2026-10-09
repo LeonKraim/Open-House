@@ -194,9 +194,12 @@ def test_a_summary_longer_than_the_row_holds_is_cut_rather_than_refused() -> Non
     assert summary[:-1].endswith("word")
     # What was cut is the blurb. The document is what a person installs, and it
     # carries the description whole.
-    assert store_api.publish_payload(definition, publisher_id="p")["document"][
-        "definition"
-    ]["description"] == definition.description
+    assert (
+        store_api.publish_payload(definition, publisher_id="p")["document"][
+            "definition"
+        ]["description"]
+        == definition.description
+    )
 
 
 def test_a_description_that_fits_is_left_alone() -> None:

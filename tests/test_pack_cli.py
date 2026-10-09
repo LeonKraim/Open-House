@@ -39,6 +39,8 @@ from engine import sandbox
 from openhouse import pack_verbs
 from tools.catalog import paths
 
+from .conftest import needs_corpus
+
 ROOT = paths.ROOT
 SHIPPED = ROOT / "packs" / "official"
 
@@ -123,19 +125,41 @@ def _classes(report: pack_verbs.ManifestReport) -> list[str]:
 
 
 def test_the_shipped_packs_validate(real_root: Path) -> None:
-    """Every manifest under `packs/official/` validates, and the thirteen are there.
+    """Every manifest under `packs/official/` validates, and the example is there.
 
     Falsified by a check that reports a pass over a directory it did not read:
-    the six room templates and the four module packs are named, so a scan that
-    skipped them, or a `provides` path left dangling, fails here rather than
-    reporting a clean pass over thirteen names that happen to parse.
+    `example-pack.yaml` is named, so a scan that skipped it, or a `provides` path
+    left dangling, fails here rather than reporting a clean pass over a name that
+    happens to parse.
 
-    The count is thirteen because the shipped set is the six default room
-    templates, the house template, the guest-mode pack, the four module packs
-    tasks 7.1-7.3 add (the Bedtime button, the Roomba button, the bathroom fan
-    and the fridge guard), and `example-pack.yaml` -- itself a pack file in this
-    directory and a `module`, which the phase's *set* does not name. So the count
-    is the directory's claim and the set is `test_official_packs.py`'s.
+    This is the half that runs everywhere, because `example-pack.yaml` is the one
+    pack the repository ships. The bundled corpus beside it -- the six room
+    templates, the house template, the guest-mode pack and the four module packs
+    -- is a working-tree artifact and is not committed (`packs/` in
+    `.gitignore`), so its own thirteen-name claim is
+    `test_the_bundled_corpus_validates` below, which skips where it is absent.
+    """
+    report = pack_verbs.validate_directory(SHIPPED)
+    assert report.ok
+    assert report.unreadable == ()
+    names = {manifest.name for manifest in report.reports}
+    assert "example_pack" in names
+    assert all(manifest.ok for manifest in report.reports)
+
+
+@needs_corpus
+def test_the_bundled_corpus_validates() -> None:
+    """The thirteen the working-tree corpus carries all validate, and are named.
+
+    Falsified by a scan that skipped the templates or the module packs, or by a
+    `provides` path left dangling behind one of them, which would report a clean
+    pass over thirteen names that happen to parse.
+
+    The count is thirteen because the corpus is the six default room templates,
+    the house template, the guest-mode pack, the four module packs tasks 7.1-7.3
+    add (the Bedtime button, the Roomba button, the bathroom fan and the fridge
+    guard), and `example-pack.yaml` -- itself a pack file in this directory and a
+    `module`, which the phase's *set* does not name.
     """
     report = pack_verbs.validate_directory(SHIPPED)
     assert report.ok

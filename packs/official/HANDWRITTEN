@@ -3,53 +3,30 @@
 # A marker, not detection. A generator that declines to list its own output here
 # is not caught, and the spec says so rather than pretending otherwise. What the
 # list does buy is the cheap half: the `handwritten-examples` check requires
-# every pack file in this directory to be named here, and every name here to be a
-# file that exists, so an example cannot arrive unlisted or a listed one rot away
-# while the check stays green.
+# every pack file the repository *ships* in this directory to be named here, and
+# every name here to be a file that exists, so an example cannot arrive unlisted
+# or a listed one rot away while the check stays green.
 #
-# The three examples the project ships are all here. The example pack
+# The three examples the project ships are all of it. The example pack
 # (`example-pack.yaml`, task 7.4) declares its behaviours in vocabulary 1.1.0,
 # which task 7.1 published, and validates against the current `pack-manifest`
-# schema, which references that vocabulary rather than restating its terms.
+# schema, which references that vocabulary rather than restating its terms. The
+# other two are the house and the export document, and they exist for the same
+# reason a pack does: a generated example proves only that the generator and the
+# schema agree with each other, not that a person can write to the schema.
 #
-# The shipped set task 7.5 and 7.4 add is listed below them: the six default
-# room templates, the house template and the guest-mode pack. Every one is a
-# person's writing -- the room templates are the room catalog's `default: true`
-# types transcribed by hand, which is what makes the drift check in
-# `tools/catalog/templates.py` a check about two files and not about a generator
-# -- so every one belongs here.
-#
-# A template is named for the room type it reproduces, so the six read as the six
-# `default: true` types in `catalog/room_types.yaml` and the house template is
-# `house`, the catalog's own key for the other level. That is the join
-# `tools/catalog/templates.py` makes.
+# The bundled corpus -- the room templates, the house template, the guest-mode
+# pack, the module packs and the generated `derived/` set -- is *not* listed and
+# is not shipped. It is a working-tree artifact this machine keeps for the demo
+# house (see `packs/` in `.gitignore`), so it is not a file the repository
+# ships, and the marker has nothing to say about it. A pack file that arrives in
+# this directory and is committed without being named here is still a finding.
 #
 # A template's pinned artefact (`bathroom/room.yaml` and its siblings) is not
-# listed, and cannot be: this allowlist is over the pack files in this directory,
-# which is what `_pack_files` returns, and a name here that is not one of them is
-# its own finding. The same is true of `example_pack/motion_light.yaml` above.
-#
-# The three module packs task 7.1-7.3 add -- the Bedtime button, the Roomba
-# button and the bathroom fan -- are listed with them. Each is a person's
-# writing, and each is a `module`, the kind the shipped set was three short of.
-#
-# The fridge guard is listed with them and is the one pack that declares a device
-# of its own: every other pack here names slots `catalog/slots.yaml` already
-# carries, and a fridge is not a room, so `fridge-guard.yaml` brings its
-# `fridge_contact` in its own `slots` clause. A person wrote it, so it belongs
-# here whatever it declares.
+# listed, and could not be: this allowlist is over the pack files in this
+# directory, which is what `_pack_files` returns, and a name here that is not one
+# of them is its own finding. The same is true of
+# `example_pack/motion_light.yaml` above.
 example-house.yaml
 example-export.yaml
 example-pack.yaml
-guest-mode.yaml
-house.yaml
-bathroom.yaml
-bedroom.yaml
-driveway.yaml
-garage.yaml
-kitchen.yaml
-living_room.yaml
-bedtime.yaml
-roomba.yaml
-bathroom_fan.yaml
-fridge-guard.yaml

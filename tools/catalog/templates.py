@@ -44,7 +44,7 @@ from pathlib import Path
 
 import yaml
 
-from . import errors, paths, room_types
+from . import errors, paths, room_types, vcs
 from .errors import CheckError, Report
 from .narrow import as_mapping, as_sequence, as_text
 
@@ -95,13 +95,23 @@ def load_templates() -> tuple[Template, ...]:
     different corrections. Only the two kinds are returned -- every other pack
     file in the directory is `examples.check_examples`' business, and this module
     has nothing to say about it.
+
+    The files read are the ones the repository *ships*, not the ones the
+    directory holds: the corpus is a working-tree artifact that is ignored and
+    not committed (`packs/` in `.gitignore`), so a machine that keeps it for the
+    demo house does not read as shipping seven templates. `vcs.listed_names_in`
+    is that answer and is `None` where git cannot give one, in which case the
+    directory is enumerated as it is.
     """
     directory = _packs_directory()
     if not directory.is_dir():
         return ()
+    listed = vcs.listed_names_in(directory)
     templates: list[Template] = []
     for path in sorted(directory.iterdir()):
         if not path.is_file() or path.suffix not in {".yaml", ".yml"}:
+            continue
+        if listed is not None and path.name not in listed:
             continue
         relative = f"packs/official/{path.name}"
         try:
@@ -154,8 +164,19 @@ def check_templates(report: Report) -> None:
     halves fail differently: there is at most one house template and the finding
     is about *the* house, while the room templates are one per type and the
     findings are about which one is missing, extra or wrong.
+
+    Skipped whole when `packs/official/` is absent, and skipped again when it
+    ships no template at all: the templates are a working-tree artifact and are
+    not committed, so a checkout has none to drift, and a checkout whose whole
+    `packs/official/` is the three schema examples has none either. Reporting
+    either absence would fail the validator on the checkout this repository
+    actually ships, for a set the product runs without.
     """
+    if not _packs_directory().is_dir():
+        return
     templates = load_templates()
+    if not templates:
+        return
     room_map = room_types.load_room_types()
     if not room_map.has_house:
         # `room_types.check_room_types` owns this finding, and repeating it here

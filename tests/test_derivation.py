@@ -59,9 +59,25 @@ from tools.catalog import examples as catalog_examples
 from tools.catalog import paths
 from tools.catalog.errors import Report
 
+from .conftest import CORPUS_SENTINEL
+
 ROOT = paths.ROOT
 DERIVED = ROOT / "packs" / "derived"
 OFFICIAL = ROOT / "packs" / "official"
+
+if not CORPUS_SENTINEL.is_file():
+    # The derived packs, and the hand-written ones they are judged beside, are a
+    # working-tree artifact and are not committed. Two of the properties here are
+    # about *the tree on disk* -- that it is the derivation's output -- and there
+    # is no such tree in a fresh checkout, so the module has nothing to say about
+    # a product that runs without it. The sentinel, not `DERIVED.is_dir()`:
+    # `packs/official/` is present in every checkout and `packs/derived/` is not,
+    # so the pair of directory checks would ask a question that is not this one.
+    pytest.skip(
+        "the pack corpus is not committed; this module checks the derived tree "
+        "and there is none to check",
+        allow_module_level=True,
+    )
 
 #: A row the committed corpus grounds a behaviour from, and the module it lands
 #: in. Named rather than searched for, so the tests about a module's shape -- its

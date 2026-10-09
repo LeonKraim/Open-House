@@ -56,12 +56,12 @@ services:
       # code -- which is the failure this file's read-only mounts exist to
       # prevent, and the one a `docker cp` of `tools/` silently reintroduces.
       #
-      # `packs/` and `registry/` are the Store tab's data: `views.load_catalog`
+      # `registry/` is mounted for the Store tab's data: `views.load_catalog`
       # reads `registry/index.json` and the pack manifests it points at, and the
       # paths in the index are relative to the checkout root, which is this same
-      # `/openhouse-src`. Unmounted, the Store is an empty list rather than an
-      # error -- the honest degradation, but not the one a full checkout should
-      # be showing.
+      # `/openhouse-src`. `packs/` is deliberately *not* mounted -- it is not
+      # committed, so a checkout does not have it, and its absence is the same
+      # empty Store the unmounted case already gives.
       #
       # `sim/` is here because of one import, and it is worth naming. Installing
       # a pack from the Store verifies its SHA-256 first, and the verifier is
@@ -78,12 +78,13 @@ services:
       - ../catalog:/openhouse-src/catalog:ro
       - ../openhouse:/openhouse-src/openhouse:ro
       - ../tools:/openhouse-src/tools:ro
-      - ../packs:/openhouse-src/packs:ro
       - ../registry:/openhouse-src/registry:ro
       - ../sim:/openhouse-src/sim:ro
-      # The built sidebar panel. `/config/www/` is the directory Home Assistant
-      # serves at `/local/`, so the bundle the Vite build emits is reachable at
-      # the URL `async_setup` registers the panel with.
+      # The built sidebar panel. It lands in `/config/www/`, which Home Assistant
+      # serves at `/local/`, but the panel is *not* registered against that URL:
+      # `PanelBundleView` reads this same file per request and answers
+      # `no-store`, so a Vite rebuild is what the next page load runs instead of
+      # whatever the browser cached a month ago.
       - ../panel/dist/open-house-panel.js:/config/www/open-house-panel.js:ro
       - /etc/localtime:/etc/localtime:ro
       - /run/dbus:/run/dbus:ro

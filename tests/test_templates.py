@@ -204,27 +204,22 @@ def test_the_committed_templates_pass_their_own_checks() -> None:
     assert _diagnostics() == []
 
 
-def test_the_committed_set_is_six_room_templates_and_one_house() -> None:
-    """Six and one, and the six are the default-marked types by name.
+def test_the_repository_ships_no_room_template_and_no_house() -> None:
+    """The corpus is a working-tree artifact, so a checkout has none of it.
 
-    Falsified by a seventh room template -- a `pool`, a `gazebo`, a `sunroom` --
-    which the catalog marks `default: false` and which the phase therefore does
-    not ship, and by a missing house template, which would leave the house-scope
-    slots with no document a person can read them off.
+    The seven documents are the room catalog's `default: true` types transcribed
+    by hand, and they are kept on a machine for the demo house rather than
+    committed (`packs/` in `.gitignore`) -- so the set a checkout has is empty,
+    and the checks above, which read what the repository *ships*, have nothing to
+    drift. The join they make is still exercised, on trees this file builds:
+    `_tree` writes one template per fixture type and a house template carrying
+    the house entry's slots.
+
+    Falsified by a template or a house document that has been committed -- one
+    arriving under `packs/official/` and passing the allowlist, which would put
+    a shipped set back into a repository that deliberately ships none.
     """
-    loaded = templates.load_templates()
-    rooms = sorted(item.name for item in loaded if item.kind == templates.ROOM_TEMPLATE)
-    houses = [item for item in loaded if item.kind == templates.HOUSE_TEMPLATE]
-
-    assert rooms == [
-        "bathroom",
-        "bedroom",
-        "driveway",
-        "garage",
-        "kitchen",
-        "living_room",
-    ]
-    assert [item.name for item in houses] == ["house"]
+    assert templates.load_templates() == ()
 
 
 def test_each_committed_template_declares_exactly_its_type_s_slots() -> None:
@@ -245,38 +240,60 @@ def test_each_committed_template_declares_exactly_its_type_s_slots() -> None:
         assert item.declared == provided[item.name], item.filename
 
 
-def test_the_house_template_declares_the_house_entry_s_slots() -> None:
+def test_the_house_template_declares_the_house_entry_s_slots(
+    fake_root: Path,
+) -> None:
     """The house template is the catalog's `house` entry and not a room's.
 
     Falsified by a house template carrying a room type's slots, which would make
     the two levels `catalog/room_types.yaml` distinguishes -- a type's
     `provides_slots` and the house entry's `slots` -- into one list.
+
+    The tree is built rather than read off `packs/official/`, because the
+    repository ships no template: what is asserted is the join the check makes,
+    and a built tree is the only place it has two sides. The fixture's house
+    entry is deliberately not the catalog's, so the comparison cannot agree by
+    both sides reading the real `room_types.yaml`.
     """
     from tools.catalog import room_types
 
+    _tree(fake_root, room_templates=_every_room())
     room_map = room_types.load_room_types()
     house = next(
         item
         for item in templates.load_templates()
         if item.kind == templates.HOUSE_TEMPLATE
     )
-    assert house.declared == room_map.house_slots
+    assert house.declared == room_map.house_slots == _HOUSE
+    assert _diagnostics() == []
 
 
-def test_the_committed_templates_are_the_files_the_allowlist_names() -> None:
-    """Every shipped template is a pack file `HANDWRITTEN` lists.
+def test_the_shipped_templates_are_the_files_the_allowlist_names(
+    fake_root: Path,
+) -> None:
+    """Every template the repository ships is a pack file `HANDWRITTEN` lists.
 
     Falsified by a template landing under `packs/official/` unlisted, which
     `examples.check_examples` refuses in the pre-commit hook; asserted here
     because the two halves of this change arrived together and a reader of this
-    file should be able to see the join.
+    file should be able to see the join. The tree is built rather than read off
+    `packs/official/`, because the repository ships no template -- and a built
+    tree is also the only place where the join has two sides to compare.
     """
+    _tree(fake_root, room_templates=_every_room())
+    write(
+        fake_root,
+        "packs/official/HANDWRITTEN",
+        "\n".join(["house.yaml", *(f"{name}.yaml" for name in _TYPES)]) + "\n",
+    )
     listed = (paths.ROOT / "packs" / "official" / "HANDWRITTEN").read_text(
         encoding="utf-8"
     )
     names = {line.strip() for line in listed.splitlines() if not line.startswith("#")}
-    for item in templates.load_templates():
-        assert item.filename in names, item.filename
+    shipped = [item.filename for item in templates.load_templates()]
+    assert shipped, "the built tree must ship the templates it wrote"
+    for filename in shipped:
+        assert filename in names, filename
 
 
 # --------------------------------------------------------------------------
@@ -496,15 +513,14 @@ def test_a_template_that_will_not_parse_is_a_diagnostic_not_a_traceback(
 
 
 def test_a_missing_pack_directory_is_not_a_crash(fake_root: Path) -> None:
-    """A tree with no `packs/official/` at all reports absences, not a traceback.
+    """A tree with no `packs/official/` at all is silent, not a traceback.
 
     `load_templates` returns nothing rather than raising, because the directory's
     absence is a fact about the layout and `invariants.check_layout` owns it -- a
-    second finding for the same missing directory would be one defect reported
-    twice. What is left is the set's own claim: every default type is missing its
-    template and so is the house, which is why the findings are all "ships no".
+    second finding for the same absence would be one defect reported twice. What
+    has to hold is that an unguarded `iterdir` does not reach the pre-commit hook
+    as a traceback, which is indistinguishable from the check itself being
+    broken.
     """
     write(fake_root, ROOM_TYPES_PATH, _room_types_document())
-    findings = _diagnostics()
-    assert findings != []
-    assert all("ships no" in message for _, message in findings)
+    assert _diagnostics() == []

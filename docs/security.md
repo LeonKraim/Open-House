@@ -226,14 +226,17 @@ E2E container rather than a hardened deployment, but nothing in the tree
 downgrades it, and a token minted inside that instance reaches whatever
 `privileged: true` reaches.
 
-**The panel bundle is served from `/local/` with a 31-day cache.** Home
-Assistant serves `/config/www/`, which the build mounts as
-`/local/open-house-panel.js`, with a `max-age` of 31 days. The integration works
-around this with a cache-busting query string built from the served file's size
-and mtime (`_panel_version`), so a rebuilt panel is fetched under a new URL — but
-the cached copy of the previous URL is still served from the browser's cache for
-a month, and the workaround exists because this was observed to fail, not because
-it cannot.
+**The panel bundle is served unauthenticated, and deliberately not cached.**
+`/config/www/`, which the build mounts, is served by Home Assistant at `/local/`
+with a `max-age` of 31 days; the panel does not use that path. `PanelBundleView`
+in `custom_components/open_house/__init__.py` reads the built bundle from the
+same file on each request and answers `Cache-Control: no-store`, because a
+browser holding last month's bundle runs last month's panel against this
+integration — controls that no longer exist, commands that are never sent, and
+nothing on the screen to say so. The view is reached without a session: the
+bundle is client-side code the browser must be able to load before anything can
+be authorised, and it carries no secret — the commands it calls are what is
+guarded, each one admin-only on the websocket.
 
 **The pinned digest and the revocation list are not enforced on the live install
 path.** This is stated in full above and repeated here because it is the one gap

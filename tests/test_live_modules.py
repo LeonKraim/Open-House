@@ -36,6 +36,7 @@ from ha_adapter.live import HOUSE, LiveSession, LiveSessionError
 from ha_adapter.testing import FakeHaTransport
 from openhouse import packs
 
+from .conftest import needs_corpus
 from .packfactory import pack as generated_pack
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,6 +47,12 @@ LOCATION = Location(latitude=51.5, longitude=-0.1, time_zone="Europe/London")
 #: and `motion_sensor` and optionally uses `ambient_light_sensor`, which is exactly the
 #: three slots the `hall` room below binds -- so it is the pack a room satisfies,
 #: and `kitchen` (seven required slots) is the pack one does not.
+#:
+#: `EXAMPLE` is one of the three `example-*` documents the repository ships, so a
+#: test built on it runs everywhere. `KITCHEN` and `FRIDGE` are not: they are
+#: bundled module packs, and the bundled corpus is a working-tree artifact the
+#: repository does not commit. Every test that installs one, or that reads a
+#: registry row which resolves into it, is marked `needs_corpus`.
 EXAMPLE = ROOT / "packs" / "official" / "example-pack.yaml"
 KITCHEN = ROOT / "packs" / "official" / "kitchen.yaml"
 
@@ -246,6 +253,7 @@ def test_a_module_on_somewhere_reports_the_rooms_it_is_actually_on_in() -> None:
     assert [row["active_rooms"] for row in module["behaviours"]] == [("spare",)]  # type: ignore[union-attr]
 
 
+@needs_corpus
 def test_a_pack_the_room_cannot_satisfy_installs_disabled() -> None:
     """The kitchen template needs seven slots the hall does not bind, and lands anyway.
 
@@ -268,6 +276,7 @@ def test_a_pack_the_room_cannot_satisfy_installs_disabled() -> None:
     )
 
 
+@needs_corpus
 def test_an_unwired_module_cannot_be_enabled_and_says_which_slots() -> None:
     """Installation is allowed; activation is not, until the room binds the devices.
 
@@ -1004,6 +1013,7 @@ def test_installed_modules_names_the_rooms_it_lists() -> None:
 # -- offers ------------------------------------------------------------------
 
 
+@needs_corpus
 def test_offers_lists_the_packs_the_checkout_publishes() -> None:
     names = [offer["pack"] for offer in live_modules.offers(_session(), room_id="hall")]
 
@@ -1046,6 +1056,7 @@ def test_the_satisfiability_verdict_is_the_rooms_bindings() -> None:
     assert offer["optional_slots_present"] == ("ambient_light_sensor",)
 
 
+@needs_corpus
 def test_a_room_that_cannot_satisfy_a_pack_says_which_slots_are_missing() -> None:
     offer = _offer_for(
         offers := live_modules.offers(_session(), room_id="hall"), "kitchen"
@@ -1057,6 +1068,7 @@ def test_a_room_that_cannot_satisfy_a_pack_says_which_slots_are_missing() -> Non
     assert offers  # the list is returned whole, unsatisfiable packs included
 
 
+@needs_corpus
 def test_offers_on_a_room_with_nothing_bound() -> None:
     """The empty case, which the happy path would hide."""
     offers = live_modules.offers(_session((_empty_room(),)), room_id="spare")
@@ -1127,6 +1139,7 @@ def test_offers_refuses_an_unknown_room() -> None:
         live_modules.offers(_session(), room_id="nowhere")
 
 
+@needs_corpus
 def test_offers_are_the_committed_index_and_nothing_else() -> None:
     """The catalog is the checkout's own index; nothing is fetched to answer it.
 
@@ -1191,6 +1204,7 @@ def _staged(tmp_path: Path, *, tamper: bool = False) -> Path:
     return staged
 
 
+@needs_corpus
 def test_a_published_row_resolves_to_the_file_it_pins(tmp_path: Path) -> None:
     staged = _staged(tmp_path)
     path = live_modules.store_pack(staged, _PACK, _TIER)
@@ -1204,11 +1218,13 @@ def test_a_published_row_resolves_to_the_file_it_pins(tmp_path: Path) -> None:
     assert pack_digest(packs.load_manifest(path)) == pinned
 
 
+@needs_corpus
 def test_a_name_the_registry_does_not_publish_is_missing(tmp_path: Path) -> None:
     with pytest.raises(live_modules.StorePackMissingError, match="no official pack"):
         live_modules.store_pack(_staged(tmp_path), "no_such_pack", _TIER)
 
 
+@needs_corpus
 def test_a_published_pack_under_another_tier_is_missing(tmp_path: Path) -> None:
     """The row is what a person clicked, so the tier is part of the question.
 
@@ -1220,11 +1236,13 @@ def test_a_published_pack_under_another_tier_is_missing(tmp_path: Path) -> None:
         live_modules.store_pack(_staged(tmp_path), _PACK, _WRONG_TIER)
 
 
+@needs_corpus
 def test_a_file_that_is_not_the_pinned_bytes_is_refused(tmp_path: Path) -> None:
     with pytest.raises(live_modules.StorePackRefusedError):
         live_modules.store_pack(_staged(tmp_path, tamper=True), _PACK, _TIER)
 
 
+@needs_corpus
 def test_a_revoked_pack_is_refused_though_its_bytes_are_right(tmp_path: Path) -> None:
     """Revocation is checked against the pointer, not the file.
 
@@ -1454,6 +1472,7 @@ def test_a_house_modules_switch_writes_the_house_scope_flag() -> None:
     )
 
 
+@needs_corpus
 def test_the_house_tab_carries_the_options_of_a_module_installed_into_it() -> None:
     """The house's own options form, from the packs put in the house.
 
@@ -1502,6 +1521,7 @@ def test_offers_can_be_asked_about_the_house() -> None:
     assert offer["satisfiable"] is True
 
 
+@needs_corpus
 def test_a_module_carries_the_settings_it_owns() -> None:
     """`option_keys` is the pack's own settings, so a card can be one module.
 
@@ -1560,6 +1580,7 @@ def test_a_recorded_part_the_vocabulary_lacks_falls_back_to_the_slot() -> None:
     assert any(record.actor == MOTION_UNIT for record in records)
 
 
+@needs_corpus
 def test_slots_reached_by_orders_its_keys() -> None:
     """The rows are ordered by slot name, not by a set's iteration order.
 

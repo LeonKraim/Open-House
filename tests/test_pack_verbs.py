@@ -32,29 +32,36 @@ from pathlib import Path
 
 import pytest
 
-from engine.vocabulary import Vocabulary
 from openhouse import pack_verbs
-from openhouse import scenarios as openhouse_scenarios
-from tools.catalog import paths
 
 from .packfactory import pack as generated_pack
 
-#: The shipped packs' own scenarios, which are the `test` verb's subject and sit
-#: beside the phase-1 corpus rather than in it -- see the directory's README.
-PACK_SCENARIOS = paths.ROOT / "scenarios" / "packs"
 
-#: The pack this suite installs: the shipped example, which requires
-#: `light_group` and `motion_sensor` -- both bound by the `minimal` fixture -- so
-#: a passing install is the common case and a refusal is the test that asks for
-#: one. Using the shipped pack rather than a fixture manifest is deliberate: its
-#: `provides` path is repository-relative, which is where a session's sandbox
-#: resolves it, and a temporary manifest could not pin a file the sandbox finds.
-EXAMPLE_PACK = paths.PACKS / "official" / "example-pack.yaml"
+#: The pack this suite installs, written to a temporary tree by `packfactory`. It
+#: requires `light_group`, which the `minimal` fixture binds, so a passing install
+#: is the common case and a refusal is the test that asks for one. Generated
+#: rather than taken from the shipped corpus, which is not committed (`packs/` in
+#: `.gitignore`) and which no test may depend on: `packfactory` writes an absolute
+#: `provides` path, which the sandbox accepts for a pack outside the checkout.
+def example_pack(directory: Path) -> Path:
+    return generated_pack(directory, "example")
+
 
 #: A pack the `minimal` fixture cannot hold *yet*: it requires the `fan` slot,
-#: which no room in that house binds. Installation accepts it -- a module lands
-#: unwired and disabled -- so this is a pack whose scenarios still run.
-UNWIRED_PACK = paths.PACKS / "official" / "bathroom_fan.yaml"
+#: which `catalog/slots.yaml` declares and no room in that house binds.
+#: Installation accepts it -- a module lands unwired and disabled -- so this is a
+#: pack whose scenarios still run.
+def unwired_pack(directory: Path) -> Path:
+    return generated_pack(
+        directory,
+        "bathroom_fan",
+        requires=("fan",),
+        # `packfactory` builds every behaviour reaching through `light_group`;
+        # this pack's behaviour has to reach through the slot it declares, or the
+        # install refuses for a reason the test is not about.
+        edits=(("    slots: [light_group]", "    slots: [fan]"),),
+    )
+
 
 #: The scenario every test but the corpus one runs: the light is set and then
 #: asserted, with no time advanced so no behaviour can move it between the step
@@ -101,12 +108,13 @@ def test_a_pack_no_scenario_names_is_untested_and_not_a_pass(tmp_path: Path) -> 
     a pack nothing ran against -- the reading that makes a mistyped scenario path
     and a pack that passed every one of its scenarios the same answer.
     """
-    report = pack_verbs.test_pack(EXAMPLE_PACK, scenarios=())
+    manifest = example_pack(tmp_path)
+    report = pack_verbs.test_pack(manifest, scenarios=())
     assert report.untested
     assert not report.ok
     assert report.outcomes == ()
-    assert report.name == "example_pack"
-    assert report.manifest == str(EXAMPLE_PACK)
+    assert report.name == "example"
+    assert report.manifest == str(manifest)
 
 
 # -- the four classes --------------------------------------------------------
@@ -117,11 +125,12 @@ def test_a_scenario_that_holds_is_reported_passed(tmp_path: Path) -> None:
 
     Falsified by a verb that reports a run as failing for want of evidence it
     never gathered: the check is that `ok` comes back true only after a scenario
-    actually ran, which is why the pack is the shipped example and not a fixture
-    the installation step could refuse for a reason the test is not about.
+    actually ran, which is why the pack is one the `minimal` fixture can hold and
+    not a fixture the installation step would refuse for a reason the test is not
+    about.
     """
     report = pack_verbs.test_pack(
-        EXAMPLE_PACK, scenarios=[_scenario(tmp_path, "holds", "on")]
+        example_pack(tmp_path), scenarios=[_scenario(tmp_path, "holds", "on")]
     )
     assert not report.untested
     assert report.ok
@@ -137,7 +146,7 @@ def test_a_scenario_that_disagrees_is_failed_and_not_a_pass(tmp_path: Path) -> N
     ran -- and the report has to say which.
     """
     report = pack_verbs.test_pack(
-        EXAMPLE_PACK, scenarios=[_scenario(tmp_path, "disagrees", "off")]
+        example_pack(tmp_path), scenarios=[_scenario(tmp_path, "disagrees", "off")]
     )
     assert _outcomes(report) == ["failed"]
     assert not report.ok
@@ -149,13 +158,13 @@ def test_a_scenario_that_does_not_load_is_a_fixture_error(tmp_path: Path) -> Non
     """A file that will not load is the corpus's failure and not the pack's.
 
     Falsified by a loader error escaping the verb, or by a bad file reported as a
-    pack failure: the pack is the shipped example and is not what is wrong, so
-    the class has to name the scenario -- which is what a reader with a corpus of
-    one bad file needs before anything else.
+    pack failure: the pack installs cleanly and is not what is wrong, so the class
+    has to name the scenario -- which is what a reader with a corpus of one bad
+    file needs before anything else.
     """
     broken = tmp_path / "broken.yaml"
     broken.write_text("when: [\n  - set_state: {\n", encoding="utf-8", newline="\n")
-    report = pack_verbs.test_pack(EXAMPLE_PACK, scenarios=[broken])
+    report = pack_verbs.test_pack(example_pack(tmp_path), scenarios=[broken])
     assert _outcomes(report) == ["fixture_error"]
     assert not report.ok
     assert "broken.yaml" in report.outcomes[0].message
@@ -196,7 +205,7 @@ def test_a_pack_the_house_has_not_wired_yet_still_runs(tmp_path: Path) -> None:
     and no room in the `minimal` fixture binds it, so this is exactly that case.
     """
     report = pack_verbs.test_pack(
-        UNWIRED_PACK, scenarios=[_scenario(tmp_path, "holds", "on")]
+        unwired_pack(tmp_path), scenarios=[_scenario(tmp_path, "holds", "on")]
     )
     assert _outcomes(report) == ["passed"]
     assert report.ok
@@ -214,7 +223,7 @@ def test_every_scenario_named_gets_its_own_outcome_in_order(tmp_path: Path) -> N
     aborted on the first failure would drop.
     """
     report = pack_verbs.test_pack(
-        EXAMPLE_PACK,
+        example_pack(tmp_path),
         scenarios=[
             _scenario(tmp_path, "a-holds", "on"),
             _scenario(tmp_path, "b-disagrees", "off"),
@@ -234,7 +243,7 @@ def test_a_directory_of_scenarios_is_run_as_a_corpus(tmp_path: Path) -> None:
     """
     _scenario(tmp_path, "a-holds", "on")
     _scenario(tmp_path, "b-also-holds", "on")
-    report = pack_verbs.test_pack(EXAMPLE_PACK, scenarios=[tmp_path])
+    report = pack_verbs.test_pack(example_pack(tmp_path), scenarios=[tmp_path])
     assert _outcomes(report) == ["passed", "passed"]
     assert report.ok
 
@@ -260,12 +269,12 @@ def test_a_root_without_a_vocabulary_is_a_usage_error(tmp_path: Path) -> None:
     """A root whose vocabulary cannot be read is a usage error, not a no-pass.
 
     Falsified by a `Vocabulary.load` failure escaping the verb, or by an absent
-    vocabulary folded into an untested verdict: the pack is the shipped example
-    and is fine, so the failure is about `root`, and the caller has to be told
-    that rather than told the pack was never run.
+    vocabulary folded into an untested verdict: the pack is readable and fine, so
+    the failure is about `root`, and the caller has to be told that rather than
+    told the pack was never run.
     """
     with pytest.raises(pack_verbs.UsageError) as raised:
-        pack_verbs.test_pack(EXAMPLE_PACK, scenarios=(), root=tmp_path)
+        pack_verbs.test_pack(example_pack(tmp_path), scenarios=(), root=tmp_path)
     assert raised.value.about == str(tmp_path)
     assert raised.value.reason
 
@@ -283,34 +292,3 @@ def test_the_four_classes_are_declared_and_untested_is_not_one() -> None:
     """
     assert pack_verbs.OUTCOMES == ("passed", "failed", "fixture_error", "pack_error")
     assert "untested" not in pack_verbs.OUTCOMES
-
-
-# -- the shipped packs' own scenarios ----------------------------------------
-
-
-def test_every_shipped_pack_scenario_runs(real_root: Path) -> None:
-    """Each shipped pack's scenario installs its pack and the pack acts.
-
-    Falsified by a scenario that runs green without the pack being installed:
-    the actor on each run's records has to name the pack, because a scenario that
-    asserted its way to a pass while `install_pack` had refused would prove the
-    runner works and nothing about the pack -- which is exactly the confusion the
-    `test` verb's separate `pack_error` class exists to prevent.
-    """
-    files = sorted(PACK_SCENARIOS.glob("*.yaml"))
-    assert files, "the shipped packs ship no scenario to test"
-    runs = openhouse_scenarios.run_corpus(
-        PACK_SCENARIOS, vocabulary=Vocabulary.load(real_root)
-    )
-    assert len(runs) == len(files)
-    assert all(run.log for run in runs)
-    acted = {
-        str(record["actor"]).split(".", 1)[0]
-        for run in runs
-        for record in run.log
-        if record.get("actor")
-    }
-    assert {"bedtime", "roomba"} <= acted
-    assert {"passed", "failed", "fixture_error", "pack_error"} == set(
-        pack_verbs.OUTCOMES
-    )

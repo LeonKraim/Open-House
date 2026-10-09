@@ -122,8 +122,8 @@ devices is a defect rather than a prompt for a clarifying sentence.
 `requires_slots` carries, so the room's settings page shows one list; left off,
 the device is optional and the pack runs without one.
 
-`packs/official/fridge-guard.yaml` is the shipped example and the only pack that
-declares a device of its own.
+The fridge guard — one of the bundled example packs, kept in the working tree
+rather than shipped — is the only pack that declares a device of its own.
 
 ## What a behaviour may say
 
@@ -272,11 +272,11 @@ neither is papered over in the repository.
 vocabulary's action enum, whose members are block kinds — `service`, `scene`,
 `delay`, `device` — with no value beside them. So a manifest can say a behaviour
 ends in a service call, and it cannot say *which state it sets* or *that it enters
-a named mode*. `packs/official/bedtime.yaml` and `packs/official/roomba.yaml` both
-record the clause they would need and cannot have: bedtime cannot express
-*entering* Sleep mode, and Roomba cannot express a dispatch on the vacuum's
-current state. `choose` is on the forbidden-action list for the same reason, so a
-pack expresses intent rather than branching.
+a named mode*. The bundled bedtime and Roomba example packs both record the
+clause they would need and cannot have: bedtime cannot express *entering* Sleep
+mode, and Roomba cannot express a dispatch on the vacuum's current state.
+`choose` is on the forbidden-action list for the same reason, so a pack expresses
+intent rather than branching.
 
 **Nothing evaluates a trigger or a condition.** `engine/behaviours/declared.py`
 reads neither. A behaviour's `trigger` and `condition` are validated as published,
@@ -357,40 +357,45 @@ stay while the store refuses the install and says why.
 
 ## The packs the project ships
 
-`packs/official/` holds fifteen files ending in `.yaml`, of which thirteen are
-pack manifests; the other two, `packs/official/example-house.yaml` and
-`packs/official/example-export.yaml`, are the hand-written examples of the house
-and export-document concepts that live in the same directory. `packs/derived/`
-holds one manifest per corpus *namespace*, so the checkout ships twenty-three
-pack manifests.
-
-**A derived pack is a family of rows, not a row.** The corpus namespaces its
-rows by the idea they are about, and the derivation groups by that namespace
-rather than emitting a card per row: every `lighting.*` row is one `lighting`
-module, whose behaviours are the rows and whose per-behaviour enable keys are the
-switches. A person installs one Lighting thing and turns on the parts of it they
-have, instead of choosing between fifteen near-identical cards.
+**One.** A fresh checkout of Open House contains no module corpus. The repository
+ships a single pack:
 
 | Pack | `kind` | Declares |
 | --- | --- | --- |
 | `packs/official/example-pack.yaml` | `module` | a motion-triggered light: `requires_slots: [light_group, motion_sensor]`, `optional_slots: [ambient_light_sensor]`, one behaviour calling `light.turn_on` |
-| `packs/official/bedtime.yaml` | `module` | the bedtime button: lights off, thermostat down, lock up, as three behaviours; the lock behaviour calls `lock.lock`, which is not flagged |
-| `packs/official/roomba.yaml` | `module` | four behaviours over a `vacuum` slot, one of which notifies through no slot at all |
-| `packs/official/bathroom_fan.yaml` | `module` | an extractor fan on a `fan` slot, on and off |
-| `packs/official/fridge-guard.yaml` | `module` | the fridge guard: the only pack that declares a device of its own, a `fridge_contact` in its `slots` clause, and calls `light.turn_on` through `light_group` when it trips |
-| `packs/official/bathroom.yaml`, `bedroom.yaml`, `driveway.yaml`, `garage.yaml`, `kitchen.yaml`, `living_room.yaml` | `room-template` | the slots each default room type offers, transcribed from `catalog/room_types.yaml`; no behaviours |
-| `packs/official/house.yaml` | `house-template` | the slots the whole house offers, read from the room catalog's `house` entry |
-| `packs/official/guest-mode.yaml` | `profile-set` | one house mode, `class: mode`, pinned to `packs/official/guest_mode/mode.yaml` |
-| `packs/derived/*.yaml` | `module` | one module per corpus namespace, one behaviour per row: `cleaning`, `climate`, `laundry`, `lighting`, `media`, `modes`, `notifications`, `presence`, `security`, `system`. Each names every row it reproduces in `derives_from`, and requires no slot — a module is installable in any room and the behaviour whose device is missing is inert. |
 
-`registry/index.json` publishes twenty-three of them, every one `official`: the
-six room templates and the house, `guest_mode`, the four module packs (`bedtime`,
-`roomba`, `bathroom_fan`, `fridge_guard`), `example_pack`, and the ten derived
-family modules. The published set and the directory are not the same set, and the
-difference is deliberate: the index is what a live panel offers —
-`ha_adapter/live_modules.py` reads it and offers only what it names — and a pack
-present under `packs/` but absent from the index is not offered. Here the
-difference is the two example documents, which are not packs at all.
+Beside it under `packs/official/` sit two more documents that are not packs at
+all: `example-house.yaml` and `example-export.yaml`, the hand-written
+demonstrations of the house and export-document concepts. Together with
+`example_pack/motion_light.yaml`, the artefact `example-pack.yaml` pins, those
+are what the repository commits. The one pack the project ships is deliberately
+the one that demonstrates the format rather than one that does anything.
+
+**Everything else is a working-tree artifact.** This machine keeps a much larger
+corpus — hand-written module packs (a bedtime button, a Roomba button, a bathroom
+fan, a fridge guard), room templates and a house template, a guest-mode
+profile-set, and a `packs/derived/` set of one module per corpus namespace — but
+none of it is committed (`packs/` in `.gitignore`). It exists so the demo house
+and the tests built on it have something to run against, and a checkout that does
+not have it runs the product exactly as well: a house is built from the
+blueprints a person imports, and the vocabulary the engine reads comes from
+`catalog/`, which *is* committed. A pack a person writes goes wherever they like
+— the repository dictates no directory for it — and a pack placed under
+`packs/official/` without being named in `packs/official/HANDWRITTEN` is a
+finding, because that marker is over the files the repository ships.
+
+`registry/index.json` and `registry/` are committed, and they index the corpus by
+name. On a checkout with no corpus the index resolves to nothing installable, and
+that is the correct reading: nothing is offered, because nothing is there.
+`ha_adapter/live_modules.py` offers only what the index names, so a pack present
+under `packs/` but absent from the index is not offered either.
+
+**A derived pack is a family of rows, not a row.** The local corpus namespaces
+its rows by the idea they are about, and the derivation groups by that namespace
+rather than emitting a card per row: every `lighting.*` row is one `lighting`
+module, whose behaviours are the rows and whose per-behaviour enable keys are the
+switches. A person installs one Lighting thing and turns on the parts of it they
+have, instead of choosing between fifteen near-identical cards.
 
 ## What a pack cannot do yet, stated plainly
 
@@ -469,10 +474,9 @@ i18n:
 The schema validates this document; the *sandbox* is a second question, and it
 reads the `provides` path. For the pack to install, the file the entry pins must
 exist at that path, inside the manifest's own directory, and be of class
-`automation` — a document with a `trigger` or an `action` key. Write the manifest
-to packs/official/evening_lights.yaml beside that file, and then
+`automation` — a document with a `trigger` or an `action` key. Put the manifest
+beside that file, in a directory of your own choosing, and then
 `openhouse.pack_verbs.validate_directory` will judge both halves. The path in the
-manifest above is repo-relative, and the containment rule is what makes resolving
 manifest above is repo-relative, and the containment rule is what makes resolving
 it against the repository root sound: a pinned path must land back inside the
 pack's own directory, so a pack pins what it confers and nothing else.

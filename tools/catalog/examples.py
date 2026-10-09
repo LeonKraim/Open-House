@@ -38,7 +38,7 @@ from referencing import Registry, Resource
 from referencing.exceptions import NoSuchResource, Unresolvable
 from referencing.jsonschema import DRAFT202012, Schema
 
-from . import paths, schemas
+from . import paths, schemas, vcs
 from .errors import CheckError, Report, read_text
 from .narrow import as_mapping
 
@@ -100,16 +100,28 @@ def _packs_directory() -> Path:
 
 
 def _pack_files() -> list[Path]:
-    """The pack data files present, by suffix. `HANDWRITTEN` has none and so is
-    not one of them, which is what keeps the allowlist out of the set it lists.
+    """The pack data files the repository ships, by suffix. `HANDWRITTEN` has none
+    and so is not one of them, which is what keeps the allowlist out of the set it
+    lists.
+
+    *Ships* rather than *holds*: the bundled corpus is a working-tree artifact
+    that is ignored and not committed (`packs/` in `.gitignore`), so a machine
+    that keeps it for the demo house must not read as a repository that ships it.
+    `vcs.listed_names_in` is that answer, and it is `None` where git cannot give
+    one -- a checkout unpacked from a tarball rather than cloned -- in which case
+    the directory is enumerated as it is and this check behaves as it did before
+    the corpus was split from the examples.
     """
     directory = _packs_directory()
     if not directory.is_dir():
         return []
+    listed = vcs.listed_names_in(directory)
     return [
         path
         for path in sorted(directory.iterdir())
-        if path.is_file() and path.suffix in {".yaml", ".yml"}
+        if path.is_file()
+        and path.suffix in {".yaml", ".yml"}
+        and (listed is None or path.name in listed)
     ]
 
 
@@ -138,7 +150,16 @@ def _listed_names() -> set[str] | None:
 
 
 def check_examples(report: Report) -> None:
-    """The allowlist both ways, and every example against its current schema."""
+    """The allowlist both ways, and every example against its current schema.
+
+    Skipped whole when `packs/official/` is absent, and the pack files it reads
+    are the ones the repository *ships* rather than the ones the directory holds
+    -- `_pack_files` has the why of both. A checkout has none of the bundled
+    corpus, and a working machine may keep it without any of it counting as
+    being shipped.
+    """
+    if not _packs_directory().is_dir():
+        return
     _check_allowlist(report)
     _check_documents(report)
 

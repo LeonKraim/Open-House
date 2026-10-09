@@ -26,6 +26,23 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
+#: A pack file only the working-tree corpus carries. The corpus -- the room
+#: templates, the hand-written module packs and the generated `derived/` set --
+#: is not committed (`packs/` in `.gitignore`), so a test that installs a
+#: *shipped module* has nothing to install in a fresh checkout. It is skipped
+#: rather than deleted: the corpus is real on a machine that keeps it for the
+#: demo house, and the behaviour such a test checks -- the engine running a
+#: shipped manifest end to end -- is worth checking wherever the manifest exists.
+#:
+#: `kitchen.yaml` is the sentinel because it is a module pack and not one of the
+#: three `example-*` documents, which the repository does ship and which a test
+#: may therefore always rely on.
+CORPUS_SENTINEL = paths.ROOT / "packs" / "official" / "kitchen.yaml"
+
+needs_corpus = pytest.mark.skipif(
+    not CORPUS_SENTINEL.is_file(), reason="the bundled pack corpus is not committed"
+)
+
 
 #: Locations `tools.catalog.paths` derives from its own file position, as paths
 #: relative to the root. Every one of them has to move together: a check that

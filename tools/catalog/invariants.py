@@ -77,12 +77,16 @@ FIRST_PARTY = frozenset(
 )
 
 #: Modules that must exist for the layout to be the one the spec froze.
+#:
+#: `packs/` is deliberately not here. The shipped pack corpus is a working-tree
+#: artifact rather than a source directory -- it is untracked and a fresh
+#: checkout has none -- so requiring it would fail the layout check on exactly
+#: the checkout this repository ships, for a directory the product runs without.
 REQUIRED_DIRECTORIES: tuple[str, ...] = (
     "engine",
     "ha_adapter",
     "custom_components",
     "panel",
-    "packs/official",
     "sim",
 )
 

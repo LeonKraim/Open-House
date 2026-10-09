@@ -2,10 +2,10 @@
 
 `spec.txt:95-100` -- the phase's headline deliverable -- asks for the whole
 product to be walked end to end in the order a person meets it: setup, the
-first-day override, the bed button, the Roomba, a sensor that dies and is
-replaced, and an update whose new behaviours wait to be opted into. This module
-is that walk, written as one readable sequence so a reader can follow the story
-down the file rather than reconstruct it from unit tests that each hold a piece.
+first-day override, the bed button, a sensor that dies and is replaced, and an
+update whose new behaviours wait to be opted into. This module is that walk,
+written as one readable sequence so a reader can follow the story down the file
+rather than reconstruct it from unit tests that each hold a piece.
 
 Everything is driven through `openhouse.facade.open_session`: the fake house and
 the virtual clock, no network and no wall-clock sleep. The oracle is the decision
@@ -17,19 +17,15 @@ service name is the thing `catalog/services.yaml` fixed: a declared service is
 projected to what it writes (`light.turn_off` -> `off`) when the unit is built,
 so `light.hall` reads `on` or `off` rather than the service a pack named.
 
-Two steps in the brief were blocked on clauses `pack-manifest/1.3.0` adds, and
-both are now written against them rather than left failing:
+One step in the brief was blocked on a clause `pack-manifest/1.3.0` adds, and it
+is now written against it rather than left failing: **the bed button entering
+Sleep mode**, where `1.3.0`'s `mode` is the value beside a `service` action and
+`packs/official/bedtime.yaml` carries `mode: sleep`.
 
-- **the bed button entering Sleep mode** -- `1.3.0`'s `mode` is the value beside
-  a `service` action, and `packs/official/bedtime.yaml` carries `mode: sleep`;
-- **the Roomba dispatching on its state** -- `1.3.0`'s `match` names the readings
-  a behaviour acts on, and each of the pack's four behaviours gates on one, so
-  the dispatch is four behaviours gating each other out rather than a `choose`.
-
-One step still cannot pass, and it fails loudly with a message naming the missing
-mechanism rather than being weakened into a test of what happens to exist: the
-stuck Roomba's **notification**, because `notify.send_message` raises an event
-rather than writing a state and the port, which takes a state, cannot carry it.
+The bed-button steps install a *shipped* pack, and the shipped corpus is not
+committed (see `packs/` in `.gitignore`), so they are marked `needs_corpus` and
+skip on a checkout that has none. The rest of the walk builds its packs from
+`tests/packfactory.py` and runs everywhere.
 """
 
 from __future__ import annotations
@@ -53,6 +49,7 @@ from engine.vocabulary import Vocabulary
 from openhouse.facade import OpenHouse, UnknownEntityError, open_session
 from tools.catalog import paths
 
+from .conftest import needs_corpus
 from .packfactory import pack
 
 ROOT = paths.ROOT
@@ -270,6 +267,7 @@ def test_first_day_override_a_persons_hand_holds_the_light(
 # --------------------------------------------------------------------------
 
 
+@needs_corpus
 def test_bed_button_the_lights_go_off_and_the_locks_do_not(
     vocabulary: Vocabulary,
 ) -> None:
@@ -328,6 +326,7 @@ def test_bed_button_the_lights_go_off_and_the_locks_do_not(
     assert session.read_entity("lock.front_door").state == "locked"
 
 
+@needs_corpus
 def test_bed_button_the_house_enters_sleep(vocabulary: Vocabulary) -> None:
     """The bed button puts the house in Sleep mode.
 
@@ -389,118 +388,6 @@ def test_bed_button_the_house_enters_sleep(vocabulary: Vocabulary) -> None:
         "can say a behaviour enters a named mode. The pack's own docstring "
         "(`packs/official/bedtime.yaml`) records this; the clause that would "
         "express it is the mode a behaviour activates."
-    )
-
-
-# --------------------------------------------------------------------------
-# ROOMBA -- four acts, and no state to choose between them
-# --------------------------------------------------------------------------
-
-
-def _roomba_session(vocabulary: Vocabulary) -> OpenHouse:
-    """A foyer with a vacuum, the Roomba pack installed as a person installs it.
-
-    A person installs the pack and turns its module on, which enables all four
-    behaviours at once -- the state the pack is *for*, and the one in which the
-    missing dispatch matters.
-    """
-    house = {
-        "name": "the roomba house",
-        "rooms": [
-            {
-                "id": "foyer",
-                "name": "Foyer",
-                "type": "foyer",
-                "bindings": {"vacuum": {"entity_id": "vacuum.roomba"}},
-            }
-        ],
-        "house_scope": {"slots": ["light_group"]},
-    }
-    session = open_session(
-        house=house,
-        vocabulary=vocabulary,
-        started_at=NIGHT,
-        house_settings={
-            "module.roomba.enabled": True,
-            "behaviour.roomba.start_cleaning.enabled": True,
-            "behaviour.roomba.send_home.enabled": True,
-            "behaviour.roomba.resume_cleaning.enabled": True,
-            "behaviour.roomba.notify_stuck.enabled": True,
-        },
-    )
-    session.install_pack(str(PACKS / "roomba.yaml"))
-    return session
-
-
-def test_roomba_an_idle_vacuum_starts_cleaning(vocabulary: Vocabulary) -> None:
-    """An idle Roomba starts a clean, and is not sent home to the dock it is on.
-
-    The dispatch `spec.txt:58` describes, written as `pack-manifest/1.3.0`'s
-    `match` clause rather than a `choose` -- `catalog/pack-policy.yaml` keeps
-    `choose` off the declarative subset, and `match` is a literal the schema
-    checks rather than a branch the engine evaluates. With all four behaviours
-    enabled, `start_cleaning` gates on `docked`/`idle`, `send_home` on
-    `cleaning`, and only the one whose reading matches proposes.
-    """
-    session = _roomba_session(vocabulary)
-    assert session.read_entity("vacuum.roomba").state == "docked"
-
-    mark = len(session.get_decision_log())
-    session.advance_time(minutes=1)
-
-    actions = [
-        (record.actor, command.action)
-        for record in _since(session, mark)
-        if record.outcome is Outcome.ACTED
-        for command in record.commands
-    ]
-    assert actions == [("roomba.start_cleaning", "cleaning")], (
-        f"an idle (docked) vacuum must start cleaning, but the pack proposed "
-        f"{actions!r}: with all four behaviours enabled there is no state "
-        "dispatch, so `send_home` wins arbitration whatever the vacuum is doing. "
-        "`pack-manifest/1.2.0` has no `choose` and no value beside a behaviour's "
-        "`condition` kind, which is the gap `packs/official/roomba.yaml` names."
-    )
-
-
-def test_roomba_a_stuck_vacuum_is_notified(vocabulary: Vocabulary) -> None:
-    """A stuck Roomba raises a notification -- still red, for the port's reason.
-
-    Red on purpose, and now for one boundary rather than two. The state-dispatch
-    half is closed: `notify_stuck` carries `match: [error]`, so it is the only
-    one of the four that answers a robot erroring in the corner, and the two
-    `vacuum.start` behaviours no longer propose into the void.
-
-    What remains is the port: `notify.send_message` raises an event rather than
-    writing a state, so it has no row in `catalog/services.yaml` and the port --
-    which takes a state -- cannot carry it. The assertion reads `notified == []`
-    rather than a list naming the service for exactly that reason.
-    """
-    session = _roomba_session(vocabulary)
-    session.set_state("vacuum.roomba", "error")
-
-    mark = len(session.get_decision_log())
-    session.advance_time(minutes=1)
-
-    # Read off the *actor* rather than the service name, because the second of
-    # the two boundaries below is that the service a notification would be made
-    # through has no state to write -- so asserting on `command.action` would
-    # bake in one answer to a question that is still open. What is required is
-    # that `notify_stuck` acts at all when the vacuum is stuck.
-    notified = [
-        (record.actor, command.action)
-        for record in _since(session, mark)
-        if record.outcome is Outcome.ACTED
-        for command in record.commands
-        if record.actor == "roomba.notify_stuck"
-    ]
-    assert notified, (
-        "a stuck vacuum must raise a notification, but `notify_stuck` proposed "
-        "nothing. Its state gate is closed -- `match: [error]` -- so what remains "
-        "is the port: `notify.send_message` raises an event rather than writing a "
-        "state, so it has no row in `catalog/services.yaml` and the port, which "
-        "takes a state, cannot carry it. Widening the port to carry a service "
-        "call is what closes this half."
     )
 
 

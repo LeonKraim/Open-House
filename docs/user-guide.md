@@ -117,8 +117,10 @@ that offers to add them. Two of its tabs, Store and Dev, are further marked
 admin-only inside the panel; that is a display affordance, and the server refuses
 an admin-only command from a non-admin regardless of what is on screen.
 
-The panel is served locally, from `/local/open-house-panel.js` — a file the
-instance already knows how to hand to a browser. It makes no remote call: the
+The panel is served by the integration itself, from `/open_house/panel.js` —
+the bundle built into `panel/dist/` and read from the instance's `www/`
+directory on each request, so a rebuilt panel is what the next page load runs
+rather than whatever the browser cached. It makes no remote call: the
 screens read the running session through the integration's own websocket
 commands, and the ones that read a pack catalog read the checkout's committed
 registry rather than a network. The consequence is that the whole thing works on
@@ -564,23 +566,21 @@ without operating anything, and the module you publish is the same *module
 definition* an export writes and an import reads — there is no second format in
 between to disagree with the first.
 
-**With no address set, nothing happens.** The Store's address is a field in the
-integration's options (Settings → Devices & Services → Open House → Configure),
-and until one is given the panel opens no connection and the Store tab is the
-house's own store of modules plus nothing else. This is deliberate: a Store is
+**The address ships with the build.** A build of Open House is pointed at a Store
+before it is installed, so the panel never asks for one and a house talks to a
+Store nobody typed the address of. Somebody running a Store of their own sets the
+integration's `store_url` option instead — Settings → Devices & Services → Open
+House → Configure — and an address set there always wins over the one that
+shipped, so pointing the build at the public Store does not cut a self-hosted one
+off. Only a build that ships no address at all opens no connection, and keeps the
+Store tab as the house's own store of modules plus nothing else: a Store is
 public, and no install should be reachable outward because it was installed.
-
-You are not sent to that settings screen to set one, though — **the Publish
-button asks for the address itself**, and so does *Connect a Store* on the Store
-tab. What you type is written to the same option the Configure screen writes, so
-the two are one setting with two doors. A build of Open House can also ship
-*pointed* at a Store, in which case there is nothing to ask for and neither
-screen appears; an address you set yourself always wins over one that shipped.
 
 ### Your name, once
 
 The first thing a Store needs from you is the **name you publish under**. You
-choose it once, on the Store tab, and it is yours from then on. If somebody has
+choose it once — the first time you press Publish, or on the Store tab — and it is
+yours from then on. If somebody has
 it already the Store refuses it, and the refusal is a sentence rather than a code:
 that name is taken, please pick another one — you cannot publish under somebody
 else's name. The same rule stops a name that cannot be one at all (a capital, a
@@ -596,20 +596,28 @@ about publishing worth thinking about before you do it.
 Next to each module this house made there is a **Publish** button. What it
 publishes is the module as it is stored here — its inputs, its answers, the
 blueprint inside it — so what somebody installs is exactly what you published.
-Publishing again replaces your own module on the Store, which is what a corrected
-typo and a new version both are.
+Once a module *is* on the Store, the button is replaced by a greyed-out
+**Published**: the row stops offering to do a thing that has been done, and says
+so instead. The state is read from the Store each time the tab opens, not
+remembered from the press, so a second tab and a reload agree with the first.
 
-**The button is always there, and pressing it is how you set publishing up.** If
-Open House does not yet know which Store to publish to or what name to publish
-under, the button asks for whichever is missing and then publishes — so the
-first thing you publish is also the last step of the setup. The address is asked
-for before the name, and that order is not a preference: changing the address
-forgets the name claimed on the old one, so a name given first would be thrown
-away by the address that followed it.
+**The button is always there, and pressing it is how you set publishing up.**
+It opens one dialog and asks two things. The **description** is what the Store
+shows beside the module: it comes prefilled from the module's own description and
+is asked every time, so the blurb a stranger reads before installing your work can
+be written for them rather than inherited from a note to yourself. The **publisher
+name** is asked the first time and then never again.
+
+**The Store's address is not asked for at all.** It is the one this build ships
+pointed at, so a house has a Store before anybody configures anything. Somebody
+running a Store of their own sets `store_url` on the Configure screen instead, and
+a configured address always wins over the shipped one. Changing the address is
+also the one thing that forgets a claimed name, because a publisher identity
+belongs to the Store that issued it.
 
 If a refusal comes back — the name is taken, the Store cannot be reached — it
 appears in the same dialog, which stays open so you can correct it and press
-Publish again.
+Publish again. What you typed into the description is still there.
 
 ### Browsing, and the two lists
 
@@ -688,7 +696,7 @@ clause, so a pack that adds an option adds a field to the form; a room with no
 such module answers with a `null` schema and `{}` values and the page reads "No
 installed module declares options for this room."
 
-The panel is local-only. It is served from `/local/open-house-panel.js` out of
+The panel is local-only. It is served from `/open_house/panel.js` out of
 the instance's own `www/` directory, it is registered as admin-only, and it reads
 the checkout's committed catalog rather than a remote one. There is no hosted
 panel and no non-admin view of it today.
