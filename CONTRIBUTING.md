@@ -81,6 +81,26 @@ docker compose -f docker/docker-compose.yml up -d
 
 The UI is on <http://localhost:8123> once the container reports ready.
 
+## Cutting a release
+
+The integration is thin: it imports `engine/`, `ha_adapter/`, `tools/` and reads
+the catalog rather than carrying copies, so the source tree on its own is not an
+install. The release asset is what closes that gap.
+
+```console
+python -m tools.package_integration        # writes dist/open_house.zip
+```
+
+That archive is the integration with those packages inside it, rooted at
+`custom_components/open_house/`. Attach it to the GitHub release for the tag;
+`hacs.json` names it (`zip_release`, `filename`), and HACS installs from the
+asset. A release without it installs an integration that fails on load, so the
+asset is part of the release, not an extra.
+
+`tests/test_packaging.py` builds the archive and checks it carries every
+first-party package the integration imports, so a package added to the code and
+forgotten by the builder fails the suite rather than a person's install.
+
 ## What a change should carry
 
 - **A test that fails without the change.** A check proven only against the tree

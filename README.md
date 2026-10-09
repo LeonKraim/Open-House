@@ -13,23 +13,45 @@ and the room it acts in chosen on the room's own page.
 
 ## Install
 
-Open House is installed as a custom integration. With
-[HACS](https://hacs.xyz/) the two steps are:
+Open House is a custom integration with a repository behind it, and an install is
+the two together. The integration in `custom_components/open_house/` is
+deliberately thin: the decisions it makes live in this repository's own Python
+packages (`engine/`, `ha_adapter/`, `tools/`) and in its committed catalog
+(`catalog/`, `schemas/`, `registry/`), which it imports and reads at runtime.
+Those are not copied into the integration directory *in the repository*, because
+they are also what the simulator, the CLI and the test suite run against, and a
+second copy would be a second source of truth.
 
-1. HACS → Integrations → ⋮ → **Custom repositories**, add
-   `https://github.com/LeonKraim/Open-House` as a repository of category
-   *Integration*.
-2. Add **Open House** from HACS, restart Home Assistant, then add the
-   integration from **Settings → Devices & services → Add integration**.
+A release makes them one thing. `tools/package_integration.py` builds
+`dist/open_house.zip` — the integration with those packages inside it — and a
+release attaches that archive as its asset, which is what `hacs.json` points at
+(`zip_release`). So there are two ways to install, and either leaves the
+integration able to find everything it needs:
 
-To install it by hand instead, copy `custom_components/open_house/` from a
-checkout of this repository into your Home Assistant `config` directory and
-restart.
+1. **HACS.** Add this repository as a custom repository of type *Integration*,
+   install Open House from it, and restart Home Assistant. HACS unpacks the
+   release asset, which carries the packages, so nothing else has to be fetched
+   or copied. Add the integration from **Settings → Devices & services**. (A
+   release of this repository *must* carry the asset: cloning the source and
+   dropping `custom_components/open_house/` in by hand does not, and the
+   integration will not load. Build the asset with
+   `python -m tools.package_integration`.)
+2. **The bundled container.** `docker compose up` in `docker/` stands up the
+   whole stack — Home Assistant, the panel, the Store and Node-RED — for
+   development. It mounts the integration at `/config/custom_components/open_house`
+   and the repository's packages read-only at `/openhouse-src`, which is where
+   the integration looks for them by default. This is the quickest way to see
+   everything running.
 
-The catalog of rooms, slots and vocabulary that the integration reads is
-*committed* to this repository (`catalog/`) and is read from the checkout the
-integration was loaded out of. It does not need a Home Assistant restart to
-change, and it is not fetched from anywhere.
+If you are running from a checkout rather than the archive, the packages have to
+be reachable some other way. Home Assistant puts its config directory on
+`sys.path` while it loads custom integrations (`homeassistant/loader.py`), so a
+checkout that *is* your `config` directory works as it stands; and
+`OPEN_HOUSE_SRC`, set to a checkout's root, is how you say where the packages
+are when the integration lives somewhere else.
+
+Either way the catalog is the one committed to this repository and shipped in the
+install. It is never fetched from anywhere.
 
 ## What is in this repository
 
