@@ -3,6 +3,8 @@ docs_dir: docs
 
 nav:
   - User guide: user-guide.md
+  - Pack author guide: pack-author-guide.md
+  - Security: security.md
   - Attribution: attribution.md
   - Reference:
       - Arbitration: reference/arbitration.md

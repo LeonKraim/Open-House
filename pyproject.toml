@@ -1,6 +1,6 @@
 [project]
 name = "oh-tools"
-version = "0.0.0"
+version = "0.1.0"
 description = "Validation and generation tooling for the Open House catalog."
 requires-python = ">=3.12"
 

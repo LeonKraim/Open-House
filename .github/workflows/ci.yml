@@ -6,8 +6,10 @@
 # redistribute, and a pipeline pinned to four third-party repositories fails
 # when those repositories change rather than when this one does. The clones are
 # an input to a one-time local generation step whose outputs are committed, so
-# no job below reads either directory. Each job does install its dependencies
-# over the network (`uv sync`), because this repository commits no lock.
+# no job below reads either directory. The Python jobs install their
+# dependencies over the network (`uv sync`), because this repository commits no
+# Python lock; the panel job installs from the committed `panel/package-lock.json`
+# with `npm ci`, so the browser half is pinned even though the Python half is not.
 #
 # `tools/catalog/ci.py` checks this file in turn: no job may reach for either
 # directory, and a job that does fails the build naming the job. That check reads
@@ -79,6 +81,48 @@ jobs:
 
       - name: Run the engine, the simulator, the scenarios and the control surface
         run: uv run python -m pytest -q
+
+  # The panel. The TypeScript is half the product -- the sidebar is how a person
+  # reaches any of this -- and until this job existed nothing in CI compiled or
+  # tested it: a type error or a broken unit test reached `master` if it did not
+  # also break a Python job. Three things, in the order that fails fastest for
+  # the reason a person cares about: the types, the bundle the integration
+  # actually ships, and the unit tests.
+  #
+  # `npm ci` and not `npm install`: the lockfile is committed (`package-lock.json`),
+  # so `ci` installs exactly what a developer ran and fails rather than quietly
+  # resolving a different tree. The tests need no build -- they run on the
+  # sources -- but the build is here because a bundle that does not build is a
+  # panel that does not load, and `tsc --noEmit` would not catch it.
+  panel:
+    name: panel
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: panel/package-lock.json
+
+      - name: Install the panel's dependencies
+        run: npm ci
+        working-directory: panel
+
+      - name: Typecheck the panel
+        run: npm run typecheck
+        working-directory: panel
+
+      - name: Build the panel bundle
+        run: npm run build
+        working-directory: panel
+
+      - name: Run the panel's unit tests
+        run: npm test
+        working-directory: panel
 
   # The hooks, run as a developer runs them, so that the configuration in
   # `.pre-commit-config.yaml` is exercised in CI rather than assumed to work: the
