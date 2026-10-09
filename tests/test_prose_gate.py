@@ -1,7 +1,7 @@
 """The prose gate -- section 6, task 6.6.
 
-The requirement is one sentence: no shipped artifact, `docs/` included, may
-contain prose quoted from a repo whose prose terms are `ideas_only`. What makes
+The requirement is one sentence: no shipped artifact may contain prose quoted
+from a repo whose prose terms are `ideas_only`. What makes
 it a task rather than a rule is the word *quoted*, and the two tests that decide
 the outcome are the ones the spec names -- a passage reproduced verbatim fails
 naming the artifact and the repo, and the same idea in our own words passes. The

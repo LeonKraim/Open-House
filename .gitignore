@@ -89,6 +89,11 @@ pyright.probe.json
 # The same rule `e2e-house.png` follows -- generated, not authored.
 shots/
 
+# The browser server's own scratch: the console logs, page snapshots and
+# screenshots it drops beside the working directory on every walk. Generated,
+# read by nobody, and committed once by accident -- hence the rule.
+.playwright-mcp/
+
 # The Store backend's own state -- the PocketBase database, uploads and logs of
 # a Store somebody stood up from `store/`. Generated, and the thing that
 # holds every publisher account, so it is never committed.
@@ -104,11 +109,11 @@ store/.env
 # against, and a fresh checkout deliberately ships none of it. Open House runs
 # without it: a house is built from the blueprints a person imports, and the
 # engine, the panel and the catalog all read the vocabulary from `catalog/`,
-# which *is* committed. See `docs/pack-author-guide.md` for what a pack is.
+# which *is* committed.
 #
 # The three `example-*` documents stay, and so does the artefact `example-pack`
 # pins. They are not shipped modules: they are the runtime schemas' own
-# demonstrations, named by the phase-0 spec, walked through in `docs/`, pinned by
+# demonstrations, pinned by
 # `registry/`, and used by the test suite as its fixture -- so they are source,
 # and the one pack the project ships is deliberately the one that demonstrates
 # the format rather than one that does anything.

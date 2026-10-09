@@ -16,10 +16,9 @@ directory, so a test that would pass against a hand-built policy fails here --
 which is the point, because "banning a service is a data change" is only true if
 the data is the committed file.
 
-The last two sections are the ones a reader should check first if they doubt the
-suite covers the rules: `test_every_reason_is_reachable` produces one refusal for
-every reason the module declares, and the documentation tests hold
-`docs/reference/pack-sandbox.md` to naming every reason the module has.
+The last section is the one a reader should check first if they doubt the suite
+covers the rules: `test_every_reason_is_reachable` produces one refusal for every
+reason the module declares.
 """
 
 from __future__ import annotations
@@ -46,7 +45,6 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 ROOT = paths.ROOT
-DOCUMENT = ROOT / "docs" / "reference" / "pack-sandbox.md"
 MODULE = ROOT / "engine" / "sandbox.py"
 
 
@@ -1088,25 +1086,3 @@ def test_every_reason_is_reachable(
     found.update(refusal.reason for refusal in claim.refusals)
 
     assert found == set(sandbox.REASONS), sorted(set(sandbox.REASONS) - found)
-
-
-# --------------------------------------------------------------------------
-# The documentation -- task 3.7
-# --------------------------------------------------------------------------
-
-
-def test_the_document_exists_and_names_the_four_rules() -> None:
-    text = DOCUMENT.read_text(encoding="utf-8")
-    for rule in ("declarative subset", "Entity reach", "declared services", "provides"):
-        assert rule.lower() in text.lower(), rule
-
-
-def test_the_document_names_every_reason_the_module_can_report() -> None:
-    """Every reason the module can carry is named on the page, in backticks.
-
-    The page is the only place a pack author reads the taxonomy, so a reason the
-    module declares and the page omits is a failure nobody can look up.
-    """
-    text = DOCUMENT.read_text(encoding="utf-8")
-    missing = [reason for reason in sandbox.REASONS if f"`{reason}`" not in text]
-    assert missing == [], missing

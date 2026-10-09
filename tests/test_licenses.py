@@ -12,15 +12,10 @@ until section 4, so the rule is implemented in section 2 and exercised here on
 trees built to violate it; on the committed tree it is silent by construction,
 which is why none of these tests assert it there.
 
-The prose side is deliberately thin. `docs/reference/*.md` is checked for
-presence and for naming the author and the licence path, which is what task 2.3
-asks for. The rule that no shipped artifact quotes an `ideas_only` repo's prose
-is a Phase 0 requirement with no check in this suite behind it, and the reason
-is structural rather than an omission: enforcing it means comparing a shipped
-string against the verbatim store in `.local/`, which does not exist in CI. The
-deferral is written down in the section of `docs/reference/phase-0-verification.md`
-headed "The two checks that read the clones are local-only", and named again in
-`catalog/README.md`; nothing is implied by silence here.
+The prose side lives elsewhere. The rule that no shipped artifact quotes an
+`ideas_only` repo's prose is `tools/catalog/prose_gate.py`'s, tested in
+`tests/test_prose_gate.py`; what is tested here is only the records the rule
+reads its answer from.
 """
 
 from __future__ import annotations
@@ -426,34 +421,6 @@ def test_a_licensed_repo_needs_no_contact_block(fake_root: Path) -> None:
     _seed(fake_root, _record("ccostan"))
 
     assert _diagnostics() == []
-
-
-# --- the per-repo prose records ----------------------------------------------
-
-
-@pytest.mark.parametrize("repo", sorted(EXPECTED_RECORDS))
-def test_each_repo_has_exactly_one_licence_record_document(
-    real_root: Path, repo: str
-) -> None:
-    """Task 2.3: one document per repo, naming its author and licence path."""
-    author, _, licence_file = EXPECTED_RECORDS[repo]
-    document = paths.ROOT / "docs/reference" / f"{repo}.md"
-    assert document.is_file(), f"no licence record document for {repo}"
-    text = document.read_text(encoding="utf-8")
-    assert author in text, f"{repo}.md does not name its author"
-    assert "catalog/licenses.yaml" in text, f"{repo}.md does not cite the record"
-    if licence_file is not None:
-        assert licence_file in text, f"{repo}.md does not name {licence_file}"
-
-
-def test_the_contact_document_exists_and_names_both_asks(real_root: Path) -> None:
-    """Task 2.4: the exact ask, written down, for each unlicensed repo."""
-    document = paths.ROOT / "docs/reference/author-contact.md"
-    assert document.is_file()
-    text = document.read_text(encoding="utf-8")
-    for repo, author in (("fwartner", "Florian Wartner"), ("johnkoht", "John Koht")):
-        assert author in text, f"author-contact.md does not name {author}"
-        assert repo in text, f"author-contact.md does not name {repo}"
 
 
 # --- the row rule ------------------------------------------------------------

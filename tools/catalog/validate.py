@@ -1,9 +1,8 @@
 """The validator: the whole catalogue checked in one pass.
 
 `oh-catalog validate` is the command every other part of the project leans on --
-it is the pre-commit hook, it is the CI gate, and it is what the acceptance
-script in task 8.1 drives. It is therefore one function, so that "the validator
-passed" means the same thing everywhere it is said.
+it is the pre-commit hook and it is the CI gate. It is therefore one function,
+so that "the validator passed" means the same thing everywhere it is said.
 """
 
 from __future__ import annotations
@@ -21,7 +20,6 @@ from referencing.exceptions import NoSuchResource, Unresolvable
 from referencing.jsonschema import DRAFT202012, Schema
 
 from . import (
-    attribution,
     behaviors,
     ci,
     conformance,
@@ -649,7 +647,6 @@ _CHECKS: tuple[Callable[[Report], None], ...] = (
     identifier_gate.check_identifier_gate,
     scope.check_scope,
     notices.check_notices,
-    attribution.check_attribution,
     examples.check_examples,
     ci.check_ci_configuration,
     substrate.check_hermeticity,

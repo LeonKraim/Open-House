@@ -70,8 +70,8 @@ _DISCONNECT = 0xE
 #: A connect acknowledgement's return code, by value. Zero is the only one that
 #: is not a refusal, and the rest are named so a failure says `not authorised`
 #: rather than `3`, which is what a reader of a log would otherwise have to look
-#: up. `docs/` is not consulted at runtime; the table is here because a broker's
-#: refusal is the one place this client has an answer to give.
+#: up. The table is here because a broker's refusal is the one place this client
+#: has an answer to give.
 _CONNACK_REASONS: dict[int, str] = {
     0: "accepted",
     1: "refused: unsupported protocol version",

@@ -66,24 +66,13 @@ install. It is never fetched from anywhere.
 | `store/` | The PocketBase-backed published Store, for publishing modules between houses. |
 | `docker/` | A compose file that stands up Home Assistant, the panel and a store on one machine. |
 
-## Documentation
-
-- [`docs/user-guide.md`](docs/user-guide.md) — what the integration does, and
-  where the gaps are.
-- [`docs/pack-author-guide.md`](docs/pack-author-guide.md) — how a module is
-  written.
-- [`docs/reference/`](docs/reference/) — the schemas, the arbitration rules and
-  the per-phase verification notes.
-
-The same documentation is served by MkDocs: `mkdocs serve`.
-
 ## Development
 
 The short version: `uv sync`, then `uv run python -m pytest -q` and
 `uv run python -m tools.catalog.cli validate`. The panel is checked with
-`cd panel && npm ci && npm run typecheck && npm run build && npm test`.
-[`CONTRIBUTING.md`](CONTRIBUTING.md) has the whole of it, including the hooks
-and the container.
+`cd panel && npm ci && npm run typecheck && npm run build && npm test`. The
+hooks are in `.pre-commit-config.yaml`; install them with
+`uv run pre-commit install`.
 
 ## Licence
 

@@ -89,8 +89,8 @@ disagrees, naming the record, and rejects an obligation outside the four the spe
 names. `author_contact` is `channel`, `attempted_on`, `outcome`, `reason`.
 
 `repo` is the repository's owner handle, lowercased -- `ccostan`, `renemarc`,
-`fwartner`, `johnkoht`. It is the token `docs/reference/<repo>.md` is named for
-and the name `repos.yaml` carries; the full URL lives there, in `repo_url`.
+`fwartner`, `johnkoht`. It is the record's own key and the name `repos.yaml`
+carries; the full URL lives there, in `repo_url`.
 
 The same check also reads `behaviors.yaml`, because a row's `license`,
 `reuse_status` and `obligations` are derived from the code licences of the repos

@@ -28,7 +28,6 @@ tuple looking like coverage.
 from __future__ import annotations
 
 import ast
-import re
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -842,60 +841,3 @@ def test_the_module_opens_no_catalog_or_schema_path_of_its_own() -> None:
         for node in ast.walk(ast.parse(source))
         if isinstance(node, ast.ImportFrom) and node.module
     }
-
-
-# --------------------------------------------------------------------------
-# The documentation -- task 4.8
-# --------------------------------------------------------------------------
-
-DOCUMENT = ROOT / "docs" / "reference" / "pack-manifest.md"
-
-#: A fenced YAML block, which on this page is a whole manifest.
-_FENCED = re.compile(r"^```yaml\n(.*?)^```$", re.DOTALL | re.MULTILINE)
-
-
-def _examples() -> list[str]:
-    return _FENCED.findall(DOCUMENT.read_text(encoding="utf-8"))
-
-
-def test_the_document_exists_and_names_the_four_authorities() -> None:
-    text = DOCUMENT.read_text(encoding="utf-8")
-    for authority in (
-        "the schema",
-        "the licence vocabulary",
-        "the corpus",
-        "the marker",
-    ):
-        assert authority in text, authority
-
-
-def test_the_document_names_every_reason_the_module_can_report() -> None:
-    """Every reason the module can carry is named on the page, in backticks.
-
-    The page is the only place a pack author reads the taxonomy, so a reason the
-    module declares and the page omits is a refusal nobody can look up.
-    """
-    text = DOCUMENT.read_text(encoding="utf-8")
-    missing = [reason for reason in manifest.REASONS if f"`{reason}`" not in text]
-    assert missing == [], missing
-
-
-def test_the_document_carries_its_worked_examples() -> None:
-    """A hand-written module, a pack that declares a device, and a derived pack."""
-    assert len(_examples()) == 3
-
-
-@pytest.mark.parametrize("index", [0, 1, 2])
-def test_each_worked_example_validates_as_written(
-    index: int, inspected: tuple, tmp_path: Path
-) -> None:
-    """The page's claim, checked: an example that stopped being valid fails here.
-
-    The examples are whole manifests rather than fragments, so they are judged by
-    all four authorities exactly as an author's file would be.
-    """
-    artifacts, engine = inspected
-    document = yaml.safe_load(_examples()[index])
-    assert isinstance(document, dict)
-    result = _validate(tmp_path, artifacts, engine, document, f"example{index}.yaml")
-    assert result.ok, _messages(result)

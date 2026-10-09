@@ -186,9 +186,8 @@ def clone_handle(repo_dir: Path) -> str:
     # Lowercased because the remote spells it `CCOSTAN` and every other record in
     # the project spells it `ccostan`: GitHub handles are case-insensitive, so the
     # two are the same repository, and the project picked one spelling in
-    # `catalog/README.md` for `licenses.yaml`, `repos.yaml`, `docs/reference/` and
-    # the golden filenames. A handle taken verbatim from the remote would match
-    # none of them.
+    # `catalog/README.md` for `licenses.yaml`, `repos.yaml` and the golden
+    # filenames. A handle taken verbatim from the remote would match none of them.
     if len(parts) < 2 or not parts[-2]:
         raise CheckError(
             INVENTORY_CHECK,
