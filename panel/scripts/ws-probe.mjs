@@ -230,6 +230,48 @@ async function main() {
     check("rooms/available_modules succeeds", available.success === true, JSON.stringify(available.error ?? ""));
   }
 
+  // **The paste box, which is the third way a source arrives and the one no
+  // other assertion here touches.** A picker is read from Home Assistant and a
+  // module from its own record, but a *paste* is text the panel sent -- so it is
+  // the one path whose reader has nothing to consult, and the one that would
+  // break silently if `_dev_text` stopped taking `kind: "text"`. Read rather
+  // than hosted: this asserts the reading, and hosting is a mutation.
+  //
+  // The document is an automation, because that is the kind that arrives flat --
+  // no `blueprint:` block, no inputs -- and a flat document is the case that
+  // once came back as Home Assistant's generic "Unknown error" rather than a
+  // reading (the annotation on an automation's `raw_config` cannot be written by
+  // PyYAML's safedumper). A paste does not go through that door, and this pins
+  // that the door it does go through answers.
+  const pasted = await api.call("open_house/modules/read", {
+    kind: "text",
+    text: [
+      "alias: A probe that pastes",
+      "triggers:",
+      "  - trigger: state",
+      "    entity_id: sensor.open_house_probe",
+      "actions:",
+      "  - action: input_boolean.turn_on",
+      "    target:",
+      "      entity_id: input_boolean.open_house_probe",
+    ].join("\n"),
+  });
+  check("a pasted document reads", pasted.success === true, JSON.stringify(pasted.error ?? ""));
+  if (pasted.success) {
+    check("a pasted document has a title", typeof pasted.result?.source?.title === "string"
+      && pasted.result.source.title.length > 0, JSON.stringify(pasted.result?.source));
+    check("a pasted document offers its service as a candidate",
+      Array.isArray(pasted.result?.candidates)
+      && pasted.result.candidates.some((row) => String(row.name ?? "").includes("input_boolean.turn_on")),
+      JSON.stringify((pasted.result?.candidates ?? []).map((row) => row.name)));
+  }
+
+  const nothingPasted = await api.call("open_house/modules/read", { kind: "text", text: "   " });
+  check("an empty paste is refused, not crashed", nothingPasted.success === false, JSON.stringify(nothingPasted));
+  check("an empty paste says so in words",
+    /nothing pasted/i.test(String(nothingPasted.error?.message ?? "")),
+    JSON.stringify(nothingPasted.error));
+
   api.close();
 
   console.log(`${checked - failures.length}/${checked} assertions hold`);
