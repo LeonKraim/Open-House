@@ -1,33 +1,45 @@
-MIT License
+Open House -- licence
 
-Copyright (c) 2026 Leon Kraim
+Copyright (c) 2026 Leon Kraim. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Permission
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+You are granted a non-exclusive, non-transferable licence to download, install
+and use this software, in the form in which it is published, for any purpose,
+without payment, on the condition that you accept every term below. If you do
+not accept them, you have no licence to use this software.
+
+Installing the software, and receiving a copy of it from a repository or a
+package manager through which it is distributed, is use under this licence and
+is permitted.
+
+Conditions
+
+You may not:
+
+  - modify, adapt, translate or otherwise change the software, or create a
+    work derived from it;
+  - distribute, publish, sublicense, sell, rent, or otherwise make the software
+    or any copy of it available to anyone else, whether changed or unchanged;
+  - remove or alter this licence, or any copyright or attribution notice in
+    the software;
+  - present a copy of the software, or anything built from it, under the name
+    "Open House" or any name likely to be confused with it.
+
+No warranty
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
----
+No liability
 
-Additional condition: revenue share
+IN NO EVENT SHALL THE AUTHOR OR COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
+OF OR OTHER DEALINGS IN THE SOFTWARE.
 
-The permission granted above is granted on the further condition that any
-party whose use of the Software, or of a work derived from it, produces
-revenue -- through sale, licence, subscription, hosting, support, advertising
-or otherwise -- pays the copyright holder five per cent (5%) of that revenue,
-within thirty days of the end of each calendar quarter in which it is earned.
+Entire licence
 
-Where this condition is not met, the permission granted above does not apply.
+This is the whole licence. It grants no right that is not written here, and any
+right not granted is reserved to the copyright holder.
