@@ -27,7 +27,24 @@ secrets.yaml
 # repository (`custom_components/`, `packs/`, `engine/`) and is never written
 # here; the compose file mounts that directory as `/config` and mounts the
 # repository's packages read-only beside it at `/openhouse-src`.
-docker/ha-config/
+#
+# `docker/ha-config/*` rather than `docker/ha-config/` so git still descends, and
+# the one file below can be named back in. It is not runtime state: it is the
+# third-party blueprint `tests/test_module_host.py` and `tests/test_pack_authoring.py`
+# read as their fixture -- the real MarqBarq Dynamic Lighting document, branches,
+# templates, per-branch variables and all, which a hand-made stand-in would pass
+# while the real screen did not. The tests call it "the committed blueprint", so
+# it has to be committed, and without it a fresh checkout fails every case built
+# on it. The rest of `blueprints/`, and everything else in this directory, stays
+# ignored.
+docker/ha-config/*
+!docker/ha-config/blueprints/
+docker/ha-config/blueprints/*
+!docker/ha-config/blueprints/automation/
+docker/ha-config/blueprints/automation/*
+!docker/ha-config/blueprints/automation/MarqBarq/
+docker/ha-config/blueprints/automation/MarqBarq/*
+!docker/ha-config/blueprints/automation/MarqBarq/dynamic-lighting.yaml
 
 # Node-RED's own state: the flows this machine's editor holds, which include the
 # ones Open House pushed for a module it no longer hosts. Same rule as
