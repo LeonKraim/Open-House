@@ -1,0 +1,17 @@
+# The base image, per architecture, chosen rather than left to the builder's
+# default.
+#
+# A Home Assistant add-on's Dockerfile is expected to start from `ARG BUILD_FROM`
+# and `FROM ${BUILD_FROM}`, and Supervisor fills that argument from here. Left
+# out, the default is a Home Assistant base image -- Alpine, no Node.js -- and
+# the Dockerfile below could not install Node-RED into it. So the base is
+# Node-RED's own official image, which carries the Node.js version Node-RED asks
+# for and the `/usr/src/node-red` tree its own `npm start` runs from.
+#
+# Pinned to a minor line on purpose: an add-on that followed `latest` would be a
+# different Node-RED under the same version number, which is the drift this
+# repository pins away from everywhere else. The tag is `4.0`.
+build_from:
+  aarch64: nodered/node-red:4.0
+  amd64: nodered/node-red:4.0
+  armv7: nodered/node-red:4.0

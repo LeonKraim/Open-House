@@ -1,118 +1,28 @@
-"""The Dev tab's server half: reading Home Assistant's own automations, and writing modules.
-
-**The conversion itself lives in `ha_adapter.pack_authoring`, and deliberately.**
-That module is pure -- it takes a document and a plan and returns a mapping -- so
-it can be read, tested and reasoned about without a Home Assistant in the room.
-This module is the part that cannot be pure: it knows where a person's automations
-are, where their modules may be written, and what this house's vocabulary is. The
-split is the same one `setup_flow` and `config_flow` already draw, and it is drawn
-here for the same reason -- the interesting half stays testable.
+"""The Dev tab's server half: reading Home Assistant's own automations and blueprints.
 
 **Home Assistant is asked for its own automations rather than read off disk.**
 `hass.data["automation"]` holds one entity per automation, YAML mode and UI mode
 alike, and each carries the `raw_config` the automation editor itself edits. That
 is the document a person sees when they open an automation in Home Assistant, so
-it is the document this imports -- not a re-parse of `automations.yaml`, which
+it is the document these rows name -- not a re-parse of `automations.yaml`, which
 would silently miss every automation a person made in the UI.
 
 **A blueprint is read through Home Assistant's blueprint model, which means
-through Home Assistant's validation.** `DomainBlueprints` loads and validates, and
-`Blueprint.yaml()` re-emits the document in canonical form. Handing that text to
-the importer rather than the file on disk means a blueprint Home Assistant would
-refuse is a blueprint this refuses, with Home Assistant's own reason.
-
-**A module a person authors is written under `config/open_house/packs`.** The
-checkout is the integration's own source tree and is read-only in every real
-deployment -- a module belongs beside the house, not inside a program the person
-will update. The session learns that directory at setup (`LiveSession.user_root`),
-which is what makes a saved module show up in the same catalog the Store reads
-from, with the `local` tier the tiers table already named for it.
+through Home Assistant's validation.** `DomainBlueprints` loads and validates, so
+a blueprint Home Assistant would refuse is a row with a reason rather than
+omitted: "there is a file here and it is not a blueprint" is a fact a person who
+put it there wants, and a list that quietly dropped it would send them looking in
+the wrong place.
 """
 
 from __future__ import annotations
 
-import logging
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
+from collections.abc import Mapping
 
-import yaml
 from homeassistant.core import HomeAssistant
 from homeassistant.util.yaml import dump as yaml_dump
 
-from engine import vocabulary as engine_vocabulary
-from engine.binding import HouseScope, RoomScope, resolve_slot
 from ha_adapter import pack_authoring
-from ha_adapter.live import LiveSession
-
-from .const import PACKS_DIRECTORY
-
-_LOGGER = logging.getLogger(__name__)
-
-
-def packs_root(hass: HomeAssistant) -> Path:
-    """The directory a person's own modules live in.
-
-    `PACKS_DIRECTORY` is spelled in `const.py` rather than here, because the
-    session the host builds reads the same directory and the two have to agree
-    about it to the letter.
-    """
-    return Path(hass.config.path(*PACKS_DIRECTORY))
-
-
-def saved(root: Path) -> list[Mapping[str, object]]:
-    """The modules a person has authored, as rows the Dev tab lists.
-
-    A plain directory read, so the caller runs it in an executor -- the panel
-    asks for this list every time the tab opens, and globbing a directory on the
-    event loop is the blocking call Home Assistant's own watchdog names.
-
-    A file that will not parse is skipped rather than reported: this is the list
-    a person navigates by, and the module that refuses to load is one the
-    *install* path will name precisely when they try to install it. Reporting it
-    here as a row with no name and no version would be a worse list, not a
-    fuller one.
-    """
-    try:
-        paths = sorted(root.glob("*.yaml"))
-    except OSError:
-        return []
-    found: list[Mapping[str, object]] = []
-    for path in paths:
-        try:
-            document = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except (OSError, yaml.YAMLError):
-            continue
-        if not isinstance(document, Mapping):
-            continue
-        found.append(
-            {
-                "name": str(document.get("name") or path.stem),
-                "title": str(
-                    _nested(document, "i18n", "default", "pack")
-                    or document.get("name")
-                    or path.stem
-                ),
-                "description": str(document.get("description") or ""),
-                "version": str(document.get("version") or ""),
-                "behaviours": len(document.get("behaviours") or []),
-                "options": len(document.get("options") or []),
-                "file": path.name,
-            }
-        )
-    return found
-
-
-def _nested(document: Mapping[str, Any], *keys: str) -> object:
-    """Walk a document by keys, answering `None` the moment one is missing."""
-    node: object = document
-    for key in keys:
-        if not isinstance(node, Mapping):
-            return None
-        node = node.get(key)
-    return node
-
 
 # --------------------------------------------------------------------------
 # Reading what a person may import
@@ -238,7 +148,7 @@ async def source_text(hass: HomeAssistant, kind: str, key: str) -> str:
             )
         try:
             return yaml_dump(dict(raw))
-        except Exception as err:  # noqa: BLE001 -- reported, never swallowed
+        except Exception as err:
             # The refusal is `AuthoringError` because the caller only catches
             # that (`websocket_api.ws_modules_read`): anything else leaves the
             # panel with Home Assistant's generic "Unknown error" and a stack
@@ -267,123 +177,4 @@ async def source_text(hass: HomeAssistant, kind: str, key: str) -> str:
     )
 
 
-def reference(
-    session: LiveSession,
-) -> tuple[tuple[str, ...], Mapping[str, Sequence[str]]]:
-    """The service list and the slot vocabulary this house validates against.
-
-    Both are read from the checkout, both are disk, and the caller reads them in
-    an executor job for that reason. The slot vocabulary is `catalog/slots.yaml`
-    as `setup_flow` reads it -- slot name to the domains it accepts -- because the
-    importer's one job that needs it is refusing a slot bound to a device it
-    cannot ask, and that question is the catalog's to answer.
-    """
-    from ha_adapter.setup_flow import load_slot_domains
-
-    return (
-        tuple(engine_vocabulary.load_service_states(session.root)),
-        load_slot_domains(session.root),
-    )
-
-
-# --------------------------------------------------------------------------
-# Saving
-# --------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Saved:
-    """A module written to disk, and the two paths it was written to."""
-
-    manifest: Path
-    artifact: Path
-    document: Mapping[str, object]
-    text: str
-
-
-def save(root: Path, draft: pack_authoring.Draft) -> Saved:
-    """Write a drafted module under `root`, one manifest file and one artifact.
-
-    Two files rather than one because the schema asks for it: a pack pins what it
-    confers (`provides`), and a pin points at a real file inside the pack's own
-    directory. The artifact is the automation the module was read from, restated
-    in the engine's terms -- the interpreter binds the manifest's clauses and
-    never reads it, and it is written anyway for the reason `packs/official`
-    writes one: a pack that conferred nothing but a declaration would be a pack
-    whose manifest nobody could check against anything.
-
-    Blocking, by definition. The caller is an executor job, because this runs
-    from a websocket handler and the event loop is not where the disk belongs.
-    """
-    name = str(draft.document["name"])
-    root.mkdir(parents=True, exist_ok=True)
-    manifest = root / f"{name}.yaml"
-    artifact = root / draft.artifact_path
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-    text = pack_authoring.module_text(draft.document)
-    manifest.write_text(text, encoding="utf-8")
-    artifact.write_text(draft.artifact_text, encoding="utf-8")
-    return Saved(
-        manifest=manifest, artifact=artifact, document=draft.document, text=text
-    )
-
-
-# --------------------------------------------------------------------------
-# Exporting
-# --------------------------------------------------------------------------
-
-
-def bound_slots(
-    session: LiveSession, behaviour: Mapping[str, object], room_id: str | None
-) -> Mapping[str, Sequence[str]]:
-    """The entities each of one behaviour's slots resolves to, for a room.
-
-    The same resolution the engine performs when the behaviour runs, asked the
-    same way (`engine.binding.resolve_slot`), so an export is what the house
-    *does* and not what its bindings happen to look like. A behaviour declared at
-    house scope resolves at house scope whichever room asked, which is the
-    distinction that would be lost by reading the room's bindings directly.
-
-    A slot that resolves to nothing is present with an empty tuple rather than
-    absent, so an exported automation that acts on nothing says so by naming no
-    entity instead of by omitting its `target` and reading as an automation that
-    acts on everything.
-    """
-    house = session.engine.house
-    scope = (
-        HouseScope()
-        if behaviour.get("scope") == "house"
-        else RoomScope(room_id if room_id is not None else HOUSE_SCOPE)
-    )
-    resolved: dict[str, Sequence[str]] = {}
-    for slot in behaviour.get("slots", []):
-        if not isinstance(slot, str):
-            continue
-        try:
-            resolved[slot] = resolve_slot(house, scope, slot).entities
-        except Exception:
-            # A slot the vocabulary does not know, or one no room binds: the
-            # honest answer is "nothing", and `resolve_slot` raises for the
-            # former. Narrowing this would mean enumerating `engine.binding`'s
-            # failures here, which is a second definition of its contract.
-            resolved[slot] = ()
-    return resolved
-
-
-#: The room id a behaviour declared at house scope is resolved with when the
-#: caller named no room. The engine's own spelling for the house.
-HOUSE_SCOPE = ""
-
-
-__all__ = [
-    "HOUSE_SCOPE",
-    "Saved",
-    "automations",
-    "blueprints",
-    "bound_slots",
-    "packs_root",
-    "reference",
-    "save",
-    "saved",
-    "source_text",
-]
+__all__ = ["automations", "blueprints", "source_text"]

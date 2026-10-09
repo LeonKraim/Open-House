@@ -11,7 +11,7 @@
     "gen:types": "node scripts/generate-types.mjs",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
-    "test": "node --test src/api/client.test.ts src/api/standalone.test.ts src/components/casts.test.ts src/components/schema-form.test.ts src/dev/mock-backend.test.ts src/tabs/activity.test.ts src/tabs/dev.test.ts src/tabs/health.test.ts src/tabs/host-module.test.ts",
+    "test": "node --test src/api/client.test.ts src/api/standalone.test.ts src/components/casts.test.ts src/components/schema-form.test.ts src/dev/mock-backend.test.ts src/tabs/activity.test.ts src/tabs/health.test.ts src/tabs/host-module.test.ts src/tabs/store.test.ts",
     "dev": "node scripts/generate-types.mjs && vite"
   },
   "dependencies": {

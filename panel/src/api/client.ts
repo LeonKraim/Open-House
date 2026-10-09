@@ -26,10 +26,6 @@ import type {
   BindingSuggestion,
   Capabilities,
   DecisionLogEntry,
-  DevExportReply,
-  DevPlan,
-  DevReadReply,
-  DevSaved,
   DevSource,
   HealthIssue,
   HostedModule,
@@ -44,9 +40,12 @@ import type {
   ModuleSlotRuleKind,
   ModuleUninstallReply,
   ProfileRef,
+  PublishedRow,
   RoomDetail,
   RoomSummary,
+  StoreCommentRow,
   StoreEntry,
+  StoreStatus,
 } from "./models.ts";
 
 /** The response envelope Home Assistant's websocket commands answer with. */
@@ -691,10 +690,10 @@ export class OpenHouseClient {
     return this.call(COMMANDS.dashboardGenerate, { room_id: roomId });
   }
 
-  // -- dev: authoring and export -------------------------------------------
+  // -- dev: what may be imported -------------------------------------------
 
   /**
-   * What may be imported, and what has already been authored.
+   * What may be imported: this instance's automations and blueprints.
    *
    * The one Dev command answerable with no house, so the tab renders a source
    * list before setup as well as after.
@@ -702,66 +701,8 @@ export class OpenHouseClient {
   devSources(): Promise<{
     automations: DevSource[];
     blueprints: DevSource[];
-    saved: DevSaved[];
   }> {
     return this.call(COMMANDS.devSources);
-  }
-
-  /**
-   * Read one source into the tables every decision is made against.
-   *
-   * Called again after each change to the decisions *only* when the source
-   * itself changes: the reading is a property of the document, not of the plan,
-   * so re-reading on every keystroke would re-walk the document for an answer
-   * that cannot have changed.
-   */
-  devRead(
-    kind: "automation" | "blueprint" | "text",
-    handle: { key?: string; text?: string },
-  ): Promise<DevReadReply> {
-    return this.call(COMMANDS.devRead, { kind, ...handle });
-  }
-
-  /** Write the module a plan describes, optionally installing it in one call. */
-  devSave(
-    kind: "automation" | "blueprint" | "text",
-    handle: { key?: string; text?: string },
-    plan: DevPlan,
-    install: { into?: string } | null,
-  ): Promise<{ saved: DevSaved & { yaml: string }; modules: InstalledModule[] }> {
-    return this.call(COMMANDS.devSave, {
-      kind,
-      ...handle,
-      plan,
-      install: install !== null,
-      // Against `undefined`, not against truth: the empty string is the house.
-      // `into ? ...` dropped it, so "the whole house" travelled as no room at
-      // all -- which the server reads as "place this by the entity join" and
-      // not as "this belongs to the house", the opposite of what was chosen.
-      ...(install?.into !== undefined ? { room_id: install.into } : {}),
-    });
-  }
-
-  /** Install a module a person authored, from the file they authored it to. */
-  devInstall(
-    name: string,
-    roomId?: string,
-  ): Promise<{ modules: InstalledModule[] }> {
-    return this.call(COMMANDS.devInstall, {
-      name,
-      // Again the house is `""`, so the test is against `undefined`.
-      ...(roomId !== undefined ? { room_id: roomId } : {}),
-    });
-  }
-
-  /** One module's behaviours, as the automations that would do the same. */
-  devExport(pack: string, roomId?: string): Promise<DevExportReply> {
-    return this.call(COMMANDS.devExport, {
-      pack,
-      // House scope is `""` here too: exporting at house scope asks the server
-      // for the house's own bindings, which a truthiness test never sent.
-      ...(roomId !== undefined ? { room_id: roomId } : {}),
-    });
   }
 
   // -- Hosted modules ------------------------------------------------------
@@ -1021,6 +962,94 @@ export class OpenHouseClient {
     rooms: { id: string; name: string }[];
   }> {
     return this.call(COMMANDS.modulesStore, { room_id: roomId });
+  }
+
+  // -- the published Store --------------------------------------------------
+
+  /**
+   * Whether this house has a published Store to talk to, and under what name.
+   *
+   * Asked before anything else on the tab, because the answer decides what the
+   * tab *is*: with no address it is the house's own store of modules, and with
+   * one it is that store plus everything below. Nothing here opens a connection
+   * when no address is set, so a house that has never heard of the Store is not
+   * made to wait for one.
+   */
+  publishedStatus(): Promise<StoreStatus> {
+    return this.call(COMMANDS.publishedStatus, {});
+  }
+
+  /**
+   * Claim this install's publisher name.
+   *
+   * Once: the name is this install's afterwards, and the Store refuses a second
+   * person asking for it. The refusal arrives as a `PanelError` whose message is
+   * the sentence to show -- "that name is taken" or "names are lower case" --
+   * because the two are the same thing to a screen and different things to a
+   * person.
+   */
+  publisherClaim(name: string): Promise<{ name: string }> {
+    return this.call(COMMANDS.publisherClaim, { name });
+  }
+
+  /**
+   * The published Store, split into what this house has and what it does not.
+   *
+   * The split is the server's, matched on the module's slug against the
+   * definitions this house holds.
+   */
+  publishedBrowse(search = ""): Promise<{
+    installed: PublishedRow[];
+    not_installed: PublishedRow[];
+  }> {
+    return this.call(COMMANDS.publishedBrowse, { search });
+  }
+
+  /** Publish one of this house's own modules, by the name it is stored under. */
+  publishedPublish(
+    module: string,
+    summary = "",
+  ): Promise<{ published: PublishedRow }> {
+    return this.call(COMMANDS.publishedPublish, { module, summary });
+  }
+
+  /**
+   * Take a published module into this house's own store.
+   *
+   * `id` is the Store's record rather than the slug: two publishers may offer a
+   * module of one name, and a person picked the row they picked. `replace` is
+   * asked for only when a module of that name is already here.
+   *
+   * The wire name is `module_id` and not `id` on purpose. A Home Assistant
+   * websocket message is one flat object, and `id` in it is already the
+   * *message's* own number -- what the reply is matched to. A payload key of the
+   * same name does not travel beside it; it overwrites it, the reply is matched
+   * to nothing, and the call hangs until the tab is closed. Every other command
+   * here passes `room_id`, `slug` or `pack` for the same reason.
+   */
+  publishedInstall(
+    id: string,
+    replace = false,
+  ): Promise<{ module: string; replaced: boolean; store: ModuleOfferRow[] }> {
+    return this.call(COMMANDS.publishedInstall, { module_id: id, replace });
+  }
+
+  /** Rate a published module, one to five whole stars. */
+  publishedRate(
+    id: string,
+    stars: number,
+  ): Promise<{ rating: number; stars_count: number }> {
+    return this.call(COMMANDS.publishedRate, { module_id: id, stars });
+  }
+
+  /** What people have said about one published module. */
+  publishedComments(id: string): Promise<{ comments: StoreCommentRow[] }> {
+    return this.call(COMMANDS.publishedComments, { module_id: id });
+  }
+
+  /** Say something about one published module, and get the list back. */
+  publishedComment(id: string, body: string): Promise<{ comments: StoreCommentRow[] }> {
+    return this.call(COMMANDS.publishedComment, { module_id: id, body });
   }
 
   /**

@@ -370,3 +370,118 @@ def test_the_tab_says_which_half_is_the_persons() -> None:
     _push(bare, source_entity=None)
     assert "open_house_flow_dynamic_bypass_light" in bare.body()["info"]
     assert "Nothing is wired into it yet" in bare.body()["info"]
+
+
+# -- The bundled add-on, and the rule about a Node-RED somebody already has ---
+#
+# The integration can point at a Node-RED this repository ships as its own
+# add-on, but only when nobody has named one. `bundled_from_info` is the pure
+# half of that -- reading the Supervisor's answer -- and is held here so a change
+# in how the two addresses are read fails a test rather than a house.
+
+
+def test_the_bundled_addons_two_addresses_come_from_the_supervisor_answer() -> None:
+    """One add-on, two addresses, and neither derived from the other.
+
+    The push address is the internal name the Supervisor gives the add-on, which
+    Home Assistant reaches on the Supervisor's network; the editor address is the
+    ingress path, which is the only one a browser on the Home Assistant page can
+    open. A single address would make one of the two wrong.
+    """
+    bundled = node_red.bundled_from_info(
+        {
+            "result": "ok",
+            "data": {
+                "state": "started",
+                "hostname": "local_open_house_nodered",
+                "ingress_url": "/api/hassio_ingress/abc123",
+            },
+        }
+    )
+    assert bundled is not None
+    assert bundled.push_url == "http://local_open_house_nodered:1880"
+    assert bundled.editor_url == "/api/hassio_ingress/abc123"
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        # Stopped: an `ingress_url` with no editor behind it, which is not "use".
+        {
+            "result": "ok",
+            "data": {"state": "stopped", "hostname": "h", "ingress_url": "/i"},
+        },
+        # Started but with a field missing: read defensively, not trusted.
+        {"result": "ok", "data": {"state": "started", "ingress_url": "/i"}},
+        {"result": "ok", "data": {"state": "started", "hostname": "h"}},
+        # Not installed, not the shape, not an answer at all.
+        {"result": "ok", "data": None},
+        {"result": "error", "message": "Addon is not installed"},
+        None,
+        "not a mapping",
+        [],
+    ],
+)
+def test_a_bundled_addon_that_is_not_running_is_never_used(info: object) -> None:
+    """A stopped add-on and one that was never installed answer the same way.
+
+    The integration must never treat a Node-RED the person has not started as
+    their Node-RED, and must never break over an answer that is not the one it
+    expects. Both are `None`, which is what leaves a configured address -- or no
+    address at all -- as the only thing left.
+    """
+    assert node_red.bundled_from_info(info) is None
+
+
+def test_a_configured_address_always_wins_over_the_bundled_one() -> None:
+    """The conflict rule, at the editor: a set address is used and nothing else.
+
+    The bundled add-on is reached for only when nothing is configured, so a house
+    with its own Node-RED never sees ours -- which is the whole reason a person
+    who already runs Node-RED can install this integration without a second
+    Node-RED appearing.
+    """
+    chosen = asyncio.run(
+        node_red.async_editor_url(None, {"node_red_url": "http://mine:1880"})
+    )
+    assert chosen == "http://mine:1880"
+
+
+def test_the_configured_editor_address_is_preferred_over_the_push_one() -> None:
+    """Two configured addresses, and the browser's is the one embedded."""
+    chosen = asyncio.run(
+        node_red.async_editor_url(
+            None,
+            {
+                "node_red_url": "http://nodered:1880",
+                "node_red_editor_url": "http://localhost:1880",
+            },
+        )
+    )
+    assert chosen == "http://localhost:1880"
+
+
+def test_a_configured_address_always_wins_for_pushing_too() -> None:
+    """Same rule on the push side, and the token travels with the person's own."""
+    client = asyncio.run(
+        node_red.async_client(
+            None, {"node_red_url": "http://mine:1880", "node_red_token": "secret"}
+        )
+    )
+    assert client is not None
+    assert client.url == "http://mine:1880"
+    assert client.token == "secret"
+
+
+def test_with_no_address_and_no_supervisor_there_is_no_node_red(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The dev stack, and every plain-container install, is this case.
+
+    No configured address and no Supervisor to ask: the editor has no address and
+    the push has no client. That is the ordinary state off Home Assistant OS and
+    is what makes everything above degrade rather than raise.
+    """
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    assert asyncio.run(node_red.async_editor_url(None, {})) == ""
+    assert asyncio.run(node_red.async_client(None, {})) is None

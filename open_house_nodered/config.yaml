@@ -1,0 +1,59 @@
+# Open House Node-RED -- the add-on the Open House integration ships for the
+# cast that answers an input with a flow.
+#
+# **Nothing here is a host port, and that is the whole design.** The add-on is
+# reached two ways and neither is a published port: the *browser* opens the
+# editor through Home Assistant ingress (`ingress: true`, `ingress_port: 1880`),
+# and the *integration* pushes a flow to the Admin API at the add-on's internal
+# Supervisor hostname on the same 1880, which resolves only between the
+# Supervisor's containers. A Node-RED a person already runs keeps the host's
+# 1880 to itself, because this add-on never asks for it.
+#
+# **The palette is in the image**, not left to the palette manager: the flow Open
+# House pushes is made of `node-red-contrib-home-assistant-websocket` nodes, and
+# a first-run install step is one nothing can prove. See the Dockerfile.
+#
+# **The integration never starts this add-on.** It only *reads* the Supervisor's
+# record of it (`custom_components/open_house/node_red.py`), and only when the
+# person has set no Node-RED address of their own; a stopped add-on is invisible
+# to it. So a person who already has Node-RED simply never installs this, and
+# nothing about the Open House integration changes for them.
+name: Open House Node-RED
+version: "0.1.0"
+slug: open_house_nodered
+description: >-
+  The Node-RED that Open House answers an input with, embedded in the Open House
+  panel. Its own flows and its own data; it never touches a Node-RED you already
+  run and never takes the host's port 1880.
+url: https://github.com/LeonKraim/Open-House
+arch:
+  - aarch64
+  - amd64
+  - armv7
+init: false
+startup: application
+# `auto`, because the only person who has this installed is a person who chose to
+# install it: the add-on store is where they said yes, and re-asking them at
+# every boot would make a Node-RED they asked for something they have to start.
+# The Open House integration still never starts it -- see the header.
+boot: auto
+# Ingress and only ingress. `ingress_port` is the port Node-RED listens on
+# inside the add-on; the Supervisor proxies the editor to it. No `ports:` block
+# exists and none should be added: a published 1880 is exactly the collision
+# this add-on is built to avoid.
+ingress: true
+ingress_port: 1880
+panel_title: Node-RED
+panel_icon: mdi:transit-connection-variant
+# The add-on talks to Home Assistant as itself, which is what lets the Home
+# Assistant server node inside Node-RED connect with the token the Supervisor
+# already places in this add-on's environment -- no address and no token written
+# down anywhere. See run.sh, which seeds that node once.
+homeassistant_api: true
+options:
+  # Left empty means "keep the container's own clock", which is what a person on
+  # a Home Assistant OS image already set. Given, it is exported as TZ so a
+  # flow's timestamps are in their local time.
+  timezone: ""
+schema:
+  timezone: str?

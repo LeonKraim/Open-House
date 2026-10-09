@@ -17,9 +17,6 @@ import type {
   BindingSuggestion,
   Capabilities,
   DecisionLogEntry,
-  DevAnalysis,
-  DevSaved,
-  DevSlot,
   DevSource,
   HealthIssue,
   HostedModule,
@@ -38,10 +35,13 @@ import type {
   ModuleSlotRuleKind,
   ModuleSlotWord,
   ProfileRef,
+  PublishedRow,
   RoomDetail,
   RoomSummary,
   SlotRuleFacts,
+  StoreCommentRow,
   StoreEntry,
+  StoreStatus,
 } from "../api/models.ts";
 import type { JsonSchema } from "../components/schema-spec.ts";
 import { COMMANDS, REFUSALS } from "../api/protocol.ts";
@@ -1078,14 +1078,11 @@ const STORE: StoreEntry[] = [
 ];
 
 /**
- * The Dev tab's fixtures: what may be imported, and the reading of one source.
+ * The Dev tab's fixtures: the sources a person may import.
  *
- * The mock has no document parser -- the server's whole authoring stack sits
- * behind `dev/read`, and re-implementing it here would be a second one that
- * could disagree with it. So the reading is of a *fixed* document: the rows are
- * the same shape the server sends, the choices a person makes travel in
- * `dev/save`'s payload, and the verdict that matters is `dev/save`'s. What this
- * buys is the thing the mock exists for -- a screen with every row on it.
+ * Read from Home Assistant by the real server, so the mock only has to name one
+ * of each kind: what a `dev/sources` reply carries is a list, and a screen that
+ * renders it needs a row rather than a document.
  */
 const DEV_AUTOMATIONS: DevSource[] = [
   {
@@ -1104,72 +1101,6 @@ const DEV_BLUEPRINTS: DevSource[] = [
     domain: "light",
   },
 ];
-
-/** The reading of that fixed source, field for field with `pack_authoring.analyse`. */
-const DEV_ANALYSIS: DevAnalysis = {
-  title: "Hallway motion",
-  description: "The hall light on when motion is seen after dark.",
-  blueprint: false,
-  entities: [
-    {
-      key: "motion",
-      label: "Motion",
-      entity_id: "binary_sensor.kitchen_motion",
-      domain: "binary_sensor",
-      count: 2,
-      optional: false,
-      places: ["trigger", "condition"],
-      suggested_slot: "motion_sensor",
-    },
-    {
-      key: "light",
-      label: "Light",
-      entity_id: "light.kitchen",
-      domain: "light",
-      count: 1,
-      optional: false,
-      places: ["action"],
-      suggested_slot: "ceiling_light",
-    },
-  ],
-  values: [
-    {
-      key: "delay",
-      label: "Delay",
-      kind: "duration",
-      default: 120,
-      description: "How long the light stays on.",
-      minimum: null,
-      maximum: null,
-      unit: "seconds",
-      choices: [],
-      places: ["action"],
-    },
-  ],
-  services: [
-    {
-      key: "turn_on",
-      service: "light.turn_on",
-      supported: true,
-      acts_on: ["light"],
-      data_keys: ["brightness_pct"],
-      where: "action",
-      depth: 0,
-    },
-  ],
-  triggers: ["state"],
-  conditions: [],
-  dropped: [],
-};
-
-/** The two vocabularies a decision is made against, sent with the reading. */
-const DEV_SLOTS: DevSlot[] = [
-  { name: "ceiling_light", domains: ["light"], suggested: true },
-  { name: "motion_sensor", domains: ["binary_sensor"], suggested: true },
-  { name: "ambient_light_sensor", domains: ["sensor"], suggested: false },
-];
-
-const DEV_SERVICES: string[] = ["light.turn_on", "light.turn_off", "switch.turn_on"];
 
 /** The inputs a hosted module's read offers, as the import screen's rows. */
 const MODULE_INPUTS: ModuleInputRow[] = [
@@ -1298,6 +1229,142 @@ const STORED_MODULES: ModuleOfferRow[] = [
     deployed: [],
   },
 ];
+
+/**
+ * This install's side of the published Store, as a dev session leaves it.
+ *
+ * The mock pretends to be a Store server the way it pretends to be a Home
+ * Assistant: an address it answers `published/status` with, a publisher name
+ * that starts empty so the claim form is on screen, and a small list of rows
+ * that covers the shapes the screen has to draw differently -- one this house
+ * published, one it did not, one nobody has rated, and one it already holds as a
+ * definition. `PUBLISHED_URL` is a name rather than a live address because
+ * nothing here opens a connection.
+ */
+const PUBLISHED_URL = "https://store.openhouse.example";
+
+/**
+ * The name a second person asking for it would be refused.
+ *
+ * The Store's rule is that a name belongs to whoever claimed it first, and the
+ * mock keeps one name back so `npm run dev` can walk the refusal without a
+ * second Home Assistant: claiming this answer with the Store's own sentence
+ * rather than a mock-specific one.
+ */
+const TAKEN_PUBLISHER = "marqbarq";
+
+/** This install's publisher name. Empty until the claim form is used. */
+let publisherName = "";
+
+/**
+ * The published modules the mock Store holds, mutable so a publish, an install
+ * and a rating all leave the list they answered with -- the same contract the
+ * server has, and what makes the buttons on the screen look like they did
+ * something.
+ *
+ * `mine` is a fact about the *fixture* rather than about `publisherName`: the
+ * first row stands for a module published in an earlier session, before the
+ * name on screen was claimed, which is the state a person opening the tab for
+ * the second time is actually in.
+ */
+const PUBLISHED_ROWS: PublishedRow[] = [
+  {
+    id: "pub-sunrise",
+    slug: "sunrise_alarm",
+    title: "Sunrise alarm",
+    summary: "Wake the lights up gently, half an hour before the alarm.",
+    publisher: "marqbarq",
+    mine: true,
+    version: "1.2.0",
+    tier: "verified",
+    review: "Reviewed: it touches the lights and nothing outside the house.",
+    rating: 4.5,
+    stars_count: 3,
+    comments: 2,
+    installs: 128,
+    updated: "2026-09-30T08:00:00Z",
+  },
+  {
+    id: "pub-porch",
+    slug: "porch_lamp",
+    title: "Porch lamp",
+    summary: "The porch lamp on, half an hour before sunset.",
+    publisher: "sam",
+    mine: false,
+    version: "0.2.0",
+    tier: "community",
+    review: "",
+    // A module nobody has rated. `null` and not zero, which is the case the tab
+    // has to draw as "not rated yet" rather than as nought out of five.
+    rating: null,
+    stars_count: 0,
+    comments: 0,
+    installs: 3,
+    updated: "2026-09-12T19:30:00Z",
+  },
+  {
+    id: "pub-guest",
+    slug: "guest_greeting",
+    title: "Guest greeting",
+    summary: "A note on the dashboard, and the lights on, when guests arrive.",
+    publisher: "sam",
+    mine: false,
+    version: "1.0.0",
+    tier: "community",
+    review: "",
+    rating: 5,
+    stars_count: 1,
+    comments: 0,
+    installs: 11,
+    updated: "2026-10-02T11:15:00Z",
+  },
+];
+
+/** What people have said about each published row, by its Store record id. */
+const PUBLISHED_COMMENTS: Record<string, StoreCommentRow[]> = {
+  "pub-sunrise": [
+    {
+      id: "c-sunrise-1",
+      publisher: "sam",
+      body: "Works well. I turned the brightness down for our kitchen.",
+      created: "2026-09-29T07:10:00Z",
+    },
+    {
+      id: "c-sunrise-2",
+      publisher: "jo",
+      body: "Any chance of a version that watches a weekday alarm instead?",
+      created: "2026-10-01T21:05:00Z",
+    },
+  ],
+};
+
+/**
+ * The published list, split the way the server splits it.
+ *
+ * By the module's *slug* against this house's own store of definitions, which
+ * is exactly the rule `published/browse` is specified with: "do I have this" is
+ * a question about this house, and the two halves are matched on the slug so a
+ * publisher correcting a typo in a summary does not make a module look new.
+ * `search` narrows both halves on the title, the summary and the publisher.
+ */
+function publishedBrowseView(search: string): {
+  installed: PublishedRow[];
+  not_installed: PublishedRow[];
+} {
+  const held = new Set(STORED_MODULES.map((offer) => offer.slug));
+  const wanted = search.trim().toLowerCase();
+  const matches = PUBLISHED_ROWS.filter(
+    (row) =>
+      wanted === "" ||
+      row.title.toLowerCase().includes(wanted) ||
+      row.summary.toLowerCase().includes(wanted) ||
+      row.publisher.toLowerCase().includes(wanted),
+  );
+  return {
+    installed: matches.filter((row) => held.has(row.slug)),
+    not_installed: matches.filter((row) => !held.has(row.slug)),
+  };
+}
 
 /**
  * The modules this house *hosts*: a definition with answers, running somewhere.
@@ -2280,6 +2347,162 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
         rooms: roomsOf(ROOMS),
       };
     }
+    case COMMANDS.publishedStatus:
+      return { url: PUBLISHED_URL, name: publisherName } satisfies StoreStatus;
+    case COMMANDS.publisherClaim: {
+      // Claiming is once, and the mock keeps one name back so the refusal the
+      // Store makes -- "that name is taken, please pick another name" -- can be
+      // walked in `npm run dev` without a second install to race against. The
+      // shape refusals are the server's too: a space or a capital is refused
+      // before the request, with the same field and the same kind of sentence.
+      const name = String(payload.name ?? "").trim();
+      if (name === "") {
+        throw refuse(REFUSALS.invalidFormat, "pick a name to publish under");
+      }
+      if (name !== name.toLowerCase() || /\s/.test(name)) {
+        throw refuse(
+          REFUSALS.invalidFormat,
+          "publish under a name in lower case, with no spaces",
+        );
+      }
+      if (name === TAKEN_PUBLISHER) {
+        throw refuse(REFUSALS.invalidFormat, "that name is taken, please pick another name");
+      }
+      if (publisherName !== "") {
+        throw refuse(
+          REFUSALS.invalidFormat,
+          `this house already publishes as ${publisherName}`,
+        );
+      }
+      publisherName = name;
+      return { name };
+    }
+    case COMMANDS.publishedBrowse:
+      return publishedBrowseView(String(payload.search ?? ""));
+    case COMMANDS.publishedPublish: {
+      if (publisherName === "") {
+        throw refuse(
+          REFUSALS.invalidFormat,
+          "claim a publisher name before publishing to the Store",
+        );
+      }
+      const slug = String(payload.module);
+      const offer = STORED_MODULES.find((row) => row.slug === slug);
+      if (offer === undefined) {
+        throw refuse(REFUSALS.notFound, `this house offers no module called ${slug}`);
+      }
+      const summary = String(payload.summary ?? "") || offer.description;
+      const held = PUBLISHED_ROWS.find((row) => row.slug === slug && row.publisher === publisherName);
+      const published: PublishedRow =
+        held === undefined
+          ? {
+              id: `pub-${slug}`,
+              slug,
+              title: offer.title,
+              summary,
+              publisher: publisherName,
+              mine: true,
+              version: offer.version,
+              tier: "community",
+              review: "",
+              rating: null,
+              stars_count: 0,
+              comments: 0,
+              installs: 0,
+              updated: new Date().toISOString(),
+            }
+          : { ...held, title: offer.title, summary, version: offer.version, updated: new Date().toISOString() };
+      if (held === undefined) PUBLISHED_ROWS.push(published);
+      else PUBLISHED_ROWS.splice(PUBLISHED_ROWS.indexOf(held), 1, published);
+      return { published, store: STORED_MODULES };
+    }
+    case COMMANDS.publishedInstall: {
+      // The Store's record id, not the slug: two publishers may offer a module
+      // of one name and a person picked the row they picked. Installing it is
+      // the same road `modules/import` takes -- it lands in this house's store
+      // as a definition, and is put in a room afterwards.
+      const id = String(payload.module_id);
+      const row = PUBLISHED_ROWS.find((entry) => entry.id === id);
+      if (row === undefined) throw refuse(REFUSALS.notFound, `no published module ${id}`);
+      const replace = payload.replace === true;
+      const at = STORED_MODULES.findIndex((offer) => offer.slug === row.slug);
+      if (at !== -1 && !replace) {
+        throw refuse(
+          REFUSALS.invalidFormat,
+          `this house already holds a module called ${row.slug}; install it again with replace`,
+        );
+      }
+      const made: ModuleOfferRow = {
+        slug: row.slug,
+        title: row.title,
+        description: row.summary,
+        author: row.publisher,
+        version: row.version,
+        licence: "no_licence",
+        blueprint: "",
+        // A published definition reaches through slots the mock cannot resolve,
+        // so it is offered as unpinned and missing them, the way a module from
+        // somebody else reads until a room answers its slots.
+        pinned: false,
+        flows: [],
+        automations: [],
+        slots: [],
+        missing_slots: [],
+        // A replacing install keeps the placements the definition had: those
+        // are rooms running it, and they are not this command's to touch.
+        deployed: at === -1 ? [] : STORED_MODULES[at]!.deployed,
+      };
+      if (at === -1) STORED_MODULES.push(made);
+      else STORED_MODULES.splice(at, 1, made);
+      row.installs += 1;
+      return { module: row.slug, replaced: at !== -1, store: STORED_MODULES };
+    }
+    case COMMANDS.publishedRate: {
+      const id = String(payload.module_id);
+      const row = PUBLISHED_ROWS.find((entry) => entry.id === id);
+      if (row === undefined) throw refuse(REFUSALS.notFound, `no published module ${id}`);
+      if (row.mine) {
+        throw refuse(
+          REFUSALS.invalidFormat,
+          "the Store does not let a publisher rate their own module",
+        );
+      }
+      const stars = Number(payload.stars);
+      if (!Number.isInteger(stars) || stars < 1 || stars > 5) {
+        throw refuse(REFUSALS.invalidFormat, "a rating is one to five whole stars");
+      }
+      // A second rating is the same rating changed rather than a second
+      // opinion, and the average is over the whole count.
+      const total = (row.rating ?? 0) * row.stars_count + stars;
+      row.stars_count += 1;
+      row.rating = Math.round((total / row.stars_count) * 10) / 10;
+      return { rating: row.rating, stars_count: row.stars_count };
+    }
+    case COMMANDS.publishedComments: {
+      const id = String(payload.module_id);
+      if (!PUBLISHED_ROWS.some((row) => row.id === id)) {
+        throw refuse(REFUSALS.notFound, `no published module ${id}`);
+      }
+      return { comments: PUBLISHED_COMMENTS[id] ?? [] };
+    }
+    case COMMANDS.publishedComment: {
+      const id = String(payload.module_id);
+      const row = PUBLISHED_ROWS.find((entry) => entry.id === id);
+      if (row === undefined) throw refuse(REFUSALS.notFound, `no published module ${id}`);
+      const body = String(payload.body ?? "").trim();
+      if (body === "") {
+        throw refuse(REFUSALS.invalidFormat, "a comment needs something in it");
+      }
+      const list = (PUBLISHED_COMMENTS[id] ??= []);
+      list.push({
+        id: `c-${id}-${list.length + 1}`,
+        publisher: publisherName === "" ? "you" : publisherName,
+        body,
+        created: new Date().toISOString(),
+      });
+      row.comments = list.length;
+      return { comments: list };
+    }
     case COMMANDS.modulesHosted:
       return { modules: HOSTED_MODULES };
     case COMMANDS.modulesRead: {
@@ -2890,120 +3113,7 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
       return {
         automations: DEV_AUTOMATIONS,
         blueprints: DEV_BLUEPRINTS,
-        // Read off the *store*, because that is where a saved module lives: a
-        // mock whose `saved` list did not grow when `dev/save` ran would say a
-        // save went nowhere.
-        saved: STORED_MODULES.map((offer) => ({
-          name: offer.slug,
-          title: offer.title,
-          description: offer.description,
-          version: offer.version,
-          // The mock has no manifest to count atoms from, so it counts what it
-          // does know: the roles the definition reaches through.
-          behaviours: offer.slots.length,
-          options: 0,
-          file: `${offer.slug}.yaml`,
-        })),
       };
-    case COMMANDS.devRead:
-      // The reading, and the two vocabularies a decision is made against --
-      // which come *with* the reading rather than from a second command, so a
-      // screen renders one table from one reply.
-      return { analysis: DEV_ANALYSIS, slots: DEV_SLOTS, services: DEV_SERVICES };
-    case COMMANDS.devSave: {
-      // The file is written and the verdict is about the file: the mock writes
-      // the module into the store under the plan's own name, which is what makes
-      // the Dev tab's saved list and the store agree afterwards.
-      const plan = (payload.plan ?? {}) as { name?: unknown; title?: unknown; behaviours?: unknown };
-      const name = slugOf(String(plan.name ?? "module"));
-      const title =
-        typeof plan.title === "string" && plan.title !== "" ? plan.title : name;
-      const behaviours = Array.isArray(plan.behaviours) ? plan.behaviours.length : 0;
-      const saved: DevSaved & { yaml: string } = {
-        name,
-        title,
-        description: "",
-        version: "1.0.0",
-        behaviours,
-        options: 0,
-        file: `${name}.yaml`,
-        yaml: `# ${title}\n`,
-      };
-      const at = STORED_MODULES.findIndex((offer) => offer.slug === name);
-      const row: ModuleOfferRow = {
-        slug: name,
-        title,
-        description: "",
-        author: "",
-        version: "1.0.0",
-        licence: "no_licence",
-        blueprint: typeof payload.key === "string" ? payload.key : "",
-        pinned: false,
-        slots: [],
-        flows: [],
-        automations: [],
-        missing_slots: [],
-        deployed: [],
-      };
-      if (at === -1) STORED_MODULES.push(row);
-      else STORED_MODULES.splice(at, 1, { ...row, deployed: STORED_MODULES[at]!.deployed });
-      // "Save and install there" installs in the same call, and a refusal to
-      // install leaves the file alone -- so the write above stands and only the
-      // placement does not happen. The mock has nothing that refuses a
-      // placement, so it always places.
-      if (payload.install === true) {
-        answer(COMMANDS.moduleInstall, {
-          room_id: String(payload.room_id ?? ""),
-          pack: name,
-        });
-      }
-      return { saved, modules: installed.map(withReach) };
-    }
-    case COMMANDS.devInstall: {
-      // The module is named by pack name and read from the file, so what installs
-      // is what is on disk. The mock has no disk, so a name it has never been
-      // given is the one refusal it can make honestly -- an install of something
-      // nobody authored is a `not_found`, not an empty list.
-      const name = String(payload.name);
-      if (!STORED_MODULES.some((offer) => offer.slug === name)) {
-        throw refuse(REFUSALS.notFound, `no authored module is called ${name}`);
-      }
-      answer(COMMANDS.moduleInstall, {
-        room_id: String(payload.room_id ?? ""),
-        pack: name,
-      });
-      return { modules: installed.map(withReach) };
-    }
-    case COMMANDS.devExport: {
-      // One installed module's behaviours as the automations that would do the
-      // same. The automations name the entities the *room* holds, which is the
-      // whole difference between an export and a copy of the manifest -- so the
-      // mock reads the room's own bindings and writes them into the document.
-      const pack = String(payload.pack);
-      const record = installed.find((module) => module.pack === pack);
-      if (record === undefined) {
-        throw refuse(REFUSALS.notFound, `no module called ${pack} is installed`);
-      }
-      const roomId = typeof payload.room_id === "string" ? payload.room_id : record.room_id;
-      const target = roomBound(roomId, "ceiling_light");
-      const automations = [
-        {
-          alias: record.name,
-          trigger: [{ platform: "state", entity_id: roomBound(roomId, "motion_sensor") }],
-          action: target === null ? [] : [{ service: "light.turn_on", target: { entity_id: target } }],
-        },
-      ];
-      // A role this room fills nothing for is named as a target that names
-      // nothing, which is Home Assistant's "every entity of that domain" -- so
-      // the YAML is correct and silent about why it would do nothing, and this
-      // is the why.
-      return {
-        pack,
-        automations,
-        yaml: automations.map((automation) => `alias: ${automation.alias}\n`).join("---\n"),
-        unresolved: target === null ? ["ceiling_light"] : [],
-      };
-    }
     case COMMANDS.activityList:
       return { entries: ACTIVITY };
     case COMMANDS.healthList:

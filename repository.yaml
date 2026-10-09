@@ -1,0 +1,12 @@
+# The Open House add-on repository.
+#
+# Supervisor reads this file at the root of a GitHub repository when a person
+# adds the repository URL under Settings -> Add-ons -> Add-on store -> the three
+# dots -> Repositories, and it is what makes the directories beside it -- each
+# with its own `config.yaml` -- installable add-ons. The three fields below are
+# the ones the schema requires; there is one add-on here today,
+# `open_house_nodered/`, and it is the Node-RED the Open House integration
+# embeds when a house has not named a Node-RED of its own.
+name: Open House Add-ons
+url: https://github.com/LeonKraim/Open-House
+maintainer: LeonKraim <LeonKraim@users.noreply.github.com>

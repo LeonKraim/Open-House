@@ -36,6 +36,19 @@ are documented, stable, and answer with the id of what was written; the editor's
 own protocol is neither. Every call is made with `async_get_clientsession`, so
 the connections are Home Assistant's to pool and to close.
 
+**Where the Node-RED is, and the one rule about it.** An instance has one when a
+person has named one in the integration's options -- the community add-on, or
+their own, at an address only they can know. **That address always wins, and it
+is looked for first at every call site**, which is what keeps Open House from
+ever fighting a Node-RED a person already runs: nothing here scans for a second
+one, nothing here reaches for the community add-on, and nothing here starts
+anything. Only when *no* address is set does this fall through to the Node-RED
+this repository ships as its own add-on (`BUNDLED_SLUG`), discovered by asking
+the Supervisor about that one slug -- a read, never a start, and a house with a
+Node-RED of its own never gets that far. The bundled add-on is reached at its
+internal name for a push and through ingress for the editor, and publishes no
+host port, so it cannot collide with a Node-RED on the host's 1880 either.
+
 **A server node has to exist and Open House will not invent one.** A Home
 Assistant node in Node-RED is useless without the `server` config node that
 carries the instance's address and a token -- and a token is not something this
@@ -49,6 +62,7 @@ while it does not.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -59,12 +73,17 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .const import DOMAIN
 
 __all__ = [
+    "BUNDLED_SLUG",
+    "Bundled",
     "NodeRed",
     "NodeRedError",
+    "async_bundled",
     "async_client",
     "async_delete_flow",
+    "async_editor_url",
     "async_push_flow",
     "async_server_node",
+    "bundled_from_info",
     "editor_url",
     "entry_options",
 ]
@@ -86,6 +105,30 @@ OPTION_TOKEN = "node_red_token"
 #: the house can reach is a dead link, and an address the browser can reach is a
 #: push that times out.
 OPTION_EDITOR_URL = "node_red_editor_url"
+
+#: The Supervisor add-on this repository ships *beside* the integration: Node-RED
+#: itself, so a house that has never installed it can still answer an input with
+#: a flow. It is named here and in `open_house_nodered/config.yaml`, and the two
+#: spellings are one fact -- the integration cannot find the add-on without it,
+#: and it is deliberately not guessed by scanning whatever a person's Supervisor
+#: happens to have installed.
+BUNDLED_SLUG = "open_house_nodered"
+
+#: The port Node-RED listens on inside that add-on, which is also its
+#: `ingress_port`. Nothing publishes it on the host and that is the whole point:
+#: a browser reaches the editor through ingress, and Home Assistant reaches the
+#: Admin API at `http://<add-on-hostname>:1880` -- the internal name the
+#: Supervisor gives the add-on -- so this can never collide with a Node-RED a
+#: person already runs on their own 1880.
+BUNDLED_PORT = 1880
+
+#: Where the Supervisor answers from inside the Home Assistant container, and the
+#: header *core* authenticates with. `X-Hassio-Key` and not `Authorization:
+#: Bearer`, which is the header an *add-on* uses; core presents the value of its
+#: `SUPERVISOR_TOKEN` as its own key. Both are the Supervisor's convention and
+#: both are needed to read one add-on's info from here.
+_SUPERVISOR = "http://supervisor"
+_SUPERVISOR_HEADER = "X-Hassio-Key"
 
 #: How long any one Admin API call may take. Short, because every one of these is
 #: on the path of a person waiting for a module to be hosted, and a Node-RED that
@@ -180,6 +223,22 @@ class NodeRed:
             ) from failure
 
 
+@dataclass(frozen=True)
+class Bundled:
+    """The Node-RED this repository ships, as one instance reaches it.
+
+    Two addresses for one add-on and they are not the same string, for the
+    reason the two options are not either: `push_url` is the internal name the
+    Supervisor gives the add-on, which Home Assistant reaches on the Supervisor's
+    network and nothing else does, and `editor_url` is the relative ingress path,
+    which a browser on the Home Assistant page opens and Home Assistant reaches
+    by no other means. A single address would make one of the two wrong.
+    """
+
+    push_url: str
+    editor_url: str
+
+
 def entry_options(hass: HomeAssistant) -> Mapping[str, Any]:
     """The Node-RED settings of the instance's Open House entry, or none.
 
@@ -210,8 +269,115 @@ def editor_url(options: Mapping[str, Any]) -> str:
     return str(options.get(OPTION_URL) or "").strip()
 
 
-def async_client(hass: HomeAssistant, options: Mapping[str, Any]) -> NodeRed | None:
-    """The instance's Node-RED, or `None` when nobody has said where it is.
+def supervisor_token() -> str:
+    """The Supervisor token core carries, or `""` off a supervised install.
+
+    Read from the environment and not through Home Assistant's `hassio`
+    integration, because this repository's own dev stack runs Home Assistant as
+    a plain container with no Supervisor and no `hassio` component to import --
+    and a house that is not supervised has no add-ons at all. `""` is therefore
+    the ordinary answer off Home Assistant OS, and it is what makes everything
+    below degrade to "no bundled Node-RED" rather than raise: a person on a
+    container install configures their own address exactly as they do today.
+    """
+    return os.environ.get("SUPERVISOR_TOKEN", "").strip()
+
+
+def bundled_from_info(info: object) -> Bundled | None:
+    """The bundled add-on's two addresses, out of a Supervisor `.../info` answer.
+
+    **Pure, so the half of this that is not a network call is a thing a test can
+    hold.** The Supervisor answers `{"result": ..., "data": {...}}`, and every
+    field read here may be absent, `null`, or of another type -- an add-on that is
+    installed but stopped, or one that is not installed at all -- so each is read
+    defensively and a missing one means "not this add-on" rather than a crash.
+
+    **Running is part of the question.** A stopped add-on still reports an
+    `ingress_url` and still names itself, but there is no editor behind either
+    address, and treating a stopped add-on as the house's Node-RED would make the
+    integration push to something the person has not started and call it theirs.
+    An add-on that was never installed and one that is stopped answer the same
+    way here, which is the honest answer to both.
+    """
+    data = info.get("data") if isinstance(info, Mapping) else None
+    if not isinstance(data, Mapping):
+        return None
+    if str(data.get("state") or "") != "started":
+        return None
+    hostname = str(data.get("hostname") or "").strip()
+    ingress = str(data.get("ingress_url") or "").strip()
+    if not hostname or not ingress:
+        return None
+    return Bundled(
+        push_url=f"http://{hostname}:{BUNDLED_PORT}",
+        editor_url=ingress,
+    )
+
+
+async def async_bundled(hass: HomeAssistant) -> Bundled | None:
+    """The Node-RED this repository ships, when the house is running it.
+
+    **A read and never a start.** This asks the Supervisor about one add-on, by
+    the slug this repository chose; it does not install it, start it, or touch it
+    in any other way, and an add-on that was never installed answers exactly as a
+    stopped one does. So the conflict rule is real rather than intended: a person
+    who already runs Node-RED -- the community add-on, or their own -- has it
+    reached only through the options they set, and nothing here reaches for the
+    community add-on or for any port, because nothing here is looking for one.
+
+    Every failure is `None`: no Supervisor, a refused request, an answer that is
+    not the shape above. Not having a bundled Node-RED is the ordinary state of
+    every install that is not this one, and a screen must not break over it.
+    """
+    token = supervisor_token()
+    if not token:
+        return None
+    session = async_get_clientsession(hass)
+    url = f"{_SUPERVISOR}/addons/{BUNDLED_SLUG}/info"
+    try:
+        async with session.get(
+            url, headers={_SUPERVISOR_HEADER: token}, timeout=_TIMEOUT_SECONDS
+        ) as response:
+            if response.status >= 400:
+                return None
+            answer = await response.json(content_type=None)
+    except Exception:
+        # Absence is ordinary; see the docstring. A refused connection, a
+        # Supervisor that is not there, an answer that is not JSON -- all of them
+        # mean the same thing here, and none of them is worth a screen breaking.
+        return None
+    return bundled_from_info(answer)
+
+
+async def async_editor_url(hass: HomeAssistant, options: Mapping[str, Any]) -> str:
+    """The Node-RED address a *browser* opens, configured or bundled.
+
+    **The person's own address wins whenever there is one**, and only when there
+    is not does this fall through to the Node-RED this repository ships. That
+    order *is* the conflict rule: a house that already has Node-RED names it in
+    the integration's settings and never sees ours, and a house that does not gets
+    ours without having to name anything. `""` is still an answer -- neither
+    configured nor bundled -- and the row that offers the cast says so.
+    """
+    configured = editor_url(options)
+    if configured:
+        return configured
+    bundled = await async_bundled(hass)
+    return "" if bundled is None else bundled.editor_url
+
+
+async def async_client(
+    hass: HomeAssistant, options: Mapping[str, Any]
+) -> NodeRed | None:
+    """The Node-RED to push a flow to: the person's, else the bundled one.
+
+    Same precedence as `async_editor_url`, and for the same reason. The bundled
+    add-on is reached at its **internal** name -- `http://<hostname>:1880`, out of
+    the Supervisor's own answer -- and not at its ingress path, which is the
+    browser's route into it and no route at all for an Admin API call. The
+    bundled Node-RED sets no `adminAuth` (it is reachable on the Supervisor's
+    network and through ingress, and nowhere else), so no token travels with it;
+    a token is what the person's own `adminAuth` Node-RED would carry.
 
     `None` and not an error, because not having a Node-RED is the ordinary state
     of a house that does not use one: the cast is offered and the row says where
@@ -219,9 +385,12 @@ def async_client(hass: HomeAssistant, options: Mapping[str, Any]) -> NodeRed | N
     on a screen they are only looking at is not.
     """
     url = str(options.get(OPTION_URL) or "").strip()
-    if not url:
+    if url:
+        return NodeRed(url=url, token=str(options.get(OPTION_TOKEN) or ""), hass=hass)
+    bundled = await async_bundled(hass)
+    if bundled is None:
         return None
-    return NodeRed(url=url, token=str(options.get(OPTION_TOKEN) or ""), hass=hass)
+    return NodeRed(url=bundled.push_url, token="", hass=hass)
 
 
 async def async_server_node(client: NodeRed) -> str:

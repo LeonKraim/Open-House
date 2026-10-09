@@ -161,16 +161,20 @@ def capabilities(
     `node_red_url` travels with them because the panel embeds Node-RED's own
     editor at it and has no way to know it otherwise: Node-RED is reached at an
     address the instance's own admin configured, and the panel is served from
-    Home Assistant, which may be a different host entirely. Empty means none is
-    set, and the row that offers the cast says where to set one.
+    Home Assistant, which may be a different host entirely. Empty means the house
+    has neither a configured Node-RED nor the Open House Node-RED add-on running,
+    and the row that offers the cast says so.
 
     **It is the address a browser opens, and not the one flows are pushed to.**
     Those are two addresses for one editor on any stack where the two programs
     are separate containers -- `nodered:1880` resolves between them and nowhere
     else -- and the whole reason a second option exists is that only one of the
-    two can be linked to. The caller passes `node_red.editor_url`, which prefers
-    the second and falls back to the first, so a single-address install
-    configures one field and both links work.
+    two can be linked to. The caller passes the answer of
+    `node_red.async_editor_url`, which prefers the browser's configured address,
+    falls back to the push one, and only when neither is set reaches for the
+    bundled add-on's ingress path -- so a single-address install configures one
+    field and both links work, and a house with nothing configured still gets an
+    editor when it runs the add-on Open House ships.
     """
     return {
         "admin": admin,

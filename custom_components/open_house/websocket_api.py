@@ -38,14 +38,13 @@ error field would be one every screen would have to remember to check.
 
 from __future__ import annotations
 
+import contextlib
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from functools import partial
-from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
-import yaml
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
@@ -61,11 +60,12 @@ from ha_adapter import (
     module_records,
     pack_authoring,
     slot_parts,
+    store_api,
 )
 from ha_adapter.live import HOUSE, LiveSessionError
 from ha_adapter.module_definitions import ModuleDefinition
 
-from . import dev_authoring, modules, node_red, views
+from . import dev_authoring, modules, node_red, store, views
 from .const import DOMAIN, ENGINE_API_FALLBACK, VERSION
 from .host import OpenHouseHost, single_host
 
@@ -122,10 +122,6 @@ ACTIVITY_SUBSCRIBE = "open_house/activity/subscribe"
 HEALTH_LIST = "open_house/health/list"
 DASHBOARD_GENERATE = "open_house/dashboard/generate"
 DEV_SOURCES = "open_house/dev/sources"
-DEV_READ = "open_house/dev/read"
-DEV_SAVE = "open_house/dev/save"
-DEV_INSTALL = "open_house/dev/install"
-DEV_EXPORT = "open_house/dev/export"
 MODULES_HOSTED = "open_house/modules/hosted"
 MODULES_READ = "open_house/modules/read"
 MODULES_HOST = "open_house/modules/host"
@@ -144,6 +140,14 @@ MODULES_CONFIG_SWITCH = "open_house/modules/configs/switch"
 MODULES_CONFIG_ADD = "open_house/modules/configs/add"
 MODULES_CONFIG_RENAME = "open_house/modules/configs/rename"
 MODULES_CONFIG_REMOVE = "open_house/modules/configs/remove"
+PUBLISHED_STATUS = "open_house/published/status"
+PUBLISHED_CLAIM = "open_house/published/claim"
+PUBLISHED_BROWSE = "open_house/published/browse"
+PUBLISHED_PUBLISH = "open_house/published/publish"
+PUBLISHED_INSTALL = "open_house/published/install"
+PUBLISHED_RATE = "open_house/published/rate"
+PUBLISHED_COMMENTS = "open_house/published/comments"
+PUBLISHED_COMMENT = "open_house/published/comment"
 
 #: The error code a non-admin is refused with. Named here rather than inlined so
 #: the panel's own constant (`API_DOMAIN` plus `unauthorized`) has one spelling on
@@ -482,7 +486,7 @@ async def ws_capabilities(
             # link that goes nowhere -- `_node_red_url` is the one the rows use,
             # and this is the same answer for everything on the screen that has
             # no row yet.
-            node_red_url=_node_red_url(hass),
+            node_red_url=await _node_red_url(hass),
         ),
     )
 
@@ -1994,16 +1998,12 @@ async def ws_dashboard_generate(
     )
 
 
-# -- Dev: authoring and export ----------------------------------------------
+# -- Dev: what may be imported ----------------------------------------------
 #
-# Five commands, and they are one journey rather than five features: `sources`
-# lists what a person may import, `read` says what the importer found in the one
-# they picked, `save` writes the module their decisions made -- and installs it
-# too when the panel asks, which is the difference between its two buttons --
-# `install` puts an already-written module in a room, and `export` goes the other
-# way: a module's behaviours as automations a person can take with them. The
-# split is by *screen*, not by resource: the panel calls `read` again after every
-# change to a decision, and `save` exactly once, at the end.
+# One command: `sources` lists the automations and blueprints a person may
+# import. Naming them is all it does -- the import screen reads one of them with
+# `modules/read` and hosts it with `modules/host`, because reading a source for
+# its inputs is a different act from listing the sources there are.
 
 
 @websocket_api.websocket_command({vol.Required("type"): DEV_SOURCES})
@@ -2012,138 +2012,29 @@ async def ws_dashboard_generate(
 async def ws_dev_sources(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
-    """What may be imported, and what has already been authored.
+    """What may be imported.
 
     Deliberately answerable with no house: a person who has automations but has
     not finished the setup flow can still look at what their automations would
     become, and the one screen that explains what is missing is the one this
-    command serves. Only `read` and the writes need a house, because only they
-    need the vocabulary.
+    command serves. Naming a source needs only Home Assistant and not the
+    engine's vocabulary, which is why it needs no house.
     """
     connection.send_result(
         msg["id"],
         {
             "automations": [dict(row) for row in dev_authoring.automations(hass)],
             "blueprints": [dict(row) for row in await dev_authoring.blueprints(hass)],
-            "saved": await _saved_modules(hass),
         },
     )
-
-
-async def _saved_modules(hass: HomeAssistant) -> list[Mapping[str, object]]:
-    """The modules a person has authored, read straight off the directory.
-
-    Not through `_published`, which is cached on a stamp and is the *catalog's*
-    answer to what may be installed: this is the Dev tab's own list of its own
-    output, and a screen that showed a module it had just written only after a
-    cache expiry would look like a save that failed.
-
-    In an executor, because it globs and reads files and the caller is the event
-    loop -- Home Assistant said so in the log ("Detected blocking call to
-    scandir") the first time this screen was opened, and it was right.
-    """
-    root = dev_authoring.packs_root(hass)
-    return await hass.async_add_executor_job(dev_authoring.saved, root)
-
-
-def _nested(document: Mapping[str, Any], *keys: str) -> object:
-    """Walk a document by keys, answering `None` the moment one is missing."""
-    node: object = document
-    for key in keys:
-        if not isinstance(node, Mapping):
-            return None
-        node = node.get(key)
-    return node
-
-
-@websocket_api.websocket_command(
-    {
-        vol.Required("type"): DEV_READ,
-        vol.Required("kind"): vol.In(("automation", "blueprint", "text")),
-        vol.Optional("key"): str,
-        vol.Optional("text"): str,
-    }
-)
-@websocket_api.async_response
-@_admin
-async def ws_dev_read(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
-    """Read one source, and answer with every decision a person can make about it.
-
-    The reply is `pack_authoring.Analysis` plus the two vocabularies a decision
-    is made against -- the slots a person may bind to, and whether the engine can
-    perform each service the source calls. Sending the vocabularies *with* the
-    reading rather than making the panel ask for them separately is what lets a
-    screen render the whole table from one reply, and what keeps a suggestion and
-    the list it was drawn from from being two answers about one catalog.
-    """
-    host = _host_or_error(connection, msg)
-    if host is None:
-        return
-    try:
-        text = await _dev_text(hass, msg)
-    except pack_authoring.AuthoringError as refusal:
-        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
-        return
-    services, slots = await hass.async_add_executor_job(
-        dev_authoring.reference, host.session
-    )
-    try:
-        source = pack_authoring.read_source(text)
-        analysis = pack_authoring.analyse(source, known_services=services)
-    except pack_authoring.AuthoringError as refusal:
-        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
-        return
-    connection.send_result(
-        msg["id"],
-        {
-            "analysis": _as_json(analysis, slots),
-            "slots": [
-                {
-                    "name": name,
-                    "domains": list(domains),
-                    "suggested": name == pack_authoring.suggest_slot(domains[0])
-                    if domains
-                    else False,
-                }
-                for name, domains in sorted(slots.items())
-            ],
-            "services": list(services),
-        },
-    )
-
-
-async def _dev_text(hass: HomeAssistant, msg: Mapping[str, Any]) -> str:
-    """The document a `dev/read` or `dev/save` names, as text.
-
-    `text` is the panel's paste box and is taken as given; the other two kinds are
-    read from Home Assistant. Keeping all three behind one function is what makes
-    "a paste, a file and a picker are the same thing to the importer" true rather
-    than aspirational.
-    """
-    kind = str(msg.get("kind"))
-    if kind == "text":
-        text = msg.get("text")
-        if not isinstance(text, str) or not text.strip():
-            raise pack_authoring.AuthoringError("there is nothing pasted to read")
-        return text
-    key = msg.get("key")
-    if not isinstance(key, str) or not key:
-        raise pack_authoring.AuthoringError(f"no {kind} was named to read")
-    return await dev_authoring.source_text(hass, kind, key)
 
 
 # -- Hosting a source as a module -------------------------------------------
 #
 # Three commands, and they are the whole of "turn a blueprint into a module":
 # `hosted` lists what the house already runs, `read` answers what one source can
-# be made into, and `host` does it. They are separate from `dev/*` on purpose.
-# The Dev tab's reading is a reading *for a pack* -- it refuses a document with
-# no trigger, and it translates rather than hosts -- whereas these read every
-# source the same way: nothing that can be imported is refused, because nothing
-# is translated. Folding them together would make the pack rules the price of
-# hosting a blueprint.
+# be made into, and `host` does it. They are separate from `dev/sources` on
+# purpose: that one only names the sources there are, and reads no document.
 
 
 @websocket_api.websocket_command({vol.Required("type"): MODULES_HOSTED})
@@ -2164,6 +2055,26 @@ async def ws_modules_hosted(
     if host is None:
         return
     connection.send_result(msg["id"], await _hosted(hass, host))
+
+
+async def _dev_text(hass: HomeAssistant, msg: Mapping[str, Any]) -> str:
+    """The source a `modules/*` command names, as text.
+
+    `text` is the panel's paste box and is taken as given; the other two kinds are
+    read from Home Assistant. Keeping all three behind one function is what makes
+    "a paste, a file and a picker are the same thing to the importer" true rather
+    than aspirational.
+    """
+    kind = str(msg.get("kind"))
+    if kind == "text":
+        text = msg.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise pack_authoring.AuthoringError("there is nothing pasted to read")
+        return text
+    key = msg.get("key")
+    if not isinstance(key, str) or not key:
+        raise pack_authoring.AuthoringError(f"no {kind} was named to read")
+    return await dev_authoring.source_text(hass, kind, key)
 
 
 @websocket_api.websocket_command(
@@ -3979,21 +3890,23 @@ def _one_line(value: object) -> str:
     return " ".join(value.split())
 
 
-def _node_red_url(hass: HomeAssistant) -> str:
+async def _node_red_url(hass: HomeAssistant) -> str:
     """Where this house's Node-RED *editor* is, or empty when none is set.
 
     **The editor's address and not the push address**, which is a distinction
     that only shows up when they differ: Home Assistant reaches Node-RED over the
     docker network by a name that means nothing to a browser, so a link built
     from the address the house itself pushes to is a link that resolves for
-    nobody who clicks it. `node_red.editor_url` prefers the address given for the
-    browser and falls back to the push one.
+    nobody who clicks it. `node_red.async_editor_url` prefers the address a
+    person set for the browser, falls back to the push one, and only when neither
+    is set reaches for the Node-RED this repository ships as its own add-on --
+    whose address is its ingress path, which is exactly what a browser embeds.
 
     Empty is the ordinary state and the panel is built for it: the cast is still
     offered, and the row says where to set the address rather than showing a link
     to a program this house does not have.
     """
-    return node_red.editor_url(node_red.entry_options(hass))
+    return await node_red.async_editor_url(hass, node_red.entry_options(hass))
 
 
 def _flow_href(base: str, flow_id: str) -> str:
@@ -4037,7 +3950,7 @@ async def _hosted(hass: HomeAssistant, host: OpenHouseHost) -> Mapping[str, obje
         for slug, module in (getattr(runtime, "modules", None) or {}).items()
     }
     records = await modules.async_records(hass)
-    editor = _node_red_url(hass)
+    editor = await _node_red_url(hass)
     helpers = {record.slug: _helpers_of(record) for record in records}
     return {
         "modules": [
@@ -4354,365 +4267,6 @@ def _jsonable(value: object) -> object:
     return str(value)
 
 
-def _as_json(
-    analysis: pack_authoring.Analysis,
-    slots: Mapping[str, Sequence[str]] | None = None,
-) -> Mapping[str, object]:
-    """An `Analysis` as the protocol's reply.
-
-    Written out field by field rather than through `dataclasses.asdict`, because
-    the panel's `DevAnalysis` interface is what this has to match and an
-    `asdict` would silently follow any field added to the dataclass -- which is
-    the drift the protocol exists to prevent. A field added here is a field added
-    to the panel's interface in the same commit, or the panel renders `undefined`.
-    """
-    return {
-        "title": analysis.title,
-        "description": analysis.description,
-        "blueprint": analysis.blueprint,
-        "entities": [
-            {
-                "key": row.key,
-                "label": row.label,
-                "entity_id": row.entity_id,
-                "domain": row.domain,
-                "count": row.count,
-                "optional": row.optional,
-                "places": list(row.places),
-                "suggested_slot": pack_authoring.suggest_slot(
-                    row.domain, label=row.label, slots=slots
-                ),
-            }
-            for row in analysis.entities
-        ],
-        "values": [
-            {
-                "key": row.key,
-                "label": row.label,
-                "kind": row.kind,
-                "default": row.default,
-                "description": row.description,
-                "minimum": row.minimum,
-                "maximum": row.maximum,
-                "unit": row.unit,
-                "choices": list(row.choices),
-                "places": list(row.places),
-            }
-            for row in analysis.values
-        ],
-        "services": [
-            {
-                "key": row.key,
-                "service": row.service,
-                "supported": row.supported,
-                "acts_on": list(row.acts_on),
-                "data_keys": list(row.data_keys),
-                "where": row.where,
-                "depth": row.depth,
-            }
-            for row in analysis.services
-        ],
-        "triggers": list(analysis.triggers),
-        "conditions": list(analysis.conditions),
-        "dropped": list(analysis.dropped),
-    }
-
-
-@websocket_api.websocket_command(
-    {
-        vol.Required("type"): DEV_SAVE,
-        vol.Required("kind"): vol.In(("automation", "blueprint", "text")),
-        vol.Required("plan"): dict,
-        vol.Optional("key"): str,
-        vol.Optional("text"): str,
-        vol.Optional("install", default=False): bool,
-        vol.Optional("room_id"): str,
-    }
-)
-@websocket_api.async_response
-@_admin
-async def ws_dev_save(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
-    """Draft, validate, write and optionally install, answering with what it wrote.
-
-    **The file is written before either verdict, and the verdict is about the
-    file.** A module that fails the schema, the slot rules or the sandbox is a
-    module a person keeps -- they are told why it will not install and can fix
-    the plan without losing the name they chose -- and it is never reported as
-    saved-and-good.
-
-    **`install` is the difference between the panel's two buttons, and it is
-    honoured.** False writes the module and asks whether the house would take it
-    (`live_modules.validate`); true writes it and puts it in the room named, or
-    by the entity join when none is. The panel's "Save module" is the false one
-    and "Save and install there" is the true one, so the server does what the
-    notice the person reads says it did rather than installing behind a word
-    that promised a file.
-    """
-    host = _host_or_error(connection, msg)
-    if host is None:
-        return
-    try:
-        text = await _dev_text(hass, msg)
-    except pack_authoring.AuthoringError as refusal:
-        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
-        return
-    services, slots = await hass.async_add_executor_job(
-        dev_authoring.reference, host.session
-    )
-    try:
-        source = pack_authoring.read_source(text)
-        analysis = pack_authoring.analyse(source, known_services=services)
-        draft = pack_authoring.draft_module(analysis, msg["plan"], slots=slots)
-    except pack_authoring.AuthoringError as refusal:
-        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
-        return
-
-    root = dev_authoring.packs_root(hass)
-    saved = await hass.async_add_executor_job(dev_authoring.save, root, draft)
-    # The write moved the authored catalog's directory stamp, so the next reader
-    # would rescan and reread the file -- and the next reader is the panel's own
-    # listing, on the event loop, which is the blocking call `preload` exists to
-    # remove. Warmed here, in an executor, so a save cannot make the tab it just
-    # answered slower to open.
-    await hass.async_add_executor_job(
-        live_modules.preload, host.session.root, host.session.user_root
-    )
-    # Validated from the file just written, so the verdict is about the artifact
-    # rather than about the document it was built from -- and by the installer's
-    # own checks either way, so "saved" never means "saved and uninstallable".
-    #
-    # `partial` for the install, because `async_add_executor_job` forwards
-    # positional arguments only: passing `room_id=` to it is a `TypeError` raised
-    # before the install is ever reached, which is what this save used to answer
-    # with.
-    #
-    # The two branches are the panel's two buttons. "Save module" writes the
-    # module and asks whether the house would take it; "Save and install there"
-    # writes it and puts it in a room. Installed on the second and merely
-    # validated on the first, because a person who asked for a file and got a
-    # module in their house has been given something they did not ask for, and
-    # the panel says which of the two it did.
-    try:
-        if msg["install"]:
-            await hass.async_add_executor_job(
-                partial(
-                    live_modules.install,
-                    host.session,
-                    saved.manifest,
-                    room_id=msg.get("room_id"),
-                    pack_base=root,
-                )
-            )
-        else:
-            await hass.async_add_executor_job(
-                partial(
-                    live_modules.validate,
-                    host.session,
-                    saved.manifest,
-                    pack_base=root,
-                )
-            )
-    except LiveSessionError as refusal:
-        # The file stays: a person who asked for a module to be written has one,
-        # and the refusal is about installing it. Reporting the failure and
-        # leaving the artifact is what lets them fix the plan and try again
-        # without losing the name they chose.
-        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
-        return
-
-    result: dict[str, Any] = {
-        "saved": {
-            "name": str(draft.document["name"]),
-            "file": saved.manifest.name,
-            "yaml": saved.text,
-        },
-        "modules": [
-            dict(module) for module in live_modules.installed_modules(host.session)
-        ],
-    }
-    await _saved(host)
-    connection.send_result(msg["id"], result)
-
-
-@websocket_api.websocket_command(
-    {
-        vol.Required("type"): DEV_INSTALL,
-        vol.Required("name"): str,
-        vol.Optional("room_id"): str,
-    }
-)
-@websocket_api.async_response
-@_admin
-async def ws_dev_install(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
-    """Install a module a person authored, from the file they authored it to.
-
-    The file is named by pack name rather than sent by the panel, so what installs
-    is what is on disk -- a panel could otherwise put a document into a house that
-    nobody could reproduce from the config directory afterwards, which is the one
-    property authoring has to keep.
-    """
-    host = _host_or_error(connection, msg)
-    if host is None:
-        return
-    root = dev_authoring.packs_root(hass)
-    manifest = root / f"{msg['name']}.yaml"
-    if not manifest.is_file():
-        connection.send_error(
-            msg["id"], NOT_FOUND, f"no authored module is called {msg['name']!r}"
-        )
-        return
-    try:
-        await hass.async_add_executor_job(
-            partial(
-                live_modules.install,
-                host.session,
-                manifest,
-                room_id=msg.get("room_id"),
-                pack_base=root,
-            )
-        )
-    except LiveSessionError as refusal:
-        _error(connection, msg, refusal)
-        return
-    result = {
-        "modules": [
-            dict(module) for module in live_modules.installed_modules(host.session)
-        ]
-    }
-    await _saved(host)
-    connection.send_result(msg["id"], result)
-
-
-@websocket_api.websocket_command(
-    {
-        vol.Required("type"): DEV_EXPORT,
-        vol.Required("pack"): str,
-        vol.Optional("room_id"): str,
-    }
-)
-@websocket_api.async_response
-@_admin
-async def ws_dev_export(
-    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
-) -> None:
-    """One installed module's behaviours as the automations that would do the same.
-
-    The slots are resolved in the room the caller names -- or at house scope for a
-    behaviour declared there -- so the automations name the entities the module
-    actually acts on in *this* house rather than the roles it was written
-    against. That is the whole difference between an export and a copy of the
-    manifest, and it is why the room is worth asking for.
-
-    The manifest is read in an executor. A module a person authored lives under
-    `/config` and this reads it from disk, which is the blocking call Home
-    Assistant reports by name -- once per export, on the export button.
-    """
-    host = _host_or_error(connection, msg)
-    if host is None:
-        return
-    record = host.session.installed.get(msg["pack"])
-    if record is None:
-        connection.send_error(
-            msg["id"], NOT_FOUND, f"no module called {msg['pack']!r} is installed"
-        )
-        return
-    document = await hass.async_add_executor_job(_installed_document, host, msg["pack"])
-    behaviours = [
-        behaviour
-        for behaviour in document.get("behaviours", [])
-        if isinstance(behaviour, Mapping)
-    ]
-    room_id = msg.get("room_id")
-    bindings = {
-        slot: entities
-        for behaviour in behaviours
-        for slot, entities in dev_authoring.bound_slots(
-            host.session, behaviour, room_id
-        ).items()
-    }
-    documents = pack_authoring.automation_documents(
-        behaviours,
-        bindings=bindings,
-        options={},
-        title=str(
-            _nested(document, "i18n", "default", "pack")
-            or document.get("name")
-            or msg["pack"]
-        ),
-    )
-    # The roles this room fills nothing for, named so the screen can say so.
-    #
-    # A behaviour's acted slot is the last one it writes (`engine/behaviours/
-    # declared.py`), and a slot that resolved to nothing is written as a target
-    # naming nothing -- deliberately, because an absent target is Home
-    # Assistant's "every entity of that domain" (`automation_documents`). That
-    # makes the export honest and silent at once: the automations are correct
-    # and they would do nothing, and nothing in the YAML says why. This is the
-    # why, and it is the room the caller asked about that decides it -- export a
-    # module placed in the kitchen at house scope and every role is here.
-    unresolved = sorted(
-        {
-            slots[-1]
-            for behaviour in behaviours
-            if (slots := [str(slot) for slot in behaviour.get("slots", [])])
-            and not bindings.get(slots[-1])
-        }
-    )
-    connection.send_result(
-        msg["id"],
-        {
-            "pack": msg["pack"],
-            "automations": [dict(dict(document)) for document in documents],
-            "yaml": pack_authoring.automation_text(documents),
-            "unresolved": unresolved,
-        },
-    )
-
-
-def _installed_document(host: OpenHouseHost, pack: str) -> Mapping[str, Any]:
-    """The manifest document of an installed pack, read from the file it came from.
-
-    Read rather than remembered because the installed record holds what the engine
-    needs and not what a person wrote: the behaviours' slots, their services and
-    their names are in the manifest, and an export that reconstructed them from
-    the record would be an export of the engine's reading rather than of the
-    person's module.
-    """
-    for candidate in _manifest_candidates(host, pack):
-        if candidate.is_file():
-            try:
-                document = yaml.safe_load(candidate.read_text(encoding="utf-8"))
-            except (OSError, yaml.YAMLError):
-                continue
-            if isinstance(document, Mapping):
-                return document
-    return {}
-
-
-def _manifest_candidates(host: OpenHouseHost, pack: str) -> tuple[Path, ...]:
-    """Where a pack's manifest might be, in the order it is worth trying.
-
-    The authored directory first, then the catalog's own answer, then the shape a
-    pack in the checkout takes. A name published in both catalogs resolves to the
-    authored one here and to the checkout's in `_published`, which is not a
-    contradiction: `_published` is the *offer* and this is the *module a person is
-    looking at*, and a person looking at a module they wrote gets theirs.
-    """
-    paths = [
-        None
-        if host.session.user_root is None
-        else host.session.user_root / f"{pack}.yaml",
-        host.catalog.paths.get(pack),
-        host.session.root / "packs" / "official" / pack / f"{pack}.yaml",
-        host.session.root / "packs" / "derived" / pack / f"{pack}.yaml",
-    ]
-    return tuple(path for path in paths if path is not None)
-
-
 # -- Shared plumbing --------------------------------------------------------
 
 
@@ -4799,6 +4353,317 @@ def _pack_path(
     return views.pack_path(host, pack, tier=tier)
 
 
+# --------------------------------------------------------------------------
+# The published Store
+#
+# The other store: the server somebody else runs, that this house publishes to
+# and installs other people's modules from. The commands above are this house's
+# own store, which exists whether or not a published one is configured; every
+# command here is answered from a server this house was given the address of, and
+# answers "set the address" when it was not. See `store.py`.
+# --------------------------------------------------------------------------
+
+
+@websocket_api.websocket_command({vol.Required("type"): PUBLISHED_STATUS})
+@websocket_api.async_response
+@_admin
+async def ws_published_status(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Whether this house has a published Store, and what it calls itself.
+
+    Read off the entry's options and answered with no network at all, because the
+    question decides what the tab *is*: with no address it is this house's own
+    store of modules, and with one it is that store plus the published one. A
+    check that opened a connection here would make a house that has never heard
+    of the Store wait for one before it could draw its own list.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    options = host.entry.options
+    connection.send_result(
+        msg["id"],
+        {"url": store.store_url(options), "name": store.publisher_name(options)},
+    )
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): PUBLISHED_CLAIM, vol.Required("name"): str}
+)
+@websocket_api.async_response
+@_admin
+async def ws_published_claim(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Claim this install's publisher name, once, on the Store.
+
+    Both kinds of refusal -- a name refused on its merits and a name somebody
+    else already has -- are answered the same way, `invalid_format` with a
+    sentence, so the screen has one thing to render either way: "names are lower
+    case" and "that name is taken, pick another" are the same shape of answer to
+    a form and different things to a person. `async_claim` does the Store's part
+    and stores the pair only when the name was really taken.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        name = await store.async_claim(hass, host.entry, str(msg["name"]))
+    except store.StoreError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    connection.send_result(msg["id"], {"name": name})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): PUBLISHED_BROWSE,
+        vol.Optional("search", default=""): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_published_browse(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """The published Store, split into what this house has and what it does not.
+
+    **Split here and not on the screen.** "Do I have this" is a question about
+    this house's own definitions, which the server holds and the screen does not;
+    the split is by *slug* (`store_api.installed_split`), so a module whose
+    publisher corrected a typo in its summary is still the module this house has.
+    `mine` is answered from this install's own publisher id, which is why the two
+    halves can be drawn with a publish button and an install button respectively.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    client = await store.async_client(hass, host.entry.options)
+    if client is None:
+        connection.send_error(msg["id"], INVALID_FORMAT, store.no_store_sentence())
+        return
+    try:
+        rows = await client.browse(str(msg.get("search") or ""))
+        publisher_id = await client.publisher_id()
+    except store.StoreError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    slugs = sorted(
+        definition.slug for definition in await modules.async_definitions(hass)
+    )
+    installed, elsewhere = store_api.installed_split(rows, slugs)
+    connection.send_result(
+        msg["id"],
+        {
+            "installed": [
+                store_api.module_json(row, publisher_id=publisher_id)
+                for row in installed
+            ],
+            "not_installed": [
+                store_api.module_json(row, publisher_id=publisher_id)
+                for row in elsewhere
+            ],
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): PUBLISHED_PUBLISH,
+        vol.Required("module"): str,
+        vol.Optional("summary", default=""): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_published_publish(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Publish one of this house's own modules to the Store, by its name.
+
+    What is published is the *definition* -- the same document an export writes
+    and an import reads -- so what a person installs from the Store is exactly
+    what they published. The module list is not returned, because publishing
+    changes nothing this house runs; the store rows come back because the row
+    that was pressed is where the fact "this is now on the Store" belongs.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    client = await store.async_client(hass, host.entry.options)
+    if client is None:
+        connection.send_error(msg["id"], INVALID_FORMAT, store.no_store_sentence())
+        return
+    try:
+        definition = await modules.async_definition(hass, str(msg["module"]))
+        published = await client.publish(definition, str(msg.get("summary") or ""))
+    except (modules.ModuleHostError, store.StoreError) as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "published": published,
+            "store": await _offered_or_empty(hass, host),
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): PUBLISHED_INSTALL,
+        vol.Required("module_id"): str,
+        vol.Optional("replace", default=False): bool,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_published_install(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Take a published module into this house's own store, where it is offered.
+
+    The Store's record is fetched by id and its document handed to the same
+    import a module file from anywhere else goes through, so what lands here is a
+    definition like any other and installs into a room the same way. Nothing runs
+    yet, which is why `replaced` -- whether a module of that name was already
+    here -- is what a person has to know rather than a running module.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    client = await store.async_client(hass, host.entry.options)
+    if client is None:
+        connection.send_error(msg["id"], INVALID_FORMAT, store.no_store_sentence())
+        return
+    try:
+        published = await client.install(str(msg["module_id"]))
+        definition, replaced = await modules.async_import_definition(
+            hass, published.document, replace=bool(msg.get("replace"))
+        )
+    except (modules.ModuleHostError, store.StoreError) as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    # Counted only once the module is actually here, so the number beside a
+    # published module is houses that have it rather than houses that asked. This
+    # can fail without failing the install -- see `Store.record_install` -- and it
+    # is awaited before the reply so the row a person is looking at is re-read
+    # after the count moved rather than before.
+    await client.record_install(str(msg["module_id"]))
+    connection.send_result(
+        msg["id"],
+        {
+            "module": definition.slug,
+            "replaced": replaced,
+            "store": await _offered_or_empty(hass, host),
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): PUBLISHED_RATE,
+        vol.Required("module_id"): str,
+        vol.Required("stars"): int,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_published_rate(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Rate a published module, one to five whole stars.
+
+    The band is checked here (`store_api.stars_refusal`) before a request is
+    spent, so a value the Store would only reject after a round trip is refused
+    in the same words. A second rating is the same rating changed rather than a
+    second opinion, and `Store.rate` does the update rather than showing a person
+    pressing a star an error for doing what the screen asked.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    stars = msg["stars"]
+    refusal = store_api.stars_refusal(stars)
+    if refusal is not None:
+        connection.send_error(msg["id"], INVALID_FORMAT, refusal)
+        return
+    client = await store.async_client(hass, host.entry.options)
+    if client is None:
+        connection.send_error(msg["id"], INVALID_FORMAT, store.no_store_sentence())
+        return
+    try:
+        answer = await client.rate(str(msg["module_id"]), stars)
+    except store.StoreError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    connection.send_result(msg["id"], dict(answer))
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): PUBLISHED_COMMENTS, vol.Required("module_id"): str}
+)
+@websocket_api.async_response
+@_admin
+async def ws_published_comments(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """What people have said about one published module."""
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    client = await store.async_client(hass, host.entry.options)
+    if client is None:
+        connection.send_error(msg["id"], INVALID_FORMAT, store.no_store_sentence())
+        return
+    try:
+        comments = await client.comments(str(msg["module_id"]))
+    except store.StoreError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    connection.send_result(
+        msg["id"],
+        {"comments": [store_api.comment_json(comment) for comment in comments]},
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): PUBLISHED_COMMENT,
+        vol.Required("module_id"): str,
+        vol.Required("body"): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_published_comment(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Say something about one published module, and get the list back.
+
+    The whole list, not the one row: the screen it was posted from draws the
+    list, and asking for it again the moment the write landed would be a second
+    round trip for a fact the Store has already been read for.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    client = await store.async_client(hass, host.entry.options)
+    if client is None:
+        connection.send_error(msg["id"], INVALID_FORMAT, store.no_store_sentence())
+        return
+    try:
+        comments = await client.comment(str(msg["module_id"]), str(msg["body"]))
+    except store.StoreError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    connection.send_result(
+        msg["id"],
+        {"comments": [store_api.comment_json(comment) for comment in comments]},
+    )
+
+
 #: Every handler, in the order `protocol.ts` lists them. A tuple rather than a
 #: call to `async_register_command` at each definition, so "is every command
 #: registered" is a question about one list a test can read.
@@ -4844,10 +4709,6 @@ _HANDLERS: tuple[Any, ...] = (
     ws_health_list,
     ws_dashboard_generate,
     ws_dev_sources,
-    ws_dev_read,
-    ws_dev_save,
-    ws_dev_install,
-    ws_dev_export,
     ws_modules_hosted,
     ws_modules_read,
     ws_modules_host,
@@ -4866,4 +4727,12 @@ _HANDLERS: tuple[Any, ...] = (
     ws_modules_unhost,
     ws_modules_export,
     ws_modules_import,
+    ws_published_status,
+    ws_published_claim,
+    ws_published_browse,
+    ws_published_publish,
+    ws_published_install,
+    ws_published_rate,
+    ws_published_comments,
+    ws_published_comment,
 )

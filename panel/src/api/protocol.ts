@@ -322,74 +322,22 @@ export const COMMANDS = {
   /** `{ room_id }` -> `{ created: boolean, url_path }`. */
   dashboardGenerate: "open_house/dashboard/generate",
 
-  // -- Dev: authoring and export -------------------------------------------
+  // -- Dev: what may be imported -------------------------------------------
   //
-  // The five commands one journey takes, split by screen rather than by
-  // resource. `dev/sources` lists what a person may import, `dev/read` says what
-  // the importer found in the one they picked -- the tables every decision is
-  // made against -- `dev/save` writes the module those decisions made, and
-  // `dev/install` puts a module a person wrote into a room. `dev/export` runs the
-  // other way, turning an installed module's behaviours into automations.
-  //
-  // `dev/sources` is the one command here that needs no house: a person can look
-  // at what their automations would become before they have finished setting the
-  // house up, which is the moment the question is worth answering.
+  // `dev/sources` lists what a person may import, so the tab renders a source
+  // list before anything has been read. It is the one command here that needs no
+  // house: a person can look at what their automations would become before they
+  // have finished setting the house up, which is the moment the question is worth
+  // answering.
 
   /**
-   * `{}` -> `{ automations: DevSource[], blueprints: DevSource[], saved: DevSaved[] }`.
+   * `{}` -> `{ automations: DevSource[], blueprints: DevSource[] }`.
    *
-   * `automations` and `blueprints` are what may be imported; `saved` is what has
-   * already been authored, read off the config directory rather than the cached
-   * catalog, so a module shows up the moment it is written.
+   * `automations` and `blueprints` are what may be imported, read from Home
+   * Assistant rather than off disk -- what a person sees here is the automation
+   * editor's own document, not a re-parse of `automations.yaml`.
    */
   devSources: "open_house/dev/sources",
-
-  /**
-   * `{ kind: "automation" | "blueprint" | "text", key?, text? }` -> `DevReadReply`.
-   *
-   * The reply is every decision a person can make about the source, plus the two
-   * vocabularies a decision is made against. The vocabularies come *with* the
-   * reading rather than from a second command, so a screen renders one table
-   * from one reply and a suggestion cannot be drawn from a catalog the list it
-   * appears in was not drawn from.
-   */
-  devRead: "open_house/dev/read",
-
-  /**
-   * `{ kind, key?, text?, plan: DevPlan, install?: boolean, room_id? }` ->
-   * `{ saved: DevSaved, modules: InstalledModule[] }`.
-   *
-   * The file is written first, and the verdict is about the file: a module the
-   * engine's schema, the slot rules or the sandbox refuse is still written,
-   * because a person keeps the name they chose and is told why it will not
-   * install -- and it is never reported as saved-and-good. `install` asks for it
-   * to be placed in the same call, in the room `room_id` names; the empty string
-   * is the house, and an absent `room_id` places it by the entity join. A
-   * refusal to install leaves the file alone, because the file is what a person
-   * asked for and can fix.
-   */
-  devSave: "open_house/dev/save",
-
-  /**
-   * `{ name, room_id? }` -> `{ modules: InstalledModule[] }`.
-   *
-   * `room_id` reads exactly as `devSave`'s: `""` is the house, absent is the
-   * entity join.
-   */
-  devInstall: "open_house/dev/install",
-
-  /**
-   * `{ pack, room_id? }` -> `{ pack, automations: object[], yaml: string,
-   * unresolved: string[] }`.
-   *
-   * Only an *installed* module can be exported, and the slots are resolved in
-   * the named room -- or at house scope for a behaviour declared there -- so the
-   * automations name the entities this house actually holds rather than the roles
-   * the module was written against. `unresolved` names the roles that room fills
-   * nothing for, which is why an export can be valid and act on nothing: the
-   * screen says so rather than leaving a person to notice an empty target.
-   */
-  devExport: "open_house/dev/export",
 
   /**
    * `{}` -> `{ modules: HostedModule[] }`.
@@ -407,10 +355,9 @@ export const COMMANDS = {
    *
    * The import screen's one read: what the source asks for (`inputs`), what it
    * could publish (`candidates`), and what the house already has to bind from
-   * (`hosted`). Separate from `devRead` because that one is a reading *for a
-   * pack* -- it refuses a document with no trigger and translates what it reads
-   * -- whereas this reads every source the same way. Nothing that can be hosted
-   * is refused.
+   * (`hosted`). It reads every source the same way, and nothing that can be
+   * hosted is refused -- the screen hosts the document as it is rather than
+   * translating it.
    *
    * Naming a `module` reads a module this house already runs, which is the same
    * screen opened as an *edit*: the document is the module's own rather than
@@ -623,6 +570,113 @@ export const COMMANDS = {
    * Dropping the running one leaves another running, the way a switch does.
    */
   modulesConfigRemove: "open_house/modules/configs/remove",
+
+  // -- The published Store ---------------------------------------------------
+  //
+  // `modules/*` above is this *house's* store: the modules it offers, which is
+  // where an import lands. What follows is the other one -- the Store other
+  // people publish to and this house installs from. Two namespaces rather than
+  // one because they are two things: a module this house offers exists whether
+  // or not any Store is configured, and everything below is answered from a
+  // server this house has to know the address of.
+
+  /**
+   * `{}` -> `{ url: string, name: string }`.
+   *
+   * Whether this house has a published Store to talk to at all.
+   *
+   * `url` is `""` until somebody names one in the integration's settings, and
+   * **that is the ordinary state of every install**: a Store is a server
+   * somebody runs, so nothing here opens a connection until an address is given,
+   * and every other command below refuses politely while there is none. `name`
+   * is this install's publisher name -- `""` until it has claimed one -- and it
+   * is what makes "your name, once" visible on the screen rather than only in a
+   * file.
+   */
+  publishedStatus: "open_house/published/status",
+
+  /**
+   * `{ name }` -> `{ name }`.
+   *
+   * Claim this install's publisher name, once, on the Store.
+   *
+   * **A name belongs to whoever claimed it first.** The Store enforces that with
+   * a unique index, so the refusal a second person gets is the backend's own,
+   * and it is a refusal with a sentence attached: the name is theirs, pick
+   * another. A name refused on its merits -- a space, a capital, a name the
+   * Store keeps for itself -- is refused here, before the request, and answered
+   * with the same field (`invalid_format`) and the same kind of sentence, so the
+   * screen has one thing to render either way.
+   *
+   * The password is generated by the integration and never shown; a person
+   * claims a name, not an account, and there is no email to give.
+   */
+  publisherClaim: "open_house/published/claim",
+
+  /**
+   * `{ search? }` -> `{ installed: PublishedRow[], not_installed: PublishedRow[] }`.
+   *
+   * The published Store, in the two lists the tab draws: the modules this house
+   * already has, and the ones it does not.
+   *
+   * **Split by the server, not by the screen.** "Do I have this" is a question
+   * about this house's own store of definitions, which the server holds and the
+   * screen does not -- and the two are matched on the module's *slug* rather
+   * than on the Store's record id, so a module whose publisher corrected a typo
+   * in its summary is still the module this house has.
+   */
+  publishedBrowse: "open_house/published/browse",
+
+  /**
+   * `{ module, summary? }` -> `{ published: PublishedRow, store: ModuleOfferRow[] }`.
+   *
+   * Publish one of this house's own modules to the Store, by its name.
+   *
+   * What is published is the *module definition* -- the same document an export
+   * writes and an import reads -- so what a person installs from the Store is
+   * exactly what they published, with no second format in between to disagree
+   * with the first.
+   */
+  publishedPublish: "open_house/published/publish",
+
+  /**
+   * `{ id, replace? }` -> `{ module, replaced, store }`.
+   *
+   * Install a module somebody else published: it is taken into this house's own
+   * store, where it is a definition like any other and installs into a room the
+   * same way. Nothing runs yet.
+   *
+   * **`id` is the Store's record, not the slug.** Two publishers may offer a
+   * module of one name, and a person picked the row they picked.
+   */
+  publishedInstall: "open_house/published/install",
+
+  /**
+   * `{ id, stars }` -> `{ rating: number, stars_count: number }`.
+   *
+   * Rate a published module from one to five whole stars.
+   *
+   * A second rating of the same module is the same rating changed rather than a
+   * second opinion -- the Store keeps one per person -- and a publisher rating
+   * their own module is refused by the Store itself, because an average that
+   * included its subject's own vote is a number nobody said.
+   */
+  publishedRate: "open_house/published/rate",
+
+  /**
+   * `{ id }` -> `{ comments: StoreCommentRow[] }`.
+   *
+   * What people have said about one published module.
+   */
+  publishedComments: "open_house/published/comments",
+
+  /**
+   * `{ id, body }` -> `{ comments: StoreCommentRow[] }`.
+   *
+   * Say something about one published module. Answers with the list the comment
+   * landed in, so the screen does not have to ask twice.
+   */
+  publishedComment: "open_house/published/comment",
 } as const;
 
 export type CommandName = (typeof COMMANDS)[keyof typeof COMMANDS];

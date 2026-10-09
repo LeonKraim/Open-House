@@ -125,6 +125,12 @@ registry rather than a network. The consequence is that the whole thing works on
 a house with no internet, and that installing the panel is copying one built
 bundle into the instance's `www/` directory.
 
+There is now one exception, and it is one a person switches on: the **published
+Store** (see below) is a server somebody runs, and Open House talks to it only
+once its address is set in the integration's options. With no address, no
+connection is opened, no request is made, and the page behaves exactly as it did
+before the Store existed.
+
 The panel has eight tabs. *Overview* answers "is anything wrong, and what is the
 house doing" from one command, so a room list and a health count are never shown
 from two moments taken apart. *Rooms* is the list and the way into one room's
@@ -143,10 +149,11 @@ did this happen", with each row expandable to read the reason in full; its live
 stream is subscribed on request rather than on mount. *Health* is the list of what
 is wrong right now — a dead sensor, a required slot unbound, a pack whose engine
 range no longer matches — each linking to the room it concerns. *Store* browses
-the pack catalog and installs from it, and *Dev* is the workbench that is not for
-a person's house at all: it turns an automation into a module and a module back
-into automations. Those last two are administrator work rather than a person's
-house, so they sit at the end of the strip as one pair, where an admin's tab strip
+the pack catalog and installs from it, lists the modules this house made, and —
+when a published Store is configured — browses that too, and *Dev* imports an
+automation or blueprint as a module the house runs. Those last two are
+administrator work rather than a person's house, so they sit at the end of the
+strip as one pair, where an admin's tab strip
 reads the same as everyone else's with the tools appended rather than interleaved.
 
 **A profile for the whole house, at the top of the Rooms tab.** *Whole house*
@@ -249,11 +256,18 @@ flow's tab; before the first save there is no tab yet, so it opens where Node-RE
 opens and the row says the flow is made when you save. A **Reload** button
 refetches the editor — useful right after a save has pushed a flow that was not
 there when the frame loaded — and **Open its own tab** opens the same editor at
-the same address in a full tab, for when you want the room. Two things are needed for this and the row says so when they are
-missing: an address for your Node-RED, set in the Open House integration's
-settings (plus a token, if your Node-RED uses `adminAuth`; the Home Assistant
-add-on does), and a Home Assistant *server* node in Node-RED, which any instance
-that has used Node-RED with Home Assistant already has. Nothing is written into
+the same address in a full tab, for when you want the room. **You do not have to
+install Node-RED to use this.** If you have one already, set its address in the
+Open House integration's settings and that is the Node-RED everything uses — the
+one you already run, untouched; Open House never starts a second one. If you do
+not have one, install the **Open House Node-RED** add-on from the Open House
+add-on repository and leave the address empty: Open House finds that add-on on
+its own and embeds its editor, and a flow it pushes goes there. The two never
+conflict — the add-on takes no host port and keeps its own data — and the add-on's
+README says exactly how a Node-RED you already have stays yours. Either way a
+Home Assistant *server* node is needed in the editor for a pushed flow to
+connect: the Open House Node-RED add-on already has one, and any other instance
+that has used Node-RED with Home Assistant has one too. Nothing is written into
 the input until the flow itself writes it, so a flow you have not finished
 building leaves the input reading `unknown` — which is visible, and not the same
 as a value of zero. **HAOS automation** is the fourth, and it is the one for an
@@ -533,6 +547,99 @@ with six disabled behaviours, and the enabling act is the switch. For a
 so-called lighting pack this is the same split as the room's auto-lighting switch:
 enabling writes a flag and rebuilds nothing, so a house that is running keeps its
 modes, its dwell timers and its override records.
+
+## The published Store
+
+Everything above is a house talking to itself. The **published Store** is the one
+part of Open House that talks to somebody else, and it exists so that a module
+one person makes can be found, installed and rated by another.
+
+**A Store is a server somebody runs, and running one is one file.** The backend
+is [PocketBase](https://pocketbase.io) — a single Go binary on SQLite, with a
+REST API, accounts, unique indexes and an admin UI already in it — and everything
+Open House needs it to be is in `store/` in this repository: the schema as a file
+a person imports, the counters as a hook, and a README with the one command that
+starts it. A Store is therefore something you can have on your own network
+without operating anything, and the module you publish is the same *module
+definition* an export writes and an import reads — there is no second format in
+between to disagree with the first.
+
+**With no address set, nothing happens.** The Store's address is a field in the
+integration's options (Settings → Devices & Services → Open House → Configure),
+and until one is given the panel opens no connection and the Store tab is the
+house's own store of modules plus nothing else. This is deliberate: a Store is
+public, and no install should be reachable outward because it was installed.
+
+### Your name, once
+
+The first thing a Store needs from you is the **name you publish under**. You
+choose it once, on the Store tab, and it is yours from then on. If somebody has
+it already the Store refuses it, and the refusal is a sentence rather than a code:
+that name is taken, please pick another one — you cannot publish under somebody
+else's name. The same rule stops a name that cannot be one at all (a capital, a
+space, a name the Store keeps for itself), and the screen shows whichever
+sentence applies. There is no email to give and no account to make: the name
+*is* the account, and the integration keeps its password.
+
+The name is also what your modules show as their author, so it is the one thing
+about publishing worth thinking about before you do it.
+
+### Publishing
+
+Next to each module this house made there is a **Publish** button. What it
+publishes is the module as it is stored here — its inputs, its answers, the
+blueprint inside it — so what somebody installs is exactly what you published.
+Publishing again replaces your own module on the Store, which is what a corrected
+typo and a new version both are.
+
+The button only appears once a Store is configured and you have a name; a button
+whose only outcome would be a refusal is worse than no button.
+
+### Browsing, and the two lists
+
+The Store tab's published half is two lists, and the choice between them is the
+first thing on it: **Installed** — the modules this house already has — and **Not
+installed**, which is everything else. The split is made by the server, against
+the definitions this house holds, and it is matched on the module's *slug* rather
+than on the Store's own record id: a module whose publisher corrected a typo in
+its summary is still the module you installed.
+
+A row carries who published it, its version, its tier, its summary, the Store's
+review when there is one, how many installs and comments it has, and its rating.
+Installing takes the module into this house's own store, where it is a definition
+like any other — nothing runs until you place it in a room. A module that arrived
+with a name you already have is refused once and then, if you say so, replaced.
+
+### Ratings and comments
+
+Every published module takes **one to five whole stars** and a comment, both from
+people who are not its publisher. Two rules are the backend's and not a matter of
+courtesy:
+
+* **You cannot rate your own module.** An average that included its subject's own
+  vote is a number nobody said, and the Store refuses it however the request is
+  made — not only in the panel, which would be a rule a person could go around.
+* **One rating per person per module.** Rating again is changing your mind, not a
+  second opinion, so the Store replaces the rating you left rather than counting
+  it twice.
+
+Comments are the same shape: a name, what they said, and when. Nothing on the
+Store is anonymous, because the name is the account and a review nobody signed is
+a review nobody stands behind.
+
+### What is not finished here
+
+Modules publish and install, but **a module's answers that name one house's
+devices are still that house's devices**: a definition pinned to a specific light
+installs somewhere else with an answer that points at nothing. This house's own
+module list says which of its modules are pinned; the published Store's rows do
+not say it yet, so it is worth reading a module's answers before publishing it
+rather than after. The module that travels well is the one answered with slots.
+
+Ratings, comments and install counts are kept on the module row by the Store's own
+hooks rather than counted per read, so a listing page is one query; the counters
+are recomputed from the rows rather than incremented, which is why they cannot
+drift into a rating of nine out of five.
 
 ## What is not finished
 

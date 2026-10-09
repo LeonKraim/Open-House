@@ -1752,7 +1752,7 @@ async def _async_drop_helper(hass: HomeAssistant, entity_id: str) -> None:
         return
     try:
         await collection.async_delete_item(entry.unique_id)
-    except Exception as failure:  # noqa: BLE001
+    except Exception as failure:
         _LOGGER.warning("a helper could not be removed from Home Assistant: %s", failure)
 
 
@@ -1789,7 +1789,7 @@ async def _async_forget_flow(hass: HomeAssistant, entry_id: str, flow_id: str) -
     if not flow_id:
         return
     entry = hass.config_entries.async_get_entry(entry_id)
-    client = node_red.async_client(hass, {} if entry is None else entry.options)
+    client = await node_red.async_client(hass, {} if entry is None else entry.options)
     if client is None:
         return
     try:
@@ -2121,12 +2121,13 @@ async def _async_push_flows(
     if not record.flows:
         return record
     entry = hass.config_entries.async_get_entry(entry_id)
-    client = node_red.async_client(hass, {} if entry is None else entry.options)
+    client = await node_red.async_client(hass, {} if entry is None else entry.options)
     if client is None:
         raise ModuleHostError(
             "this module answers an input with a Node-RED flow, and no Node-RED "
-            "address has been set: open the Open House integration's settings "
-            "and give it the address of your Node-RED"
+            "address has been set: install and start the Open House Node-RED "
+            "add-on, or open the Open House integration's settings and give it "
+            "the address of your Node-RED"
         )
     resolved = module_host.resolve_slots(
         dict(answered), bound if bound is not None else {}

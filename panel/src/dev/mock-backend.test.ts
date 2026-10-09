@@ -17,7 +17,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
 import { COMMANDS } from "../api/protocol.ts";
-import type { RoomDetail } from "../api/models.ts";
+import type { PublishedRow, RoomDetail } from "../api/models.ts";
 import type { HaConnection } from "../api/connection.ts";
 import { mockHass } from "./mock-backend.ts";
 
@@ -331,13 +331,9 @@ test("the dev tab's lists name what the fixture holds", async () => {
   const reply = (await conn.sendMessagePromise({ type: COMMANDS.devSources })) as {
     automations: { key: string }[];
     blueprints: { key: string; domain?: string }[];
-    saved: { name: string; file: string }[];
   };
   assert.ok(reply.automations.length > 0);
   assert.ok(reply.blueprints.length > 0);
-  // `saved` is read off the store, so it is a list rather than a fixture of its
-  // own -- a mock whose save went nowhere would show here and nowhere else.
-  assert.ok(reply.saved.some((row) => row.name === "evening_lighting"));
 });
 
 test("hosting a source adds a module to the house", async () => {
@@ -388,4 +384,113 @@ test("reading a module the house does not host is refused", async () => {
     module: "nothing_called_this",
   });
   assert.equal((refused as { code?: string }).code, "invalid_format");
+});
+
+test("the published Store answers with an address and, at first, no name", async () => {
+  // The claim form is on screen only while `name` is empty, so a mock that
+  // shipped a name would hide the form the walk needs to reach.
+  const conn = connection();
+  const status = (await conn.sendMessagePromise({
+    type: COMMANDS.publishedStatus,
+  })) as { url: string; name: string };
+  assert.ok(status.url !== "", "the mock Store has no address");
+  assert.equal(status.name, "");
+});
+
+test("the published list is split by the slug this house already holds", async () => {
+  // The split is the server's: the row whose slug names a module this house
+  // offers is installed, and the rest are not. A mock that split on anything
+  // else would let the filter show an installed module under "Not installed".
+  const conn = connection();
+  const split = (await conn.sendMessagePromise({
+    type: COMMANDS.publishedBrowse,
+  })) as { installed: { slug: string }[]; not_installed: { slug: string }[] };
+  assert.ok(
+    split.installed.some((row) => row.slug === "porch_lamp"),
+    "a module this house holds is not on the installed side",
+  );
+  assert.ok(
+    split.not_installed.some((row) => row.slug === "sunrise_alarm"),
+    "a module this house does not hold is not on the not-installed side",
+  );
+});
+
+test("the published fixtures cover a rated row, an unrated one and a published one", async () => {
+  const conn = connection();
+  const split = (await conn.sendMessagePromise({
+    type: COMMANDS.publishedBrowse,
+  })) as { installed: PublishedRow[]; not_installed: PublishedRow[] };
+  const rows = [...split.installed, ...split.not_installed];
+  assert.ok(rows.some((row) => row.mine), "no row is this install's own");
+  assert.ok(rows.some((row) => row.rating === null), "no row is unrated");
+  assert.ok(rows.some((row) => row.rating !== null), "no row is rated");
+});
+
+test("a published module's comments come back as a list", async () => {
+  const conn = connection();
+  const reply = (await conn.sendMessagePromise({
+    type: COMMANDS.publishedComments,
+    module_id: "pub-sunrise",
+  })) as { comments: { body: string }[] };
+  assert.ok(reply.comments.length > 0, "the fixture row has no comments");
+});
+
+test("the Store refuses a name somebody has taken, in its own words", async () => {
+  const refused = await refusalOf({
+    type: COMMANDS.publisherClaim,
+    name: "marqbarq",
+  });
+  assert.deepEqual(refused, {
+    code: "invalid_format",
+    message: "that name is taken, please pick another name",
+  });
+});
+
+test("claiming a name, then publishing a module, puts it on the Store", async () => {
+  // Ordered after the refusal above on purpose: claiming is once, so the
+  // acceptable name can only be claimed after the taken one has been tried.
+  const conn = connection();
+  const claimed = (await conn.sendMessagePromise({
+    type: COMMANDS.publisherClaim,
+    name: "ada",
+  })) as { name: string };
+  assert.equal(claimed.name, "ada");
+
+  const status = (await conn.sendMessagePromise({ type: COMMANDS.publishedStatus })) as {
+    name: string;
+  };
+  assert.equal(status.name, "ada");
+
+  const reply = (await conn.sendMessagePromise({
+    type: COMMANDS.publishedPublish,
+    module: "evening_lighting",
+  })) as { published: PublishedRow; store: unknown[] };
+  assert.equal(reply.published.publisher, "ada");
+  assert.equal(reply.published.mine, true);
+  assert.ok(Array.isArray(reply.store), "the store did not come back with the publish");
+});
+
+test("installing a module the house already holds is refused, and replace settles it", async () => {
+  // The one refusal a Replace confirm exists for: the request is answered as a
+  // value refused on its merits, which is the code the panel reads to offer it.
+  const conn = connection();
+  const first = (await conn.sendMessagePromise({
+    type: COMMANDS.publishedInstall,
+    module_id: "pub-guest",
+  })) as { module: string; replaced: boolean };
+  assert.equal(first.module, "guest_greeting");
+  assert.equal(first.replaced, false);
+
+  const refused = await refusalOf({
+    type: COMMANDS.publishedInstall,
+    module_id: "pub-guest",
+  });
+  assert.equal((refused as { code?: string }).code, "invalid_format");
+
+  const again = (await conn.sendMessagePromise({
+    type: COMMANDS.publishedInstall,
+    module_id: "pub-guest",
+    replace: true,
+  })) as { replaced: boolean };
+  assert.equal(again.replaced, true);
 });

@@ -24,13 +24,15 @@ export interface Capabilities {
   /** True when this HA has never completed the Open House setup flow. */
   needs_setup: boolean;
   /**
-   * Where this house's Node-RED is, as the instance's admin configured it, or
-   * `""` for none.
+   * Where this house's Node-RED is, or `""` for none.
    *
-   * Configured and not discovered: Node-RED runs beside Home Assistant on one
-   * install and behind the add-on's ingress on another, and the address that
-   * reaches it is a fact about the network the browser is on. The panel embeds
-   * Node-RED's own editor at this address, on the row a flow answers.
+   * **Already resolved by the integration, and the panel does not decide it.**
+   * It is the address the instance's admin set when there is one -- their own
+   * Node-RED, the community add-on or otherwise -- and otherwise the ingress
+   * path of the Open House Node-RED add-on this repository ships, when that
+   * add-on is installed and running. The precedence is the conflict rule and it
+   * lives server-side (`node_red.async_editor_url`), so the panel is handed one
+   * string and embeds Node-RED's own editor at it, on the row a flow answers.
    */
   node_red_url?: string;
 }
@@ -671,6 +673,68 @@ export interface StoreEntry {
 }
 
 /**
+ * One module on the *published* Store, as a row is drawn from it.
+ *
+ * The document itself is not here, and that is deliberate: a page of twenty
+ * modules does not need twenty definitions parsed, and the one that does is the
+ * one being installed (`storeInstall` fetches it by id). This is what a person
+ * decides from -- who made it, how other people found it, what it is called.
+ */
+export interface PublishedRow {
+  /** The Store's own record id: what `storeInstall` and `storeRate` are given. */
+  id: string;
+  slug: string;
+  title: string;
+  summary: string;
+  /** The publisher's name, as they claimed it. */
+  publisher: string;
+  /**
+   * Whether *this* install published it, and therefore whether it is a module
+   * that gets a publish button rather than an install one.
+   */
+  mine: boolean;
+  version: string;
+  tier: "official" | "verified" | "community";
+  /** The Store's review, when it has reviewed this module. */
+  review: string;
+  /**
+   * The mean rating, or `null` for a module nobody has rated.
+   *
+   * `null` rather than `0`: zero stars is a rating somebody gave, and a screen
+   * that drew an unrated module as nothing out of five would be saying something
+   * no person said.
+   */
+  rating: number | null;
+  /** How many people rated, which is what makes `rating` mean anything. */
+  stars_count: number;
+  comments: number;
+  installs: number;
+  updated: string;
+}
+
+/** One comment on a published module. */
+export interface StoreCommentRow {
+  id: string;
+  /** The name of the person who said it. */
+  publisher: string;
+  body: string;
+  created: string;
+}
+
+/**
+ * This house's side of the published Store.
+ *
+ * Both fields are empty until somebody sets them, and both being empty is the
+ * ordinary state: the Store tab behaves as it does today, plus its own filter.
+ */
+export interface StoreStatus {
+  /** The Store's address. `""` when this house has not named one. */
+  url: string;
+  /** This install's publisher name. `""` until it has claimed one. */
+  name: string;
+}
+
+/**
  * The `subscribeMessage` payload for the Activity stream.
  *
  * **`reset` is in the vocabulary and the server does not send it.** The one
@@ -689,11 +753,10 @@ export interface ActivityStreamEvent {
 
 // -- The Dev tab -----------------------------------------------------------
 //
-// One journey's types, in the order the commands in `protocol.ts` are called.
-// They mirror `ha_adapter.pack_authoring`'s dataclasses field for field, written
-// out rather than generated: the server's `_as_json` names every field it sends,
-// so a field added on one side and not the other is a compile error here instead
-// of an `undefined` rendered into a label.
+// What the import screen picks from: the automations and blueprints Home
+// Assistant holds, read by `dev/sources`. The rest of what the tab renders --
+// the inputs, the candidates, the hosted modules -- lives under "Hosted
+// modules" below, because hosting a source is what the Dev tab does.
 
 /** One thing a person may import: an automation, or a blueprint. */
 export interface DevSource {
@@ -707,180 +770,13 @@ export interface DevSource {
   domain?: string;
 }
 
-/** A module a person has already authored, as the saved list shows it. */
-export interface DevSaved {
-  name: string;
-  title: string;
-  description: string;
-  version: string;
-  behaviours: number;
-  options: number;
-  file: string;
-}
-
-/** One entity the source names, and what a person decided it is. */
-export interface DevEntityRow {
-  key: string;
-  label: string;
-  entity_id: string;
-  /** From the input's selector or the entity id's own prefix. */
-  domain: string;
-  /** How many places in the document name it. */
-  count: number;
-  /** A blueprint input that may be left empty. */
-  optional: boolean;
-  /** Where it was found, as breadcrumbs. */
-  places: string[];
-  /** The slot this domain usually binds to, or the empty string. */
-  suggested_slot: string;
-}
-
-/** One scalar the source carries: a blueprint input, or a literal. */
-export interface DevValueRow {
-  key: string;
-  label: string;
-  /** `boolean`, `integer`, `number`, `string`, `enum`, `duration` or `time`. */
-  kind: string;
-  default: unknown;
-  description: string;
-  minimum: number | null;
-  maximum: number | null;
-  unit: string | null;
-  choices: string[];
-  places: string[];
-}
-
-/** One service call the source makes, as a candidate behaviour. */
-export interface DevServiceRow {
-  key: string;
-  service: string;
-  /**
-   * Whether the engine's closed service list has this service.
-   *
-   * `false` is not a suggestion: the sandbox refuses a pack that calls outside
-   * the list, so the row may be read and may not be kept. `null` when the server
-   * had no vocabulary to check against.
-   */
-  supported: boolean | null;
-  /** The entity-row keys this call's target names. */
-  acts_on: string[];
-  data_keys: string[];
-  where: string;
-  depth: number;
-}
-
-/** Everything an import decision can be made about, and nothing else. */
-export interface DevAnalysis {
-  title: string;
-  description: string;
-  blueprint: boolean;
-  entities: DevEntityRow[];
-  values: DevValueRow[];
-  services: DevServiceRow[];
-  /** The trigger platforms the document uses. */
-  triggers: string[];
-  /** The condition kinds it uses; `template` may appear and cannot be carried. */
-  conditions: string[];
-  /** What the reading could not carry, in the source's own words. */
-  dropped: string[];
-}
-
-/** One slot a person may bind an entity to. */
-export interface DevSlot {
-  name: string;
-  domains: string[];
-  suggested: boolean;
-}
-
-/** The `dev/read` reply: the reading, and the vocabularies it was made against. */
-export interface DevReadReply {
-  analysis: DevAnalysis;
-  slots: DevSlot[];
-  /** The engine's closed service list. */
-  services: string[];
-}
-
-/** One person's decision about one entity row. */
-export interface DevEntityPlan {
-  decision: "slot" | "ignore";
-  slot?: string;
-  /** Whether the module cannot run without it. */
-  required?: boolean;
-}
-
-/** One person's decision about one value row. */
-export interface DevValuePlan {
-  decision: "setting" | "constant" | "ignore";
-  key?: string;
-  type?: string;
-  title?: string;
-  description?: string;
-  default?: unknown;
-  minimum?: number | null;
-  maximum?: number | null;
-  unit?: string | null;
-  enum?: string[];
-}
-
-/** One person's decision about one service call. */
-export interface DevBehaviourPlan {
-  key: string;
-  keep: boolean;
-  name?: string;
-  /** The slot the call writes through. */
-  slot?: string;
-  /** The slots it watches, written before the acted-on slot. */
-  watched?: string[];
-  trigger?: string;
-  condition?: string;
-  /**
-   * The `duration` setting this behaviour waits out, by option key.
-   *
-   * The manifest's `for`, and the one clause that reads a setting: the behaviour
-   * proposes only once the slot it watches has read something for that long.
-   * Absent for a behaviour that acts immediately.
-   */
-  for?: string;
-  scope?: "room" | "house";
-  priority?: number;
-}
-
-/** The whole set of decisions, which is what `dev/save` is asked to write. */
-export interface DevPlan {
-  name: string;
-  title?: string;
-  description?: string;
-  version?: string;
-  license?: string;
-  entities: Record<string, DevEntityPlan>;
-  values: Record<string, DevValuePlan>;
-  behaviours: DevBehaviourPlan[];
-}
-
-/** The `dev/export` reply: a module's behaviours, as automations. */
-export interface DevExportReply {
-  pack: string;
-  automations: Record<string, unknown>[];
-  yaml: string;
-  /**
-   * The roles the asked-about room fills nothing for, so the export names none.
-   *
-   * A behaviour's acted slot that resolved to nothing is written as a target
-   * naming nothing rather than as an absent target -- an absent one is Home
-   * Assistant's "every entity of that domain", which is a different automation
-   * -- so the YAML is correct and, on its own, silent about why it would do
-   * nothing. Empty when every role resolved, which is the usual answer.
-   */
-  unresolved: string[];
-}
-
 // -- Hosted modules --------------------------------------------------------
 //
-// The other half of the Dev tab: instead of translating a source into a pack,
-// host it as a Home Assistant automation and let it publish what a person chose.
-// These mirror `ha_adapter.module_records` and `module_host`'s dataclasses, and
-// the server's `_hosted`/`ws_modules_read` name every field they send, so a
-// field added on one side and not the other is a compile error here.
+// The Dev tab's own types: a source hosted as a Home Assistant automation that
+// publishes a value a person chose. These mirror `ha_adapter.module_records`
+// and `module_host`'s dataclasses, and the server's `_hosted`/`ws_modules_read`
+// name every field they send, so a field added on one side and not the other is
+// a compile error here.
 
 /** A value one module published, and the entity it lives at. */
 export interface ModuleOutput {

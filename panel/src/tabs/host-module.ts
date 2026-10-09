@@ -5,10 +5,9 @@
  * -- a Home Assistant automation, built from a blueprint with the choices made
  * below -- and Home Assistant runs it. Everything the blueprint can do survives
  * because nothing rewrites it: `choose`, `repeat`, waits, templates, device
- * actions and the rest run exactly as their author wrote them. That is the whole
- * difference between this screen and the pack workbench beside it, and it is why
- * this one has no "this part does not import" banner: a source that Home
- * Assistant accepts is a module this hosts.
+ * actions and the rest run exactly as their author wrote them. That is why this
+ * one has no "this part does not import" banner: a source that Home Assistant
+ * accepts is a module this hosts.
  *
  * **Two decisions, and both are the person's.** What fills each input the source
  * asks for, and which of the source's own internals become outputs other modules

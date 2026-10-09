@@ -6,8 +6,8 @@
  * light in a room looks next at what that made available to the whole house.
  *
  * The two screens that are *not* a person's house come last. Store installs
- * packs and Dev is the workbench where an automation becomes a module and a
- * module becomes automations again; both are administrator work, and both used
+ * packs and Dev imports an automation or blueprint as a module the house runs;
+ * both are administrator work, and both used
  * to sit in the middle of the strip -- Store wedged between Profiles and
  * Activity -- where they split the two halves of the everyday panel. The order
  * now reads as one run of ordinary screens (Overview through Health) and then

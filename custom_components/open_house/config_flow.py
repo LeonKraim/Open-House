@@ -68,6 +68,8 @@ from .const import (
 )
 from .host import entity_ids_in_area
 from .node_red import OPTION_EDITOR_URL, OPTION_TOKEN, OPTION_URL
+from .store import OPTION_PUBLISHER as STORE_OPTION_PUBLISHER
+from .store import OPTION_URL as STORE_OPTION_URL
 
 __all__ = ["OpenHouseConfigFlow", "RoomSubentryFlow"]
 
@@ -360,6 +362,16 @@ class OpenHouseOptionsFlow(OptionsFlow):
     A house with no Node-RED leaves all three empty, and is not worse off for it:
     every cast but this one works without it, and the row that offers a flow says
     where to come and set the address.
+
+    **The fourth field is the published Store's address, and an empty one is the
+    ordinary state.** Most houses run their own modules and never publish or
+    install from anybody else's server, so nobody has to fill this in, and a house
+    that leaves it empty is not a house missing a setting: nothing outward-facing
+    is opened without it, every published-Store command answers politely while it
+    is blank, and the tab behaves exactly as it does for a house that has never
+    heard of a Store. The address is typed here rather than discovered, because a
+    Store is a server somebody else runs and nothing in Home Assistant can find
+    one on this house's behalf.
     """
 
     async def async_step_init(
@@ -367,7 +379,23 @@ class OpenHouseOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Ask for the addresses, or keep what was given."""
         if user_input is not None:
-            return self.async_create_entry(data=dict(user_input))
+            # Laid over the entry's options rather than swapped for them: the
+            # publisher identity a claim stored (`store.OPTION_PUBLISHER`) is not
+            # a field on this form, and an update built from the form alone would
+            # drop a name this house has already claimed.
+            merged = {**self.config_entry.options, **user_input}
+            # *Unless the Store itself was changed*, in which case that name is
+            # the previous Store's to give and not this one's. Carried across, it
+            # authenticates as a stranger -- or, on a Store where somebody else
+            # holds the same name, as that person, which is the one thing the
+            # uniqueness of a name exists to prevent. So a changed address forgets
+            # the claim and the tab asks for a name again, which is the screen
+            # that can settle who this house is on the new Store.
+            was = str(self.config_entry.options.get(STORE_OPTION_URL) or "").strip()
+            now = str(user_input.get(STORE_OPTION_URL) or "").strip()
+            if was != now:
+                merged.pop(STORE_OPTION_PUBLISHER, None)
+            return self.async_create_entry(data=merged)
         options = self.config_entry.options
         return self.async_show_form(
             step_id="init",
@@ -382,6 +410,10 @@ class OpenHouseOptionsFlow(OptionsFlow):
                     ): str,
                     vol.Optional(
                         OPTION_TOKEN, default=str(options.get(OPTION_TOKEN) or "")
+                    ): str,
+                    vol.Optional(
+                        STORE_OPTION_URL,
+                        default=str(options.get(STORE_OPTION_URL) or ""),
                     ): str,
                 }
             ),

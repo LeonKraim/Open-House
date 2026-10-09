@@ -5,8 +5,9 @@
  * application -- a palette, a canvas, a deploy button, a debug sidebar -- and a
  * second one drawn in this panel would be a different program that agreed with
  * Node-RED only until it did not. So this is an `<iframe>` of the real thing, at
- * the address the integration is configured with, opened on the flow's own tab
- * when there is one.
+ * the address the integration resolves for `node_red_url` -- a Node-RED the
+ * person configured, or the Open House Node-RED add-on's ingress path when they
+ * have not -- opened on the flow's own tab when there is one.
  *
  * **Embedded rather than linked, and that is the whole point of it.** A link is
  * a tab the person has to find again, and the trip back is where the work loses
@@ -220,8 +221,8 @@ export class NodeRedEditor extends OpenHouseElement {
     if (this.url === undefined) return html``;
     if (!this.url) {
       return html`<p class="help" data-node-red>
-        Set the Node-RED address in this integration's options and its editor
-        is embedded here.
+        Install the Open House Node-RED add-on, or set a Node-RED address in
+        this integration's options, and its editor is embedded here.
       </p>`;
     }
     return html`<div class="embed" data-node-red>
