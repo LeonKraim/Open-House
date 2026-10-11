@@ -71,14 +71,15 @@ _LOGGER = logging.getLogger(__name__)
 #: work -- a person who wants one of their own, a self-hosted one, a test one,
 #: sets the option instead and it wins.
 #:
-#: The value is the development Store that `store/docker-compose.yml` stands up,
-#: named from *inside* the Home Assistant container (which is where the
-#: integration runs, so `localhost` there is the container). It is a placeholder
-#: for a real Store's address and lives in one line for exactly that reason.
+#: The value is the public Store: the PocketBase backend in the
+#: `LeonKraim/open-house-backend` repository, which Coolify runs and puts behind
+#: a proxy that terminates TLS. The address carries no port and must not: 8090
+#: is the container's own, reachable only through that proxy, and 443 is the one
+#: door the outside world can use.
 #:
 #: `store_url` is the only reader, which is what keeps "is an address defined?" a
 #: single question.
-DEFAULT_URL = "http://host.docker.internal:8090"
+DEFAULT_URL = "https://openhouse-store.leonkraim.de"
 #: The key the Store's address lives under in a config entry's options. Empty is
 #: the ordinary state, because the shipped address is what a house uses until
 #: somebody sets one of their own: see the module docstring.
