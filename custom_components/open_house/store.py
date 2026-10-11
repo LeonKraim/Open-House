@@ -469,6 +469,42 @@ class Store:
         _refuse(status, body, "reading a published module")
         return store_api.module_row(body)
 
+    async def delete(self, record_id: str) -> None:
+        """Take one of this house's published modules back out of the Store.
+
+        **Who may delete is the Store's rule, not this method's.** The `modules`
+        collection is configured with `deleteRule: "publisher = @request.auth.id"`
+        (`store/collections.json`), so this call is made *as* this install and the
+        backend answers a row that is not ours exactly as it answers a row that
+        does not exist. Nothing here has to remember whose module it is, and a
+        record id somebody else's install guessed is refused where the rule lives.
+
+        **The ratings, comments and installs go with it, and that is the
+        schema's doing.** Each child collection relates to `modules` with
+        `cascadeDelete`, so one DELETE here is the whole module -- the module, its
+        reviews and the count of houses that had it. This is what "unpublish"
+        means: the row is gone, and publishing the same slug again is a new row
+        nobody has rated.
+
+        **A cascaded delete is asked about rather than believed.** PocketBase
+        0.40 takes the children, takes the module, and then trips over what it
+        has already removed in its own after-delete hook, answering a `400`
+        ("make sure that the record is not part of a required relation
+        reference") for a delete that happened. That is precisely the module
+        somebody wants gone -- one with ratings, comments or installs on it --
+        so a refusal here is followed by a read of the record, and a `404` is
+        the answer that means it is done. A module nobody has touched deletes
+        with a clean `204` and costs no second call.
+        """
+        path = store_api.record_path(
+            self.url, store_api.COLLECTIONS["modules"], record_id
+        )
+        status, body = await self.request("DELETE", path)
+        if status >= 400:
+            after, _ = await self.request("GET", path)
+            if after != 404:
+                _refuse(status, body, "deleting a published module")
+
     async def record_install(self, record_id: str) -> None:
         """Tell the Store this house now has this module, and say nothing else.
 

@@ -143,6 +143,7 @@ PUBLISHED_CONFIGURE = "open_house/published/configure"
 PUBLISHED_CLAIM = "open_house/published/claim"
 PUBLISHED_BROWSE = "open_house/published/browse"
 PUBLISHED_PUBLISH = "open_house/published/publish"
+PUBLISHED_DELETE = "open_house/published/delete"
 PUBLISHED_INSTALL = "open_house/published/install"
 PUBLISHED_RATE = "open_house/published/rate"
 PUBLISHED_COMMENTS = "open_house/published/comments"
@@ -4478,6 +4479,50 @@ async def ws_published_publish(
 
 @websocket_api.websocket_command(
     {
+        vol.Required("type"): PUBLISHED_DELETE,
+        vol.Required("module_id"): str,
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_published_delete(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Take one of this house's own published modules back out of the Store.
+
+    **The wire name is `module_id`, not `id`.** A Home Assistant websocket
+    message is one flat object whose `id` is already the message's own number --
+    what the reply is matched to -- so a payload key of that name overwrites it
+    and the call hangs. Every command here that carries a record id spells it
+    `module_id` for that reason.
+
+    **Whose module it is is the Store's question.** The `modules` collection
+    allows a delete only where `publisher = @request.auth.id`, so this call is
+    made as this install and the backend refuses a record that is somebody
+    else's. The panel draws the button on rows it was told are `mine`, but the
+    rule that decides is the Store's, and nothing here repeats it.
+
+    No list is returned. Deleting a *published* module changes nothing this
+    house runs -- the copy in the house, if there is one, stays exactly as it
+    was -- so the only thing the caller has to do is stop drawing the row.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    client = await store.async_client(hass, host.entry.options)
+    if client is None:
+        connection.send_error(msg["id"], INVALID_FORMAT, store.no_store_sentence())
+        return
+    try:
+        await client.delete(str(msg["module_id"]))
+    except store.StoreError as refusal:
+        connection.send_error(msg["id"], INVALID_FORMAT, str(refusal))
+        return
+    connection.send_result(msg["id"], {})
+
+
+@websocket_api.websocket_command(
+    {
         vol.Required("type"): PUBLISHED_INSTALL,
         vol.Required("module_id"): str,
         vol.Optional("replace", default=False): bool,
@@ -4696,6 +4741,7 @@ _HANDLERS: tuple[Any, ...] = (
     ws_published_claim,
     ws_published_browse,
     ws_published_publish,
+    ws_published_delete,
     ws_published_install,
     ws_published_rate,
     ws_published_comments,

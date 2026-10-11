@@ -457,6 +457,40 @@ test("claiming a name, then publishing a module, puts it on the Store", async ()
   assert.ok(Array.isArray(reply.store), "the store did not come back with the publish");
 });
 
+test("deleting a module somebody else published is refused, and your own goes", async () => {
+  // Whose row it is is the Store's rule on the deployment, and the mock keeps to
+  // it: a row published by another name is refused with `invalid_format`, which
+  // is what the panel would show as a sentence rather than as a dropped row.
+  //
+  // This follows the claim and publish above, and uses the name they left --
+  // the mock's Store is module-level state and the file runs in order.
+  const conn = connection();
+  const stranger = await refusalOf({
+    type: COMMANDS.publishedDelete,
+    module_id: "pub-guest",
+  });
+  assert.equal((stranger as { code?: string }).code, "invalid_format");
+
+  const mine = (await conn.sendMessagePromise({
+    type: COMMANDS.publishedPublish,
+    module: "evening_lighting",
+  })) as { published: PublishedRow };
+  await conn.sendMessagePromise({
+    type: COMMANDS.publishedDelete,
+    module_id: mine.published.id,
+  });
+
+  const after = (await conn.sendMessagePromise({
+    type: COMMANDS.publishedBrowse,
+  })) as { installed: PublishedRow[]; not_installed: PublishedRow[] };
+  const rows = [...after.installed, ...after.not_installed];
+  assert.equal(
+    rows.some((row) => row.id === mine.published.id),
+    false,
+    "the deleted row came back in the listing",
+  );
+});
+
 test("installing a module the house already holds is refused, and replace settles it", async () => {
   // The one refusal a Replace confirm exists for: the request is answered as a
   // value refused on its merits, which is the code the panel reads to offer it.
@@ -534,4 +568,31 @@ test("connecting a Store and claiming a name is what makes a publish go through"
     module: "evening_lighting",
   })) as { published: PublishedRow };
   assert.equal(reply.published.publisher, "walkhouse");
+});
+
+test("the row the listing calls yours is the row the delete lets go", async () => {
+  // The trap a browser walk found: `mine` is what the tab reads to draw the
+  // Delete button, and it is the same comparison the deployment's `deleteRule`
+  // makes -- so a mock that drew the button from `mine` and then judged the
+  // delete by the claim form's name refused the button it had just drawn.
+  // `pub-sunrise` stands for a module published before the name on screen was
+  // claimed, which is exactly that state, so it is the row that catches it.
+  const conn = connection();
+  const split = (await conn.sendMessagePromise({
+    type: COMMANDS.publishedBrowse,
+  })) as { installed: PublishedRow[]; not_installed: PublishedRow[] };
+  const mine = [...split.installed, ...split.not_installed].find((row) => row.mine);
+  assert.ok(mine !== undefined, "no seeded row is this install's own");
+
+  await conn.sendMessagePromise({ type: COMMANDS.publishedDelete, module_id: mine.id });
+
+  const after = (await conn.sendMessagePromise({
+    type: COMMANDS.publishedBrowse,
+  })) as { installed: PublishedRow[]; not_installed: PublishedRow[] };
+  const rows = [...after.installed, ...after.not_installed];
+  assert.equal(
+    rows.some((row) => row.id === mine.id),
+    false,
+    "the seeded row came back in the listing",
+  );
 });

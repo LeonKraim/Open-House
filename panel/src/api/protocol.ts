@@ -651,6 +651,24 @@ export const COMMANDS = {
   publishedPublish: "open_house/published/publish",
 
   /**
+   * `{ module_id }` -> `{}`.
+   *
+   * Take one of this house's own published modules back out of the Store.
+   *
+   * **The ratings, comments and installs go with it.** The Store's schema relates
+   * each of them to the module with a cascade, so one delete is the module and
+   * everything said about it -- and publishing the same slug again is a new row
+   * nobody has rated.
+   *
+   * **Whose module it is is the Store's answer, not this screen's.** The
+   * `modules` collection allows a delete only where the row's publisher is the
+   * caller, so a record id belonging to somebody else is refused by the backend.
+   * The screen draws the button on the rows it was told are `mine`; nothing here
+   * has to check again, and nothing here can be the thing that decides.
+   */
+  publishedDelete: "open_house/published/delete",
+
+  /**
    * `{ id, replace? }` -> `{ module, replaced, store }`.
    *
    * Install a module somebody else published: it is taken into this house's own

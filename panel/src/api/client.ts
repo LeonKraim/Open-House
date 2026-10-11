@@ -1020,6 +1020,20 @@ export class OpenHouseClient {
   }
 
   /**
+   * Take one of this house's own modules back out of the Store.
+   *
+   * Nothing comes back, and nothing needs to: what this changes is the Store, and
+   * the row the screen is drawing is the only thing that has to stop being drawn.
+   * A module this house also holds keeps its copy -- unpublishing is not
+   * uninstalling, and the two are deliberately different acts.
+   *
+   * `module_id` for the reason spelled out on `publishedInstall` below.
+   */
+  publishedDelete(id: string): Promise<Record<string, unknown>> {
+    return this.call(COMMANDS.publishedDelete, { module_id: id });
+  }
+
+  /**
    * Take a published module into this house's own store.
    *
    * `id` is the Store's record rather than the slug: two publishers may offer a

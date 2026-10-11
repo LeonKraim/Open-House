@@ -243,6 +243,50 @@ export function publishBlockers(status: StoreStatus | null): PublishBlock[] {
   return status.name === "" ? ["name"] : [];
 }
 
+/**
+ * What a delete asks, in the words the confirm shows.
+ *
+ * **The cascade is the whole reason the sentence exists.** A person pressing
+ * this on their own module is not removing a row they could put back; the Store
+ * relates the ratings, comments and installs to the module with a cascade, so
+ * one delete is the module and everything anybody said about it. A confirm that
+ * only said "delete this?" would be a confirm about a row and not about what
+ * goes with it.
+ *
+ * The last clause is the one thing that does *not* go. The copy in this house is
+ * a different thing from the published row -- unpublishing is not uninstalling --
+ * and it stays exactly where it is, so the module keeps working in whatever room
+ * it was added to.
+ */
+export function deleteSentence(row: PublishedRow): string {
+  return (
+    `Delete ${row.title} from the Store? Its ratings, comments and installs go ` +
+    `with it. The copy in this house stays.`
+  );
+}
+
+/**
+ * The split with one row taken out, which is what a confirmed delete leaves.
+ *
+ * Dropping the row is the whole of the screen's part. The Store has already
+ * answered that it is gone, and reading the listing again to be told the same
+ * thing would be a request spent on a fact already in hand -- so the two halves
+ * are filtered and the answer is the new split, purely, which is why this is
+ * here beside the other helpers rather than inside the element.
+ *
+ * It is also what puts the Publish button back on the matching module under
+ * "Modules you made": `publishedHere` reads this split and nothing else, so the
+ * row leaving it is the whole of the state change.
+ */
+export function withoutRow(split: PublishedSplit, id: string): PublishedSplit {
+  const keep = (rows: PublishedRow[]): PublishedRow[] =>
+    rows.filter((row) => row.id !== id);
+  return {
+    installed: keep(split.installed),
+    not_installed: keep(split.not_installed),
+  };
+}
+
 export class StoreTab extends OpenHouseElement {
   // The per-module pickers are choices and are invisible to Lit as plain fields
   // (see base.ts). The published Store's state is the same kind of thing -- a
@@ -276,6 +320,7 @@ export class StoreTab extends OpenHouseElement {
     publishedError: { state: true },
     publishedBusy: { state: true },
     replacing: { state: true },
+    deleting: { state: true },
     installSentence: { state: true },
     commentsFor: { state: true },
     commentsLoading: { state: true },
@@ -351,6 +396,8 @@ export class StoreTab extends OpenHouseElement {
   private publishedBusy: string | null = null;
   /** The published row whose Replace confirm is armed. */
   private replacing: string | null = null;
+  /** The published row whose Delete confirm is armed. */
+  private deleting: string | null = null;
   /** The sentence a refused install drew, and the row it belongs to. */
   private installSentence: { id: string; text: string } | null = null;
   /** The published row whose comments are open, and what they were. */
@@ -468,6 +515,7 @@ export class StoreTab extends OpenHouseElement {
     this.notice = null;
     this.installSentence = null;
     this.replacing = null;
+    this.deleting = null;
     try {
       const reply = await this.requireClient().publishedInstall(row.id, replace);
       this.offers = reply.store;
@@ -479,10 +527,42 @@ export class StoreTab extends OpenHouseElement {
       const refusal = installRefusal(error);
       if (refusal.replace) {
         this.replacing = row.id;
+        this.deleting = null;
         this.installSentence = { id: row.id, text: refusal.sentence };
       } else {
         this.error = this.toError(error);
       }
+    } finally {
+      this.publishedBusy = null;
+      this.requestUpdate();
+    }
+  }
+
+  /**
+   * Take one of this house's own modules back out of the Store.
+   *
+   * Nothing is re-read afterwards, because the Store's answer *is* the news: the
+   * row is gone, and `withoutRow` drops it from the split the screen draws from.
+   * That also puts the Publish button back on the module under "Modules you made"
+   * -- `publishedHere` reads the same list -- so the screen offers to publish the
+   * thing that is no longer published, which is what it now is.
+   *
+   * The copy in this house is untouched. Removing the module from the house is
+   * Remove, further down the tab, and deliberately a different press.
+   */
+  private async deletePublished(row: PublishedRow): Promise<void> {
+    this.publishedBusy = row.id;
+    this.error = null;
+    this.notice = null;
+    try {
+      await this.requireClient().publishedDelete(row.id);
+      this.deleting = null;
+      if (this.split !== null) {
+        this.split = withoutRow(this.split, row.id);
+      }
+      this.notice = `${row.title} is no longer on the Store.`;
+    } catch (error) {
+      this.error = this.toError(error);
     } finally {
       this.publishedBusy = null;
       this.requestUpdate();
@@ -1153,6 +1233,7 @@ export class StoreTab extends OpenHouseElement {
     const sentence =
       this.installSentence?.id === row.id ? this.installSentence.text : null;
     const replaceArmed = this.replacing === row.id;
+    const deleteArmed = this.deleting === row.id;
     // Addressed by the Store's record id rather than by position, so a walk
     // that clicked "the second Install button" is not broken by a new row
     // arriving above it.
@@ -1180,7 +1261,25 @@ export class StoreTab extends OpenHouseElement {
       </p>
       <div class="row wrap" style="margin-top:8px">
         ${row.mine
-          ? html`<span class="chip">yours</span>`
+          ? html`<span class="chip">yours</span>
+              ${deleteArmed
+                ? nothing
+                : html`<button
+                    type="button"
+                    class="danger"
+                    id="store-delete-${row.id}"
+                    ?disabled=${busy}
+                    @click=${() => {
+                      this.deleting = row.id;
+                      // One confirm at a time on one row: Replace and Delete are
+                      // both armed from this strip, and two open questions about
+                      // one module is a person answering the wrong one.
+                      this.replacing = null;
+                      this.installSentence = null;
+                    }}
+                  >
+                    Delete from the Store
+                  </button>`}`
           : this.side === "not_installed"
             ? html`<button
                 type="button"
@@ -1210,6 +1309,27 @@ export class StoreTab extends OpenHouseElement {
             </span>`}
       </div>
       ${sentence ? html`<p class="help" role="alert">${sentence}</p>` : nothing}
+      ${deleteArmed
+        ? html`<div class="row wrap" role="alert">
+            <p class="help grow">${deleteSentence(row)}</p>
+            <button
+              type="button"
+              class="danger"
+              id="store-delete-confirm-${row.id}"
+              ?disabled=${busy}
+              @click=${() => void this.deletePublished(row)}
+            >
+              ${busy ? "Deleting..." : "Yes, delete it"}
+            </button>
+            <button
+              type="button"
+              id="store-delete-cancel-${row.id}"
+              @click=${() => (this.deleting = null)}
+            >
+              Cancel
+            </button>
+          </div>`
+        : nothing}
       ${replaceArmed
         ? html`<div class="row wrap">
             <button

@@ -29,6 +29,8 @@ explicitly, `_superusers` as the superuser collection, the import endpoint) are
 | `pb_hooks/store.js` | The arithmetic itself. |
 | `docker-compose.yml` | The one command. |
 | `.env.example` | The two values the command needs; copied to `.env`. |
+| `admin.py` | The local admin panel -- how the Store is run rather than how it is built. |
+| `check.py` | The walk the integration's own calls are verified with, against a running Store. |
 
 ## Standing it up
 
@@ -60,6 +62,49 @@ somebody running their own Store is not overruled -- that one is the
 integration's `store_url` option, set on the Configure screen. Pressing Publish
 on a module asks for the publisher name and the description, and for nothing
 else.
+
+## Managing it
+
+`admin.py` is a panel for the Store's own admin account: the counts, the newest
+records and the log on one page; every collection listed, searched and paged;
+a module's title, summary, version, tier and review editable as fields and *any*
+record editable as raw JSON; and a delete for anything, behind a typed
+confirmation. It is one file that imports the standard library and nothing else,
+so it runs anywhere Python does -- including inside the deployment, which is
+where it is meant to end up.
+
+```sh
+python store/admin.py                        # the Store this build ships pointed at
+python store/admin.py --url http://127.0.0.1:8090 --port 8765
+```
+
+The address on the login page is the one it logs into, and it defaults to the
+same Store the integration ships pointed at. It asks for that Store's admin
+address and password -- the account the Store was stood up with, so there is
+nothing new to remember and no key on disk. The password is never stored: it is
+exchanged for a token, the token is held server-side and reached through an
+`HttpOnly; SameSite=Strict` cookie, and signing out throws it away. Every POST
+carries a second, per-session token, so a page the browser is merely *showing*
+is not on its own permission to write.
+
+It binds `127.0.0.1`. Binding anything else names every interface the machine
+has, which is a thing to say out loud rather than a thing to do by accident, so
+it takes an explicit `--allow-network`. And every page carries the address it is
+on, with a `LIVE` chip whenever that is not a loopback one -- pointing this at the
+deployment and pointing it at a test Store are otherwise indistinguishable, and
+only one of them is safe to experiment on.
+
+Deleting asks for the record's id, and deletes by it. Deleting a publisher takes
+everything they published; deleting a module takes its ratings, comments and
+installs with it, and leaves the copies that houses already installed alone --
+unpublishing is not uninstalling. That cascade is the schema's (`cascadeDelete`
+on the child relations), which is why the panel warns about it rather than
+performing it.
+
+PocketBase's own `/_/` is still there and is still the right tool for what this
+is not -- changing the schema, most of all. This panel is for the five
+collections the Store is made of, and for not having to remember what a
+published module's row looks like to fix one.
 
 ## What the backend enforces
 

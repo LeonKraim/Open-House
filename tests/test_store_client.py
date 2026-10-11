@@ -589,3 +589,85 @@ def test_a_house_with_no_name_counts_nothing_and_asks_the_store_nothing() -> Non
     assert client is not None
     asyncio.run(client.record_install("m1"))
     assert session.calls == []
+
+
+# -- Taking a module back out ------------------------------------------------
+
+
+def _delete_answers(*answers: tuple[int, Any]) -> _FakeSession:
+    """A session whose first answer is a login, and whose rest are the delete."""
+    return _use(
+        _FakeSession(
+            [
+                (200, {"token": "tok", "record": {"id": "pub1", "name": "marqbarq"}}),
+                *answers,
+            ]
+        )
+    )
+
+
+def _client() -> Any:
+    return asyncio.run(
+        store_module.async_client(
+            None,
+            {
+                "store_url": "https://store.example",
+                "store_publisher": {"name": "marqbarq", "password": "s"},
+            },
+        )
+    )
+
+
+def test_a_cascade_refused_with_a_four_hundred_is_read_as_having_happened() -> None:
+    """PocketBase 0.40 answers `400` for a cascaded delete that went through.
+
+    Deleting a module takes its ratings, comments and installs with it, and the
+    backend then trips over what it has already removed in its own after-delete
+    hook. The rows are gone and the status says no -- and a module with reviews
+    on it is exactly the one somebody wants gone, so the refusal is checked
+    against the Store instead of being passed on. A person told their delete
+    failed would look again and find it already done.
+    """
+    session = _delete_answers(
+        (
+            400,
+            {
+                "message": "Failed to delete record. Make sure that the record "
+                "is not part of a required relation reference."
+            },
+        ),
+        (404, {"message": "The requested resource wasn't found."}),
+    )
+    client = _client()
+    assert client is not None
+    asyncio.run(client.delete("m1"))
+
+    assert [call["method"] for call in session.calls] == ["POST", "DELETE", "GET"]
+    assert session.calls[2]["url"].endswith("/api/collections/modules/records/m1")
+
+
+def test_a_delete_that_really_failed_keeps_its_refusal() -> None:
+    """A `400` with the record still there is the refusal it looked like.
+
+    The check that makes the case above work must not turn every refusal into a
+    success: a row that is still in the Store is a row that is still in the
+    Store, and the sentence the person gets is the Store's own.
+    """
+    _delete_answers(
+        (400, {"message": "Failed to delete record."}),
+        (200, {"id": "m1", "slug": "evening_lighting"}),
+    )
+    client = _client()
+    assert client is not None
+    with pytest.raises(store_module.StoreError) as refused:
+        asyncio.run(client.delete("m1"))
+    assert "deleting a published module" in str(refused.value)
+
+
+def test_a_delete_that_went_through_asks_nothing_further() -> None:
+    """A module nobody has rated answers `204`, and costs no second call."""
+    session = _delete_answers((204, {}))
+    client = _client()
+    assert client is not None
+    asyncio.run(client.delete("m1"))
+    assert [call["method"] for call in session.calls] == ["POST", "DELETE"]

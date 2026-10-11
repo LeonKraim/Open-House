@@ -2413,6 +2413,22 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
       else PUBLISHED_ROWS.splice(PUBLISHED_ROWS.indexOf(held), 1, published);
       return { published, store: STORED_MODULES };
     }
+    case COMMANDS.publishedDelete: {
+      // Whose row it is is the Store's rule in the real backend, and there it is
+      // one fact: `deleteRule` compares the row's publisher to the caller, and
+      // `mine` on the listing is that same comparison. So it is `mine` here too
+      // -- a mock whose listing says "yours" and whose delete says "not yours"
+      // is a mock that refuses the button it just drew.
+      const id = String(payload.module_id);
+      const at = PUBLISHED_ROWS.findIndex((entry) => entry.id === id);
+      const row = PUBLISHED_ROWS[at];
+      if (row === undefined) throw refuse(REFUSALS.notFound, `no published module ${id}`);
+      if (!row.mine) {
+        throw refuse(REFUSALS.invalidFormat, "that module is not yours to delete");
+      }
+      PUBLISHED_ROWS.splice(at, 1);
+      return {};
+    }
     case COMMANDS.publishedInstall: {
       // The Store's record id, not the slug: two publishers may offer a module
       // of one name and a person picked the row they picked. Installing it is

@@ -19,10 +19,12 @@ import type { PublishedRow, StoreStatus } from "../api/models.ts";
 import {
   browseRows,
   claimProblem,
+  deleteSentence,
   installRefusal,
   publishBlockers,
   ratingLabel,
   starBand,
+  withoutRow,
 } from "./store.ts";
 
 /** One published row, with only the fields a test reads given. */
@@ -167,4 +169,37 @@ test("a status that has not been read is not a missing name", () => {
   // already be set. Nothing is known to be missing, so nothing is asked for and
   // the publish itself answers if it turns out something was.
   assert.deepEqual(publishBlockers(null), []);
+});
+
+test("the delete confirm says what else goes, and what does not", () => {
+  // The cascade is the reason this sentence is not just "delete this?": the
+  // ratings, comments and installs go with the row. The house's own copy does
+  // not, which is the half a person would otherwise have to guess at.
+  const sentence = deleteSentence(published({ title: "Evening lighting" }));
+  assert.match(sentence, /Evening lighting/);
+  assert.match(sentence, /ratings, comments and installs go with it/);
+  assert.match(sentence, /The copy in this house stays\./);
+});
+
+test("a confirmed delete drops the row from whichever half held it", () => {
+  const gone = published({ id: "gone", mine: true });
+  const kept = published({ id: "kept" });
+  assert.deepEqual(withoutRow({ installed: [gone], not_installed: [kept] }, "gone"), {
+    installed: [],
+    not_installed: [kept],
+  });
+  assert.deepEqual(withoutRow({ installed: [kept], not_installed: [gone] }, "gone"), {
+    installed: [kept],
+    not_installed: [],
+  });
+});
+
+test("dropping a row leaves the others, and an unknown id changes nothing", () => {
+  // The trap: a filter that rebuilt the split from one half, or that matched on
+  // the slug, would take out a row of another publisher with the same name -- and
+  // the Publish button would come back on a module still on the Store.
+  const rows = [published({ id: "a" }), published({ id: "b" })];
+  const split = { installed: rows, not_installed: [] };
+  assert.deepEqual(withoutRow(split, "b").installed, [published({ id: "a" })]);
+  assert.deepEqual(withoutRow(split, "nothing-like-this"), split);
 });
