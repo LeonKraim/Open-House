@@ -80,11 +80,27 @@ services:
       - ../tools:/openhouse-src/tools:ro
       - ../registry:/openhouse-src/registry:ro
       - ../sim:/openhouse-src/sim:ro
-      # The built sidebar panel. It lands in `/config/www/`, which Home Assistant
-      # serves at `/local/`, but the panel is *not* registered against that URL:
-      # `PanelBundleView` reads this same file per request and answers
-      # `no-store`, so a Vite rebuild is what the next page load runs instead of
-      # whatever the browser cached a month ago.
+      # The built sidebar panel, at the path a *checkout* keeps it at. It lands
+      # in `/config/www/`, which Home Assistant serves at `/local/`, but the
+      # panel is *not* registered against that URL: `PanelBundleView` reads this
+      # same file per request and answers `no-store`, so a Vite rebuild is what
+      # the next page load runs instead of whatever the browser cached a month
+      # ago.
+      #
+      # This mount is the development path and not the only one. A HACS install
+      # has no compose file and no checkout beside it: the release asset carries
+      # the bundle *inside* the integration, at
+      # `custom_components/open_house/panel/open-house-panel.js`, and
+      # `custom_components/open_house/panel_bundle.py` reads the shipped copy
+      # before this one. That order is deliberate -- the copy built with the
+      # integration cannot be the stale one -- so a stack that has both serves
+      # the shipped file and this mount is what a checkout has instead.
+      #
+      # `npm run build` in `panel/` has to have run, or this mount's *source*
+      # does not exist and Docker creates a directory where the file should be
+      # (`panel/dist/open-house-panel.js` is gitignored, so a fresh clone does
+      # not have it), which the integration then reports as a panel that has not
+      # been built -- correctly, but with the cause one step away.
       - ../panel/dist/open-house-panel.js:/config/www/open-house-panel.js:ro
       - /etc/localtime:/etc/localtime:ro
       - /run/dbus:/run/dbus:ro

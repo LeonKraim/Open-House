@@ -9,9 +9,13 @@ of this repository would install an integration whose imports are missing.
 
 This builds the asset that does install: a tree rooted at
 `custom_components/open_house/` which contains, next to the integration's own
-modules, the packages and the data directories it reads at runtime. `_bootstrap`
-recognises that layout and puts the directory on `sys.path`; `const.catalog_root`
-finds the catalog in it by the same walk it uses everywhere else.
+modules, the packages and the data directories it reads at runtime, and the
+built sidebar panel. `_bootstrap` recognises that layout and puts the directory
+on `sys.path`; `const.catalog_root` finds the catalog in it by the same walk it
+uses everywhere else; `panel_bundle` finds the bundle in it by the same
+question. The panel is the one item here that is not source -- it is a build
+artefact, so it has to exist before this runs, and `build()` refuses rather than
+shipping an archive whose sidebar tab would load nothing.
 
 The tree is built, never committed. Committing a copy under `custom_components/`
 is the second source of truth this project refuses, so the copy exists only
@@ -49,6 +53,25 @@ PACKAGES = ("engine", "ha_adapter", "tools", "openhouse", "sim")
 #: offer a module. All three are resolved relative to the tree root.
 DATA = ("catalog", "schemas", "registry")
 
+#: The built sidebar panel: one file, emitted by `npm run build` in `panel/`.
+#:
+#: It is shipped for the same reason the packages are -- a HACS install copies
+#: `custom_components/open_house/` and nothing beside it -- and it is the one
+#: item here that is not source: `panel/dist/` is gitignored, so it is not in a
+#: fresh checkout and it is *not* something this builder can produce. That is
+#: why `build()` refuses to run without it rather than shipping an archive
+#: without it: the release that made this file's existence a requirement
+#: installed an integration whose sidebar tab loaded nothing at all, because the
+#: only thing that ever put a bundle where the integration reads one was a mount
+#: in the development compose file.
+PANEL_BUNDLE = ROOT / "panel" / "dist" / "open-house-panel.js"
+
+#: Where that copy goes inside the integration, and the name is not this
+#: module's to choose: `custom_components/open_house/panel_bundle.py` is what
+#: looks for it at runtime, and the two have to agree or the archive carries a
+#: file nothing reads.
+PANEL_DIRECTORY = Path("panel")
+
 #: Build-time code under `tools/` that must not ship: the Home Assistant probe
 #: scripts (they drive a live instance from a developer's machine) and this
 #: builder, which is about the repository rather than the integration.
@@ -69,7 +92,29 @@ def build(destination: Path = STAGING) -> Path:
     itself: the archive has to carry that prefix, because a HACS install unpacks
     it into the config directory and expects `custom_components/open_house/` to be
     the path that lands there.
+
+    Raises `FileNotFoundError` when the panel has not been built, which is the
+    one thing this cannot copy from the repository because the repository does
+    not have it. Refusing is the whole point: an archive without a bundle is a
+    HACS install whose sidebar tab loads nothing, and nothing about the build
+    would have said so.
     """
+    if not PANEL_BUNDLE.is_file():
+        # Named the way `main` names what it wrote: relative to the repository
+        # when it is in one, absolute when it is not, because this is read by a
+        # person about to run a command and a path they cannot paste is worse
+        # than a long one.
+        shown = (
+            PANEL_BUNDLE.relative_to(ROOT)
+            if PANEL_BUNDLE.is_relative_to(ROOT)
+            else PANEL_BUNDLE
+        )
+        raise FileNotFoundError(
+            f"{shown} does not exist, and a release without the panel installs "
+            "an integration whose sidebar tab loads nothing; run "
+            "`npm run build` in panel/ first"
+        )
+
     if destination.exists():
         shutil.rmtree(destination)
     target = destination / INTEGRATION
@@ -78,6 +123,13 @@ def build(destination: Path = STAGING) -> Path:
     shutil.copytree(ROOT / INTEGRATION, target, dirs_exist_ok=True, ignore=IGNORED)
     for name in (*PACKAGES, *DATA):
         shutil.copytree(ROOT / name, target / name, ignore=IGNORED)
+
+    # One file and not the directory it sits in, because that directory is
+    # `panel/` -- the source tree, with its `node_modules`, its scripts and its
+    # screenshots -- and what the integration reads is the one built file.
+    shipped_panel = target / PANEL_DIRECTORY
+    shipped_panel.mkdir()
+    shutil.copy2(PANEL_BUNDLE, shipped_panel / PANEL_BUNDLE.name)
 
     for relative in NOT_SHIPPED:
         stale = target / relative
@@ -110,7 +162,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    tree = build()
+    try:
+        tree = build()
+    except FileNotFoundError as error:
+        # A sentence and not a traceback: the one thing this can fail on is a
+        # panel that has not been built, which is a step to take rather than a
+        # bug to read a stack for.
+        print(error, file=sys.stderr)
+        return 2
     built = archive(tree, args.out)
     files = sum(1 for path in tree.rglob("*") if path.is_file())
     print(

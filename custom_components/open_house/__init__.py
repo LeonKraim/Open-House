@@ -51,6 +51,7 @@ from homeassistant.helpers.event import async_track_state_change_event
 from . import (
     _bootstrap,  # noqa: F401  # imported for its import-path side effect
     modules,
+    panel_bundle,
     slot_rules,
 )
 from .const import (
@@ -99,9 +100,13 @@ PANEL_WEBCOMPONENT = "open-house-panel"
 #: one view and removes the whole class of it: `PanelBundleView` reads the
 #: bundle on each request and forbids caching it.
 PANEL_MODULE_URL = "/open_house/panel.js"
-#: The path the same file is served *from*, relative to Home Assistant's config
-#: directory: `panel/dist/open-house-panel.js` is mounted into `/config/www/`.
-PANEL_BUNDLE_PATH = Path("www") / "open-house-panel.js"
+#: What a browser is told when there is no bundle to serve. A sentence rather
+#: than an empty body, because the tab still loads and this is what it shows:
+#: the person reads that the panel was never built rather than looking at a
+#: blank screen and blaming the integration. It is one string rather than two
+#: because "not built" and "not readable" are the same thing to the person
+#: reading it, and the log is where the difference between them belongs.
+PANEL_MISSING = "the Open House panel has not been built"
 #: `hass.data` key holding the panel paths this component has registered.
 DATA_PANELS = f"{DOMAIN}_panels"
 
@@ -116,11 +121,13 @@ class PanelBundleView(HomeAssistantView):
     what is wrong. Reading it per request and saying `no-store` makes every page
     load the current build, so there is nothing left to bust.
 
-    The reader is the same file the search-free path served (`/config/www/`, the
-    mount point the compose file names), so nothing about the build changed --
-    only how it is handed over. Authentication is off because the bundle is
-    client-side code with no secrets in it, which is what `/local/` already
-    assumed of it.
+    The reader is the built file itself and not a copy of it, so nothing about
+    the build changed -- only how it is handed over. *Which* file that is has
+    two answers, and `panel_bundle` gives them: beside the integration in an
+    install that was shipped one, and in the instance's `www/` directory in a
+    checkout, where the compose file mounts the build there. Authentication is
+    off because the bundle is client-side code with no secrets in it, which is
+    what `/local/` already assumed of it.
     """
 
     url = PANEL_MODULE_URL
@@ -128,15 +135,18 @@ class PanelBundleView(HomeAssistantView):
     requires_auth = False
 
     async def get(self, request: web.Request) -> web.Response:
-        """The bundle as it is now, or a sentence if it has not been built."""
+        """The bundle as it is now, or a sentence if this instance has none."""
         hass: HomeAssistant = request.app["hass"]
-        path = Path(hass.config.path(str(PANEL_BUNDLE_PATH)))
+        path = panel_bundle.bundle_path(Path(hass.config.path()))
+        if path is None:
+            return web.Response(status=404, text=PANEL_MISSING)
         try:
             body = await hass.async_add_executor_job(path.read_bytes)
         except OSError:
-            return web.Response(
-                status=404, text="the Open House panel has not been built"
-            )
+            # Found by the check above and gone by the time it was read: a build
+            # running while the page loads. The same sentence as never-built,
+            # because the next request answers the new file.
+            return web.Response(status=404, text=PANEL_MISSING)
         return web.Response(
             body=body,
             content_type="text/javascript",
@@ -234,12 +244,15 @@ def _session_data_key() -> str | None:
 async def async_setup(hass: HomeAssistant, config: Mapping[str, Any]) -> bool:
     """Register the sidebar tab, and the commands it speaks.
 
-    The panel is registered from `async_setup` rather than from a config entry,
-    because the tab is the way into the product: an instance with no rooms
-    configured yet still needs the tab that offers to add them, and a panel that
-    only appeared after setup would be missing exactly when it is the only thing
-    there is to click. `hass.data` holds the paths already registered so a reload
-    does not try to add the same panel twice, which Home Assistant refuses.
+    The panel is registered from `async_setup` rather than from
+    `async_setup_entry`, and the difference is what survives a failure rather
+    than what happens first. Home Assistant sets the domain up when the first
+    config entry is set up, so the tab cannot exist before somebody has added
+    the integration -- but once it does, it is the *domain* that is set up and
+    the entry that can still fail: a house whose session cannot be composed, or
+    whose module records will not parse, keeps its panel and explains itself
+    there. `hass.data` holds the paths already registered so a reload does not
+    try to add the same panel twice, which Home Assistant refuses.
 
     The websocket commands are registered here too, and not per entry, because a
     command is global to the instance: `async_register_websocket_api` refuses a

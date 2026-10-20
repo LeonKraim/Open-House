@@ -9,7 +9,7 @@
  * The integration registers the panel as:
  *
  *     webcomponent_name="open-house-panel"
- *     module_url="/local/open-house-panel.js"
+ *     module_url="/open_house/panel.js"
  *
  * See `README.md` for the exact `panel_custom` registration the integration is
  * asked to make, and `panel/open-house-panel.ts` for the element itself.

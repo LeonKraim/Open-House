@@ -47,8 +47,16 @@ async_register_panel(
   `hass`; it is not an iframe and does not re-authenticate.
 * Serve the built file from a static route the integration registers (the
   `module_url` above is a placeholder path; any path under `/api/`-free static
-  serving works). Bump `?v=` when the integration version changes, because the
-  browser caches the module by URL.
+  serving works). The integration reads it per request and answers `no-store`,
+  so there is no `?v=` to bump: the file on disk is what the next page load
+  runs.
+* **The built file has to travel with the integration.** A HACS install copies
+  `custom_components/open_house/` and nothing beside it, so the release asset
+  carries `dist/open-house-panel.js` at
+  `custom_components/open_house/panel/open-house-panel.js` —
+  `tools/package_integration.py` puts it there and refuses to build an asset
+  without it. In a checkout the bundle is not committed and the development
+  compose file mounts `panel/dist/` into the instance's `www/` instead.
 
 ### 2. Implement the websocket API
 
