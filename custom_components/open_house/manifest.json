@@ -11,5 +11,5 @@
   "issue_tracker": "https://github.com/LeonKraim/Open-House/issues",
   "loggers": ["ha_adapter", "engine", "openhouse"],
   "requirements": [],
-  "version": "0.1.2"
+  "version": "0.1.3"
 }

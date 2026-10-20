@@ -7,7 +7,7 @@
       },
       "confirm_areas": {
         "title": "Confirm areas",
-        "description": "These are the areas Home Assistant already knows. Pick the ones you want as rooms -- an area is the source of truth for a room, so a room is always a real area and never an invented one.",
+        "description": "These are the areas Home Assistant already knows. Pick the ones you want as rooms -- an area is the source of truth for a room, so a room is always a real area and never an invented one. You can leave them all unselected and add rooms from the panel later instead.",
         "data": {
           "areas": "Areas to set up"
         }
@@ -37,7 +37,6 @@
     },
     "abort": {
       "already_configured": "Open House is already set up.",
-      "no_areas": "Home Assistant has no areas to turn into rooms. Create an area first, then set up Open House.",
       "catalog_missing": "Open House cannot find its room and slot catalog, so it cannot suggest room types or bindings. This is an installation problem: the integration was installed without the project's catalog files."
     }
   },

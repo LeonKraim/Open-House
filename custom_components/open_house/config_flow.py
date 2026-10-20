@@ -18,6 +18,14 @@ reads, not the engine's answers.
 prose and the document are pure functions there, tested without Home Assistant;
 this module is rendering and the registry reads, and it is deliberately thin so
 there is little here that can be wrong in a way a test cannot see.
+
+**The steps are six, but a house does not always walk six.** The two that exist
+to shape areas into rooms -- *confirm areas* and *pick room types* -- are skipped
+when there is nothing to shape: an instance with no areas at all, or a person who
+left every area unselected. Rooms are the panel's to make as well as the flow's,
+so a house that has none yet is set up empty rather than refused, and the flow
+still reaches the steps a house has whether or not it has rooms. See
+`async_step_confirm_areas`.
 """
 
 from __future__ import annotations
@@ -159,21 +167,39 @@ class OpenHouseConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_confirm_areas(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Confirm which of the instance's areas become rooms."""
+        """Confirm which of the instance's areas become rooms, if any.
+
+        **An instance with no areas is an empty house, not a failed setup.** This
+        step is the *option* to turn the areas Home Assistant already has into
+        rooms, so when there are none it is skipped rather than refused: the flow
+        goes on, writes an entry with no rooms, and rooms are added afterwards
+        from the panel. A person who has not built their areas yet can set the
+        house up now and come back to it, which is the whole point of the panel
+        being the place rooms are made.
+
+        The selection is optional for the same reason. Areas that *do* exist are
+        offered, pre-selected, so importing them is one click; clearing the
+        selection means the same thing as having none, and takes the same path.
+        """
         self._async_abort_entries_match({})
         if not self._load_vocabulary():
             return self.async_abort(reason="catalog_missing")
         self._all_areas = _read_areas(self.hass)
         if not self._all_areas:
-            return self.async_abort(reason="no_areas")
+            return await self.async_step_choose_people()
 
         if user_input is not None:
-            self._chosen_area_ids = list(user_input[_CONF_AREAS])
+            self._chosen_area_ids = list(user_input.get(_CONF_AREAS) or [])
+            if not self._chosen_area_ids:
+                return await self.async_step_choose_people()
             return await self.async_step_pick_room_types()
 
         schema = vol.Schema(
             {
-                vol.Required(
+                # Optional rather than required, so a form submitted with nothing
+                # ticked is an answer -- "no rooms for now" -- instead of a
+                # validation error the person has to argue with.
+                vol.Optional(
                     _CONF_AREAS,
                     default=[area.area_id for area in self._all_areas],
                 ): AreaSelector(AreaSelectorConfig(multiple=True))
@@ -186,6 +212,12 @@ class OpenHouseConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Pick each chosen room's type, defaulting to the flow's suggestion."""
         chosen = self._chosen_areas()
+        if not chosen:
+            # Nothing to type. Reachable when an area leaves the registry between
+            # this step and the one before it, since the selection is confirmed
+            # against `_all_areas`; the empty form it would otherwise show asks a
+            # person to submit nothing and reads as a fault.
+            return await self.async_step_choose_people()
         if user_input is not None:
             self._room_type_choices = {
                 area.area_id: user_input[area.area_id][_CONF_ROOM_TYPE]
@@ -292,7 +324,15 @@ class OpenHouseConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="review",
             data_schema=vol.Schema({}),
             description_placeholders={
-                "review": "\n".join(line.text for line in plan.review),
+                # A house with no rooms has nothing to review, and the step's
+                # prose would otherwise open onto a blank line. Said in words
+                # rather than left empty, because "nothing here" and "something
+                # failed to load" look the same in a gap.
+                "review": "\n".join(line.text for line in plan.review)
+                or (
+                    "No rooms yet. This house starts empty, and you can add "
+                    "rooms from the Open House panel once setup finishes."
+                ),
                 "away_people": ", ".join(self._away_people) or "nobody",
             },
         )

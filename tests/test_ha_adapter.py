@@ -26,9 +26,11 @@ a machine with no Docker. What it can and cannot prove is reported, not assumed.
 
 from __future__ import annotations
 
+import ast
 import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -79,6 +81,9 @@ from ha_adapter.transport import (
 )
 from sim.clock import VirtualClock
 from tools.catalog import paths
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # --------------------------------------------------------------------------
 # Origin: the fact Home Assistant keeps in a context and the port keeps in a
@@ -413,6 +418,91 @@ def test_the_flow_has_the_six_steps_the_spec_names() -> None:
 
 def _vocabulary() -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
     return load_room_types(paths.ROOT), load_slot_domains(paths.ROOT)
+
+
+def test_a_house_with_no_areas_plans_an_empty_setup_rather_than_none() -> None:
+    """No areas is an empty house, not a failed setup.
+
+    `config_flow.async_step_confirm_areas` skips its two room-shaping steps when
+    the instance has no areas, and it leans on this: the plan for an empty house
+    is *empty* rather than absent, so the steps after it -- the review and
+    Activate -- still have something to work with. An instance with no areas was
+    refused outright before this, which is a setup that cannot be started until
+    somebody has built an area somewhere else first, and it left the panel
+    unreachable for exactly the house that has the most to set up.
+    """
+    room_types, slot_domains = _vocabulary()
+    plan = plan_setup(
+        areas=[],
+        people=[("p1", "Ada")],
+        room_types=room_types,
+        slot_domains=slot_domains,
+    )
+
+    assert plan.rooms == ()
+    assert plan.bindings == ()
+    assert plan.review == ()
+    # Still a document, and still names the people: a config entry a person can
+    # add rooms to afterwards from the panel.
+    assert plan.to_document() == {
+        "schema_version": 1,
+        "rooms": [],
+        "away_people": ["p1"],
+    }
+
+
+def _abort_reasons(source: Path) -> set[str]:
+    """Every literal an `async_abort` in `source` is called with.
+
+    Parsed rather than imported: `config_flow` imports Home Assistant, and the
+    suite runs where it is not installed. The same reason `test_packaging` reads
+    imports out of a tree instead of trusting a list.
+    """
+    reasons: set[str] = set()
+    for node in ast.walk(ast.parse(source.read_text("utf-8"))):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (
+            isinstance(node.func, ast.Attribute) and node.func.attr == "async_abort"
+        ):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "reason" and isinstance(keyword.value, ast.Constant):
+                reasons.add(str(keyword.value.value))
+    return reasons
+
+
+def _abort_sentences() -> set[str]:
+    """Every abort reason the integration has words for, in either scope."""
+    document = json.loads(
+        (paths.ROOT / "custom_components" / "open_house" / "strings.json").read_text(
+            "utf-8"
+        )
+    )
+    sentences = set(document["config"].get("abort", {}))
+    for subentry in document.get("config_subentries", {}).values():
+        sentences |= set(subentry.get("abort", {}))
+    return sentences
+
+
+def test_every_abort_the_flow_raises_has_a_sentence() -> None:
+    """A refusal with no words is a raw reason string shown to a person.
+
+    One-directional on purpose: Home Assistant raises `already_configured` itself
+    (through `_async_abort_entries_match`), so the sentence set is legitimately
+    larger than the literals here. The direction that matters is this one -- a
+    reason the flow *raises* and the translation does not carry leaves a person
+    reading `no_areas` on a blank dialog.
+    """
+    raised = _abort_reasons(
+        paths.ROOT / "custom_components" / "open_house" / "config_flow.py"
+    )
+    missing = sorted(raised - _abort_sentences())
+
+    assert not missing, (
+        f"config_flow raises {missing} with no sentence in strings.json; a "
+        "person would be shown the bare reason"
+    )
 
 
 def test_an_areas_name_suggests_its_room_type() -> None:
