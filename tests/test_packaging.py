@@ -16,6 +16,12 @@ mount. It drives `_bootstrap` directly -- it imports nothing but the standard
 library -- so it needs no Home Assistant, and it is the same answer the container
 check gives, kept here so a change to the resolution rules fails in CI.
 
+One test here is about the archive's *shape* rather than its contents, and it is
+the one that was wrong for two releases. HACS unpacks an asset verbatim into
+`config/custom_components/open_house/`, so the archive must carry the
+integration's own files at its root and no `custom_components/` prefix; the test
+that asserted the prefix was asserting the bug, and it passed the whole time.
+
 The last three tests are about the panel, which is the one thing the archive
 carries that the repository does not have to hand. It is a build artefact
 (`panel/dist/` is gitignored), so these tests stand one in rather than depending
@@ -46,8 +52,8 @@ if TYPE_CHECKING:
 
 #: The repository's own importable packages: a directory at the root with an
 #: `__init__.py`. `custom_components` is excluded because the integration is
-#: reached through it rather than shipped *as* it -- the archive's root is
-#: `custom_components/open_house/`, not `custom_components/`.
+#: reached through it rather than shipped *as* it -- the archive carries the
+#: integration's own contents, so there is no `custom_components/` inside it.
 FIRST_PARTY = frozenset(
     entry.name
     for entry in package_integration.ROOT.iterdir()
@@ -109,9 +115,11 @@ def bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
 
 
 def test_the_asset_ships_every_first_party_import(bundle: Path, tmp_path: Path) -> None:
-    root = package_integration.build(tmp_path / "staging")
-    integration = root / package_integration.INTEGRATION
-    shipped = [integration, *(root / name for name in package_integration.PACKAGES)]
+    integration = package_integration.build(tmp_path / "staging")
+    shipped = [
+        integration,
+        *(integration / name for name in package_integration.PACKAGES),
+    ]
 
     needed = _imported_names(*shipped) & FIRST_PARTY
     missing = sorted(name for name in needed if not (integration / name).is_dir())
@@ -123,9 +131,7 @@ def test_the_asset_ships_every_first_party_import(bundle: Path, tmp_path: Path) 
 
 
 def test_the_asset_carries_the_data_it_reads(bundle: Path, tmp_path: Path) -> None:
-    integration = package_integration.build(tmp_path / "staging") / (
-        package_integration.INTEGRATION
-    )
+    integration = package_integration.build(tmp_path / "staging")
     for name in package_integration.DATA:
         assert (integration / name).is_dir(), (
             f"{name}/ is read at runtime but not shipped"
@@ -136,9 +142,7 @@ def test_the_asset_carries_the_data_it_reads(bundle: Path, tmp_path: Path) -> No
 def test_the_asset_carries_nothing_this_machine_produced(
     bundle: Path, tmp_path: Path
 ) -> None:
-    integration = package_integration.build(tmp_path / "staging") / (
-        package_integration.INTEGRATION
-    )
+    integration = package_integration.build(tmp_path / "staging")
     names = [path.name for path in integration.rglob("*")]
 
     assert "__pycache__" not in names
@@ -146,7 +150,20 @@ def test_the_asset_carries_nothing_this_machine_produced(
     assert not (integration / "tools" / "ha").exists()
 
 
-def test_the_archive_root_is_the_path_hacs_copies(bundle: Path, tmp_path: Path) -> None:
+def test_the_archive_root_is_the_integration_not_its_repository_path(
+    bundle: Path, tmp_path: Path
+) -> None:
+    """The archive carries the integration's contents, with no prefix above them.
+
+    This test used to assert the opposite, and the opposite is what shipped:
+    `all(name.startswith("custom_components/open_house/"))`, written from the
+    repository's layout rather than from what HACS does with the file. HACS
+    extracts an asset straight into `config/custom_components/open_house/`, so
+    that prefix becomes a second, nested copy -- `.../open_house/custom_components/open_house/manifest.json`
+    -- and the integration is invisible while HACS reports it installed. The
+    archive's root has to be `manifest.json`, and this asserts it by name
+    because a test that only counted files would have passed either way.
+    """
     import zipfile
 
     root = package_integration.build(tmp_path / "staging")
@@ -154,19 +171,18 @@ def test_the_archive_root_is_the_path_hacs_copies(bundle: Path, tmp_path: Path) 
     with zipfile.ZipFile(built) as zf:
         names = zf.namelist()
 
-    prefix = f"{package_integration.INTEGRATION.as_posix()}/"
     assert names, "the archive is empty"
-    assert all(name.startswith(prefix) for name in names), (
-        "the archive has a stray root"
+    assert "manifest.json" in names
+    assert "__init__.py" in names
+    assert not any(name.startswith("custom_components/") for name in names), (
+        "the archive carries a prefix HACS would extract as a nested copy"
     )
-    assert f"{prefix}manifest.json" in names
 
 
 def test_bootstrap_resolves_to_the_shipped_packages(
     bundle: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root = package_integration.build(tmp_path / "staging")
-    integration = root / package_integration.INTEGRATION
+    integration = package_integration.build(tmp_path / "staging")
 
     # No mount, and no env override pointing anywhere real: the only answer left
     # is the packages the integration was shipped with.
@@ -190,9 +206,7 @@ def test_the_asset_carries_the_panel_where_the_integration_looks(
     builder that copied it to a directory of its own choosing would pass a test
     that only counted files in the zip.
     """
-    integration = package_integration.build(tmp_path / "staging") / (
-        package_integration.INTEGRATION
-    )
+    integration = package_integration.build(tmp_path / "staging")
     panel_bundle = _module_from("_panel_bundle", integration / "panel_bundle.py")
 
     found = panel_bundle.bundle_path(tmp_path / "config", integration)

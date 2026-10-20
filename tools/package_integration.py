@@ -7,15 +7,19 @@ that can drift (see `custom_components/open_house/_bootstrap.py`). A HACS instal
 copies `custom_components/open_house/` and nothing beside it, so a plain release
 of this repository would install an integration whose imports are missing.
 
-This builds the asset that does install: a tree rooted at
-`custom_components/open_house/` which contains, next to the integration's own
-modules, the packages and the data directories it reads at runtime, and the
-built sidebar panel. `_bootstrap` recognises that layout and puts the directory
-on `sys.path`; `const.catalog_root` finds the catalog in it by the same walk it
-uses everywhere else; `panel_bundle` finds the bundle in it by the same
-question. The panel is the one item here that is not source -- it is a build
-artefact, so it has to exist before this runs, and `build()` refuses rather than
-shipping an archive whose sidebar tab would load nothing.
+This builds the asset that does install: a tree rooted at the integration itself,
+carrying, next to the integration's own modules, the packages and the data
+directories it reads at runtime and the built sidebar panel. `_bootstrap`
+recognises that layout and puts the directory on `sys.path`;
+`const.catalog_root` finds the catalog in it by the same walk it uses
+everywhere else; `panel_bundle` finds the bundle in it by the same question.
+The panel is the one item here that is not source -- it is a build artefact, so
+it has to exist before this runs, and `build()` refuses rather than shipping an
+archive whose sidebar tab would load nothing.
+
+The root is the integration and not the repository's `custom_components/`,
+because that is what HACS unpacks an asset *into*: see `build()` for why the
+archive must not carry the prefix it looks like it should.
 
 The tree is built, never committed. Committing a copy under `custom_components/`
 is the second source of truth this project refuses, so the copy exists only
@@ -38,8 +42,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-#: The integration, relative to the repository root. Everything in the asset
-#: hangs off this path, because it is the one HACS copies into a config dir.
+#: The integration, relative to the repository root. This is the source this
+#: reads from, *not* the shape of what it writes: the asset's root is the
+#: integration's contents, and `build()` says why.
 INTEGRATION = Path("custom_components") / "open_house"
 
 #: The first-party packages the integration imports at runtime. Found by walking
@@ -88,10 +93,23 @@ STAGING = DIST / "staging"
 def build(destination: Path = STAGING) -> Path:
     """Write the self-contained tree to `destination` and return the root.
 
-    The root is the directory that holds `custom_components/`, not the integration
-    itself: the archive has to carry that prefix, because a HACS install unpacks
-    it into the config directory and expects `custom_components/open_house/` to be
-    the path that lands there.
+    The root *is* the integration: `manifest.json` sits at the top of what this
+    writes, with the packages and the panel beside it. The prefix the repository
+    uses -- `custom_components/open_house/` -- must not appear in the archive,
+    and that is not the layout the source tree suggests.
+
+    HACS unpacks a `zip_release` asset *verbatim* into the integration's
+    directory. `repositories/integration.py` sets `localpath` to
+    `<config>/custom_components/<domain>`, and `repositories/base.py`'s
+    `async_download_zip_file` is a bare `zip_file.extractall(self.content.path.local)`
+    -- no first-component stripping, unlike the repository-zip path beside it,
+    which drops `filename.split("/")[1:]`. So an archive rooted at
+    `custom_components/open_house/` lands at
+    `config/custom_components/open_house/custom_components/open_house/manifest.json`,
+    one level below anything Home Assistant scans: the install reports success,
+    and the integration is not there. `alexa_media.zip`, a known-good
+    `zip_release` integration, is rooted the same way this is -- `manifest.json`
+    at the top.
 
     Raises `FileNotFoundError` when the panel has not been built, which is the
     one thing this cannot copy from the repository because the repository does
@@ -117,22 +135,20 @@ def build(destination: Path = STAGING) -> Path:
 
     if destination.exists():
         shutil.rmtree(destination)
-    target = destination / INTEGRATION
-    target.mkdir(parents=True)
 
-    shutil.copytree(ROOT / INTEGRATION, target, dirs_exist_ok=True, ignore=IGNORED)
+    shutil.copytree(ROOT / INTEGRATION, destination, dirs_exist_ok=True, ignore=IGNORED)
     for name in (*PACKAGES, *DATA):
-        shutil.copytree(ROOT / name, target / name, ignore=IGNORED)
+        shutil.copytree(ROOT / name, destination / name, ignore=IGNORED)
 
     # One file and not the directory it sits in, because that directory is
     # `panel/` -- the source tree, with its `node_modules`, its scripts and its
     # screenshots -- and what the integration reads is the one built file.
-    shipped_panel = target / PANEL_DIRECTORY
+    shipped_panel = destination / PANEL_DIRECTORY
     shipped_panel.mkdir()
     shutil.copy2(PANEL_BUNDLE, shipped_panel / PANEL_BUNDLE.name)
 
     for relative in NOT_SHIPPED:
-        stale = target / relative
+        stale = destination / relative
         if stale.is_dir():
             shutil.rmtree(stale)
         elif stale.exists():
