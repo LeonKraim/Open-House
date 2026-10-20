@@ -953,6 +953,17 @@ export interface ModuleInputRow {
   in_trigger: boolean;
   /** `entity`, `target`, `number`, `boolean`, `select`, `action`, `text`, ... */
   selector: string;
+  /**
+   * The domains the input's own selector names, for the slot it may be answered
+   * with.
+   *
+   * Read from the *source* and not from the house, because the row that needs it
+   * is the one being answered with a slot the house does not have yet: what the
+   * new slot accepts is what the blueprint asked for, and there is no house
+   * answer to give. Empty for a selector that names none, which is the case a
+   * declaration is refused in -- a slot that accepts nothing proposes nothing.
+   */
+  accepts_domains: string[];
   /** A `select` input's menu, empty for every other kind. */
   options: string[];
   /**

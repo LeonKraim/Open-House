@@ -50,6 +50,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
 from homeassistant.util import dt as dt_util
 
+from engine import custom_slots
 from engine.profiles import ProfileError
 from ha_adapter import (
     live_export,
@@ -104,6 +105,8 @@ MODULE_SET_BEHAVIOUR_PRIORITY = "open_house/modules/set_behaviour_priority"
 MODULE_SET_SLOT = "open_house/modules/set_slot"
 MODULE_SET_SLOT_RULE = "open_house/modules/set_slot_rule"
 SLOT_SET_PARTS = "open_house/slots/set_parts"
+SLOT_DECLARE = "open_house/slots/declare"
+SLOT_FORGET = "open_house/slots/forget"
 MODULES_LIST = "open_house/modules/list"
 HOUSE_SCOPE = "open_house/house/scope"
 PROFILES_LIST = "open_house/profiles/list"
@@ -1401,6 +1404,102 @@ async def ws_slot_set_parts(
         {
             "slot": msg["slot"],
             "parts": [{"name": name} for name in parts.get(msg["slot"], ())],
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): SLOT_DECLARE,
+        vol.Required("name"): vol.All(str, vol.Length(min=1)),
+        vol.Optional("domains", default=list): [str],
+    }
+)
+@websocket_api.async_response
+@_admin
+async def ws_slot_declare(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Add a slot to the house's own vocabulary, and answer with the house's list.
+
+    **The command behind the one control that lets a person add a word the catalog
+    does not have.** The vocabulary is the catalog plus what installed packs
+    declare, and neither is a person: a blueprint that toggles a helper asks for a
+    device no room type provides, so the import screen offered nothing that fitted
+    and the row could not be answered at all. Declaring the slot is what makes it
+    answerable -- and it is a *house* edit rather than a module one, because the
+    role is the house's and a second module naming it later finds it already there.
+
+    **The name is slugged here, at the door.** The person types what they call the
+    thing -- "Toggle Helper" -- and a slot name is a key: lower-case, underscores,
+    starting with a letter. `engine.custom_slots.slug` is the one function that
+    turns one into the other, and doing it here rather than in the panel is what
+    makes the name the screen shows back the name the house bound under. The answer
+    carries the declared names, so the panel can select the slot it just made
+    without a second read.
+
+    Admin-only like the commands beside it: a slot joins the vocabulary every room
+    binds against, so declaring one changes what every room may be given.
+    Deliberately *not* carrying a revision, matching `SLOT_SET_PARTS` and for the
+    same reason (`ws_module_set_slot_rule` says why): this is a setting the running
+    house applies at once, not a document whose staleness has to be detected.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    name = custom_slots.slug(str(msg["name"]))
+    try:
+        record = await host.async_declare_slot(name, list(msg["domains"]))
+    except LiveSessionError as refusal:
+        _error(connection, msg, refusal)
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "slot": name,
+            "slots": [
+                {"name": declared, "domains": list(accepted)}
+                for declared, accepted in record.items()
+            ],
+        },
+    )
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): SLOT_FORGET, vol.Required("slot"): vol.All(str, vol.Length(min=1))}
+)
+@websocket_api.async_response
+@_admin
+async def ws_slot_forget(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Take a declared slot back out of the house's vocabulary.
+
+    Refused while a room or the house still binds it, and the refusal names where
+    (`OpenHouseHost.async_forget_slot` says why): the declaration is what makes the
+    name a word the vocabulary carries, so dropping it under a binding would take
+    the whole house down rather than tidy one name.
+
+    Not slugged, unlike `ws_slot_declare`: this names a slot the house already has,
+    and the name it has is the one the screen listed -- slugging here would be a
+    second spelling free to disagree with the first.
+    """
+    host = _host_or_error(connection, msg)
+    if host is None:
+        return
+    try:
+        record = await host.async_forget_slot(str(msg["slot"]))
+    except LiveSessionError as refusal:
+        _error(connection, msg, refusal)
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "slot": msg["slot"],
+            "slots": [
+                {"name": declared, "domains": list(accepted)}
+                for declared, accepted in record.items()
+            ],
         },
     )
 
@@ -3605,13 +3704,21 @@ def _unknown_slot(
 ) -> str | None:
     """The first slot a module is answered with that this house has no such role for.
 
-    A slot name typed at the import screen is a shortcut past scrolling the
-    dropdown, not a way to invent a word: the vocabulary is the catalog plus what
-    the installed packs declare (`OpenHouseHost.known_slots`), and `rooms/bind`
-    refuses a name outside it. A module built around a name nothing will ever bind
-    is therefore not a module that waits -- it is a module that waits *forever*,
-    with no act available that would ever start it. Refusing it here, naming the
-    words this house does have, is the difference between a dead end and a typo.
+    The vocabulary is the catalog, what the installed packs declare, the parts a
+    slot was split into, and the slots a person declared of their own
+    (`OpenHouseHost.known_slots`), and `rooms/bind` refuses a name outside it. A
+    module built around a name nothing will ever bind is therefore not a module
+    that waits -- it is a module that waits *forever*, with no act available that
+    would ever start it. Refusing it here, naming the words this house does have,
+    is the difference between a dead end and a typo.
+
+    **And it says how to get out of the dead end**, because for a long time it did
+    not and there was no way out: a blueprint that toggles a helper asks for a
+    device no room type provides, the screen offered nothing that fitted, and a
+    person who typed the name they call it was told the house had no such slot --
+    which was true and was not something they could do anything about. The
+    importer can now declare one (`ws_slot_declare`), so the refusal names that
+    rather than only the list.
 
     Only authoring is checked. A file from another house may legitimately name a
     role this one has not installed the pack for yet, and there the waiting state
@@ -3623,7 +3730,8 @@ def _unknown_slot(
         if binding.kind == "slot" and binding.slot and binding.slot not in known:
             return (
                 f"{binding.slot!r} is not a slot this house has, so {name} would "
-                "wait for a device nothing could ever give it. Its slots are: "
+                "wait for a device nothing could ever give it. Add it as a slot of "
+                "this house's own, or answer it with one of these: "
                 + ", ".join(sorted(known))
             )
     return None
@@ -3713,6 +3821,16 @@ def _module_input(
         "satisfied": name in chosen or has_default,
         "selector": _selector_kind(declared),
         "options": _selector_options(declared),
+        # The domains the input's own selector names, for the one control that
+        # needs them before the slot exists: a person answering a device row with
+        # a slot this house does not have yet can declare it from the row, and
+        # what the new slot accepts is exactly what the blueprint asked for. Read
+        # from the *source*, not from the house -- the house has no word for it
+        # yet, which is the whole of the problem -- and empty for an input whose
+        # selector names none, which is the case the declaration is refused in
+        # (`engine/custom_slots.add`): a slot that accepts nothing is a row no
+        # device can be chosen for.
+        "accepts_domains": _selector_domains(declared),
     }
 
 
@@ -3781,6 +3899,47 @@ def _selector_options(declared: Mapping[str, Any]) -> list[str]:
     if isinstance(options, list):
         return [str(option) for option in options]
     return []
+
+
+def _selector_domains(declared: Mapping[str, Any]) -> list[str]:
+    """The domains a device input's own selector names, in the order it names them.
+
+    Read out of the *source* rather than out of the house, and that is the point:
+    the row that needs this is the one a person is trying to answer with a slot the
+    house does not have yet, so there is no house answer to give. What the new slot
+    accepts is what the blueprint asked for -- a blueprint that toggles a helper
+    says `domain: input_boolean` in the selector it declares, and that is the whole
+    of what the slot has to accept for a room's picker to offer the right devices.
+
+    The device family is what this is for (`_selector_kind`), and each member
+    spells its domains in its own block: `entity` and `target` under `domain`,
+    `device` under `integration`. All of them are read, because the panel's control
+    is the same for all of them and a row that offered to declare a slot with no
+    domains would offer a slot nothing could ever fill.
+
+    Empty when the selector names none -- an `entity: {}` that accepts anything, a
+    `label` that filters by label -- and an empty answer is *not* a domain list
+    meaning "all": it is the case `engine/custom_slots.add` refuses, because what a
+    slot accepts is what `rank_candidates` skips on and a slot accepting nothing
+    proposes nothing.
+    """
+    selector = declared.get("selector")
+    if not isinstance(selector, Mapping):
+        return []
+    found: list[str] = []
+    for block in selector.values():
+        if not isinstance(block, Mapping):
+            continue
+        for key in ("domain", "integration"):
+            named = block.get(key)
+            if isinstance(named, str):
+                named = [named]
+            if not isinstance(named, (list, tuple)):
+                continue
+            for domain in named:
+                if isinstance(domain, str) and domain and domain not in found:
+                    found.append(domain)
+    return found
 
 
 def _multiple(declared: Mapping[str, Any]) -> bool:
@@ -4702,6 +4861,8 @@ _HANDLERS: tuple[Any, ...] = (
     ws_module_set_slot,
     ws_module_set_slot_rule,
     ws_slot_set_parts,
+    ws_slot_declare,
+    ws_slot_forget,
     ws_house_scope,
     ws_modules_list,
     ws_profiles_list,

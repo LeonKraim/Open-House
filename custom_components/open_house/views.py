@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -93,6 +93,7 @@ __all__ = [
     "room_detail",
     "room_summaries",
     "room_summary",
+    "with_custom_slots",
 ]
 
 #: The severity the engine's own repairs are reported at. A room that cannot be
@@ -1241,6 +1242,42 @@ def load_catalog(root: Path | None) -> Catalog:
         records=records,
         manifests=manifests,
         paths=paths,
+    )
+
+
+def with_custom_slots(
+    catalog: Catalog, record: Mapping[str, tuple[str, ...]]
+) -> Catalog:
+    """`catalog` with the slots a person declared joined into its domains.
+
+    **The join that makes a declared slot usable rather than merely nameable.**
+    What a slot accepts is asked of the catalog and not of the vocabulary --
+    `Catalog.slot_domains` is the one answer the room page's picker, the module
+    card's and `rank_candidates` behind them all read, because the engine's
+    vocabulary carries no domains on purpose (`engine/vocabulary.py`). A declared
+    slot that reached only the vocabulary would therefore be a slot the import
+    screen offers and no room can be given a device for: `rank_candidates` skips
+    an entity whose domain is not in the list, and an empty list skips all of
+    them.
+
+    The catalog's own words win a name they already carry, the same precedence
+    every other growth in this product states -- and the command layer refuses
+    that collision before it is ever stored
+    (`OpenHouseHost.async_declare_slot`), so this is the belt to that braces.
+
+    `slot_required` is deliberately *not* touched: `required` is a fact about
+    `catalog/slots.yaml`, a declared slot is never required
+    (`engine/custom_slots.py`), and a name the catalog does not carry is already
+    absent from that mapping -- which reads as not required, the answer wanted.
+    """
+    if not record:
+        return catalog
+    return replace(
+        catalog,
+        slot_domains={
+            **{name: tuple(accepted) for name, accepted in record.items()},
+            **catalog.slot_domains,
+        },
     )
 
 

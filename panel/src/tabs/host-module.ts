@@ -70,9 +70,115 @@ import type {
   ModuleReadReply,
   ModuleSlotWord,
 } from "../api/models.ts";
+// The answers of an import nobody has finished, kept where a reload cannot reach
+// them. Everything about *why* is in that module; what this screen does with it
+// is write one as the answers are made and offer them back from the top.
+import * as drafts from "../api/drafts.ts";
+import type { DraftAnswers, DraftKind, ImportDraft } from "../api/drafts.ts";
 
 /** Which of the three ways a source arrives. */
 type SourceKind = "automation" | "blueprint" | "text";
+
+/**
+ * A seed with nothing in it, for an unfinished import to be laid over.
+ *
+ * `ModuleEditSeed` is what the screen fills its form from, and an import nobody
+ * has finished is filled from the same way -- the questions are identical, which
+ * is why resuming one is not a second code path. Half of that type describes the
+ * *module* being edited (`module`, `definition`, `text`, `blueprint`, `installs`)
+ * and a draft is not a module, so those stay empty and are never read: the only
+ * thing that makes an edit an edit on this screen is `editing`, and a resumed
+ * import deliberately leaves it empty so that Save defines rather than rewrites.
+ */
+const EMPTY_SEED: ModuleEditSeed = {
+  module: "",
+  definition: "",
+  text: "",
+  blueprint: "",
+  title: "",
+  description: "",
+  author: "",
+  version: "",
+  licence: "",
+  bindings: {},
+  settings: [],
+  casts: {},
+  flows: {},
+  automations: {},
+  picks: [],
+  installs: [],
+};
+
+/**
+ * A seed's per-input map, from the list of names a draft keeps.
+ *
+ * **The two shapes are not the same and the difference is real.** What the
+ * screen *sends* names the inputs a cast answers -- `flows: ["third"]` is "answer
+ * the input called third with a flow" -- and what the server *answers with* is
+ * the map from those names to the ids it minted, because a module that is
+ * installed twice has two flows and the row has to show this house's. A draft is
+ * on the sending side of that, so resuming one has to spell the map back out with
+ * the ids unknown (`""`, which is exactly what the seed means by "this house has
+ * not built it yet") rather than handing the seed a list it would index by name
+ * and find nothing under.
+ */
+function seededCast(names: string[]): Record<string, string> {
+  return Object.fromEntries(names.map((name) => [name, ""]));
+}
+
+/**
+ * A draft's answers as the seed the screen fills its form from.
+ *
+ * **The one conversion between the two shapes**, and it is two fields wide.
+ * Everything else in a draft's answers is spelled exactly as a seed spells it --
+ * which is the point of keeping the answers in the save's own shape -- and only
+ * the two casts that travel as *names* on the way out and as a *map* on the way
+ * back need turning round. Exported so the test can pin the round trip with the
+ * same function the screen resumes with, rather than with a second copy of it
+ * that would agree with itself and not with the screen.
+ */
+export function draftSeed(answers: DraftAnswers): ModuleEditSeed {
+  return {
+    ...EMPTY_SEED,
+    ...answers,
+    flows: seededCast(answers.flows),
+    automations: seededCast(answers.automations),
+  };
+}
+
+/**
+ * What a draft is about, in the words the list uses.
+ *
+ * The source rather than the module: the module's name is already the row's
+ * title, so what a person needs beside it is *which thing they were importing*.
+ * For a pasted document that is the only fact there is -- it has no name of its
+ * own, which is why it is also the only kind that gets a phrase instead of one.
+ */
+export function describeDraft(draft: ImportDraft): string {
+  if (draft.kind === "text") return "pasted YAML";
+  return `${draft.kind} ${draft.key}`;
+}
+
+/**
+ * How long ago a draft was last answered, in words rather than on a clock.
+ *
+ * `now` is passed in rather than read, so this is a function of its arguments
+ * and a test can ask about an hour ago without waiting one. The thresholds are
+ * the ones nobody has to count: seconds, then minutes up to the hour, then hours
+ * up to the day, then a number of days -- because what the row is saying is
+ * "this has been sitting here", and a timestamp would make a person do the
+ * arithmetic to find that out.
+ */
+export function whenAgo(at: number, now: number): string {
+  const seconds = Math.max(0, Math.round((now - at) / 1000));
+  if (seconds < 45) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? "yesterday" : `${days} days ago`;
+}
 
 /**
  * How one input is filled, as the row's own control offers it.
@@ -160,11 +266,23 @@ export interface InputDecision {
    */
   helper?: string;
   /**
-   * Whether this input stays settable on the module after it is hosted.
+   * Whether this input is **exposed** on the module after it is hosted.
    *
-   * Off unless the person says otherwise, which is the same rule the rest of
-   * the house follows: a module arrives doing one thing well, and every dial it
-   * offers is one somebody chose to keep.
+   * Exposed means it stays settable: a dial on the module's card, in every room
+   * the module is installed in, starting at the value given here. Not exposed
+   * means the value given here is written into the automation and fixed there.
+   *
+   * **On for every input but a device one, which is a deliberate reversal.** It
+   * was off, on the reasoning that a module should arrive doing one thing well
+   * and every dial should be one somebody chose -- and the result was an import
+   * that produced a module with nothing settable on it and no sentence saying
+   * so, so "what can I change about this thing I just imported?" answered
+   * "nothing". Keeping one costs nothing: the value given here is what it starts
+   * at either way, and an input somebody wants frozen is one untick.
+   *
+   * A device input is never exposed, whichever way a decision was seeded: what
+   * it would be kept as is a device, one house's, which is the answer the slot
+   * rule exists to remove.
    */
   expose: boolean;
 }
@@ -227,6 +345,7 @@ export class HostModuleScreen extends OpenHouseElement {
     hosted: { state: true },
     isLoading: { state: true },
     busy: { state: true },
+    declaring: { state: true },
     drafts: { state: true },
     saving: { state: true },
     error: { state: true },
@@ -253,6 +372,40 @@ export class HostModuleScreen extends OpenHouseElement {
 
   /** The module's own document and answers, once the reading has brought them. */
   private seed: ModuleEditSeed | null = null;
+
+  /**
+   * Every import nobody has finished, newest first -- what the top of the screen
+   * offers back.
+   *
+   * Read once when the screen arrives and kept in step by `noteProgress`, rather
+   * than read from the browser on every render: the list is drawn on every
+   * keystroke of every field, and a `localStorage` read and parse per keystroke
+   * is work done to draw something that has not changed.
+   */
+  private drafts: ImportDraft[] = [];
+
+  /**
+   * The source the *current* reading was made from, which is what a draft is
+   * about; `null` when there is nothing in progress.
+   *
+   * **A snapshot and not the live fields.** The kind, the picker and the paste
+   * box are what the person is *choosing*; this is what was actually read. The
+   * two part company the moment somebody edits a pasted document without
+   * pressing Read again, and a draft filed under the new text while describing
+   * the old reading would be offered back as a form that fills itself with
+   * answers to a document it is not about.
+   */
+  private draftOf: { id: string; kind: DraftKind; key: string; text: string } | null =
+    null;
+
+  /**
+   * The answers last written, as text, so an unchanged screen writes nothing.
+   *
+   * `updated` runs after every render -- every keystroke, every notice, every
+   * button press -- and each of those would otherwise be a `localStorage` write
+   * of a document that has not changed since the last one.
+   */
+  private draftWritten = "";
 
   private kind: SourceKind = "blueprint";
   private automationKey = "";
@@ -292,6 +445,8 @@ export class HostModuleScreen extends OpenHouseElement {
 
   /** Every slot this house carries, which is what the slot menu offers. */
   private slots: ModuleSlotWord[] = [];
+  /** The row whose slot is being declared right now, by input name; `""` for none. */
+  private declaring = "";
 
   /**
    * The address a **browser** opens Node-RED at, or empty when none is set.
@@ -341,6 +496,12 @@ export class HostModuleScreen extends OpenHouseElement {
       this.nodeRedUrl = capabilities.node_red_url ?? "";
       this.automationKey ||= this.automations[0]?.key ?? "";
       this.blueprintKey ||= this.blueprints[0]?.key ?? "";
+      // **Before the reading, so the list is there while one is in progress.**
+      // An import that was left open is offered back the moment the screen
+      // arrives, whether or not a source has been read yet -- and a screen that
+      // read its drafts afterwards would draw the list a beat late, which on a
+      // slow panel is the beat the person has already looked at.
+      this.drafts = drafts.read(this.store);
       // **An edit reads itself in.** The source is not chosen here -- it is the
       // module's own document -- so there is nothing to wait for before reading,
       // and going straight at it is what makes the screen arrive filled rather
@@ -352,6 +513,160 @@ export class HostModuleScreen extends OpenHouseElement {
       this.isLoading = false;
       this.requestUpdate();
     }
+  }
+
+  // -- what has not been saved yet -----------------------------------------
+
+  /**
+   * The browser's store, or `null` where there is none.
+   *
+   * Reached for rather than captured, because the property itself can throw:
+   * a browser with storage forbidden by policy answers with an exception on the
+   * *access*, and this screen has to go on working in one -- an unfinished form
+   * that is not offered back is a disappointment, and an import screen that
+   * refuses to draw is a broken panel.
+   */
+  private get store(): Storage | null {
+    try {
+      return globalThis.localStorage ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The answers, as `modules/define` reads them and as a draft keeps them.
+   *
+   * **One description, used twice.** What is saved and what is left open to be
+   * finished are the same answers, so they are built once: a draft assembled
+   * separately would be a second account of the same form, and the two would
+   * disagree the first time either was changed -- which would be discovered by
+   * somebody who resumed an import and found one answer different from the one
+   * they gave.
+   */
+  private get definition(): Omit<DraftAnswers, "replace"> {
+    return {
+      title: this.moduleTitle.trim(),
+      description: this.moduleDescription.trim(),
+      author: this.moduleAuthor.trim(),
+      version: this.moduleVersion.trim(),
+      licence: this.moduleLicence,
+      bindings: this.bindings,
+      outputs: this.outputs
+        .filter((output) => output.picked && output.key.trim())
+        .map((output) => ({
+          name: output.candidate.name,
+          key: output.key.trim(),
+        })),
+      settings: this.kept,
+      casts: this.casts,
+      flows: castFlowAnswers(this.decisions),
+      automations: castAutomationAnswers(this.decisions),
+    };
+  }
+
+  /** The import in progress, as the draft that would bring it back. */
+  private get draft(): ImportDraft | null {
+    const source = this.draftOf;
+    if (!source) return null;
+    const answers = { ...this.definition, replace: this.moduleReplace };
+    return {
+      id: source.id,
+      // The module's name if one has been typed and the source's own until then,
+      // because the list is read *before* anything has been opened: a row called
+      // "" is a row a person cannot tell from the next one.
+      title: answers.title || this.reading?.source.title || source.key || "a pasted document",
+      at: Date.now(),
+      kind: source.kind,
+      key: source.key,
+      text: source.text,
+      answers,
+    };
+  }
+
+  /**
+   * Write the import in progress, if there is one and it has changed.
+   *
+   * Called from `updated`, which is to say after every render -- which is what
+   * makes the draft survive a browser that is closed at any moment: the answers
+   * reach the store as they are made rather than when somebody remembers to ask
+   * for them. The two guards are what make that affordable: an edit writes
+   * nothing (a module the house already holds is not an unfinished import), and
+   * a screen whose answers have not moved writes nothing.
+   */
+  private noteProgress(): void {
+    if (this.editing || !this.reading || !this.draftOf) return;
+    const draft = this.draft;
+    if (!draft) return;
+    const written = JSON.stringify(draft.answers);
+    if (written === this.draftWritten) return;
+    this.draftWritten = written;
+    // **The write lands just after the update that asked for it.** `updated`
+    // runs inside Lit's own update cycle, and assigning the list there is a
+    // change during a change: Lit says so in the console in development, and it
+    // is a render scheduled for a screen that has already been drawn. A
+    // microtask closes with the cycle and runs immediately after it, which is
+    // the same moment as far as a person or a crash is concerned.
+    queueMicrotask(() => {
+      this.drafts = drafts.write(this.store, draft);
+    });
+  }
+
+  protected override updated(): void {
+    this.noteProgress();
+  }
+
+  /**
+   * An unfinished import, put back on the screen.
+   *
+   * **It is seeded, not filled in.** A draft holds the same answers an edit
+   * does, and the screen already knows how to arrive full -- that is what
+   * `editDecision` and `seedMetadata` are -- so resuming an import is the same
+   * act as opening a module to change it, and it is spelled the same way: the
+   * source is put back, the answers go in as the seed, and the source is read.
+   * Everything downstream then behaves exactly as it does after an edit, down to
+   * which row a device input opens on.
+   *
+   * **`editing` stays empty, which is the whole difference.** An edit is
+   * addressed to a module the house already holds; this is a module that does not
+   * exist yet, and Save has to define rather than rewrite. `save` reads
+   * `this.editing` for that and not `this.seed`, because the seed is now set on
+   * both paths.
+   */
+  private async openDraft(draft: ImportDraft): Promise<void> {
+    this.error = null;
+    this.notice = null;
+    this.editing = "";
+    this.kind = draft.kind;
+    if (draft.kind === "automation") this.automationKey = draft.key;
+    if (draft.kind === "blueprint") this.blueprintKey = draft.key;
+    if (draft.kind === "text") this.pasted = draft.text;
+    this.seed = draftSeed(draft.answers);
+    this.reading = null;
+    this.decisions = [];
+    this.outputs = [];
+    this.moduleTitle = "";
+    this.draftOf = null;
+    this.draftWritten = "";
+    await this.read();
+    this.requestUpdate();
+  }
+
+  /** An unfinished import given up on, which is a person saying so. */
+  private discardDraft(draft: ImportDraft): void {
+    this.drafts = drafts.forget(this.store, draft.id);
+    if (this.draftOf?.id === draft.id) {
+      // The one being worked on, so the screen stops working on it: the rows
+      // below are answers to a draft nobody is keeping any more.
+      this.draftOf = null;
+      this.draftWritten = "";
+      this.reading = null;
+      this.decisions = [];
+      this.outputs = [];
+      this.moduleTitle = "";
+      this.seed = null;
+    }
+    this.requestUpdate();
   }
 
   /**
@@ -370,6 +685,38 @@ export class HostModuleScreen extends OpenHouseElement {
     this.decisions = [];
     this.outputs = [];
     this.moduleTitle = "";
+    // **The draft goes with the reading.** What is filed is the source that was
+    // read; a screen that has just been pointed at another one has nothing in
+    // progress to keep, and going on writing under the old id would file the new
+    // source's first answers as the old source's unfinished form.
+    this.draftOf = null;
+    this.draftWritten = "";
+  }
+
+  /**
+   * The source the screen is pointed at right now, as a draft's identity.
+   *
+   * The *snapshot* taken when a reading succeeds and not the live fields, for
+   * the reason `draftOf` gives: a pasted document is the one source a person can
+   * change without choosing anything, and a draft filed under text nobody has
+   * read yet would be offered back as a form that fills itself from a reading of
+   * something else.
+   */
+  private sourceOf(): {
+    id: string;
+    kind: DraftKind;
+    key: string;
+    text: string;
+  } {
+    const kind = this.kind;
+    const key =
+      kind === "automation"
+        ? this.automationKey
+        : kind === "blueprint"
+          ? this.blueprintKey
+          : "";
+    const text = kind === "text" ? this.pasted : "";
+    return { id: drafts.draftId(kind, key, text), kind, key, text };
   }
 
   private get handle(): { key?: string; text?: string } {
@@ -484,6 +831,19 @@ export class HostModuleScreen extends OpenHouseElement {
       // person had just typed into them.
       if (this.seed && !keepDecisions) this.seedMetadata(this.seed);
       this.moduleTitle ||= reply.source.title;
+      // **What this reading is about, which is what a draft is filed under.**
+      // An edit is not filed at all: the module it is changing is already saved,
+      // and a second record of it offered back as "left open to be finished"
+      // would be a form competing with the thing it is a copy of.
+      if (!this.editing) {
+        const held = this.sourceOf();
+        // A different source is a different draft, so the guard that stops an
+        // unchanged screen writing has to be re-armed -- otherwise the first
+        // answers given to a source whose answers happen to serialise the same
+        // would never be written.
+        if (held.id !== this.draftOf?.id) this.draftWritten = "";
+        this.draftOf = held;
+      }
     } catch (error) {
       this.error = this.toError(error);
       this.reading = null;
@@ -650,7 +1010,11 @@ export class HostModuleScreen extends OpenHouseElement {
     };
     try {
       const seed = this.seed;
-      if (seed) {
+      // **An edit is what `editing` says, not what a seed says.** A resumed
+      // import is seeded too -- that is how it arrives full -- so a save that
+      // read the seed as "this is an edit" would send the rewrite of a module
+      // named "", which is not a module at all.
+      if (this.editing && seed) {
         await this.requireClient().modulesEdit(
           seed.module,
           "text",
@@ -697,6 +1061,17 @@ export class HostModuleScreen extends OpenHouseElement {
         this.moduleAuthor = "";
         this.moduleVersion = "1.0.0";
         this.moduleLicence = "no_licence";
+        // **And the draft stops being one**, because it is now the module. Left
+        // behind it would be the same answers offered back as work still to do,
+        // which is the screen asking a person to import what they have just
+        // imported. `seed` goes too: a resumed import set it, and it is what
+        // would seed the *next* source from the last one's answers.
+        if (this.draftOf) {
+          this.drafts = drafts.forget(this.store, this.draftOf.id);
+        }
+        this.draftOf = null;
+        this.draftWritten = "";
+        this.seed = null;
       }
     } catch (error) {
       this.error = this.toError(error);
@@ -708,6 +1083,70 @@ export class HostModuleScreen extends OpenHouseElement {
 
   // -- render --------------------------------------------------------------
 
+  /**
+   * Every import nobody has finished, offered back.
+   *
+   * **The one thing on this screen that is about the past.** Everything below it
+   * is about a source somebody is looking at; this is about the sources somebody
+   * *was* looking at and was interrupted in the middle of -- a restart, a closed
+   * tab, a machine that went down -- which is why it is drawn first and why it
+   * says when, because "left open to be finished" is a claim about time.
+   *
+   * **The one being worked on is not in the list.** It is not left open: it is
+   * open, and it is on the screen already. A row for it would be the screen
+   * offering to reopen what it is showing.
+   *
+   * An edit has no drafts at all -- a module the house already holds is not an
+   * unfinished import -- so the section is not drawn there either.
+   */
+  private renderDrafts(): TemplateResult | typeof nothing {
+    if (this.editing) return nothing;
+    const others = this.drafts.filter((draft) => draft.id !== this.draftOf?.id);
+    if (others.length === 0) return nothing;
+    const now = Date.now();
+    return html`<section class="card">
+      <h2>Left open to be finished</h2>
+      <p class="help">
+        Imports you started and did not save. Nothing is lost: every answer you
+        gave is kept here as you give it, so a restart, a closed tab or a machine
+        that went down costs you none of it. Pick one up where you left off, or
+        throw it away.
+      </p>
+      <div class="list">
+        ${others.map(
+          (draft) => html`<div class="candidate">
+            <div class="row spread">
+              <div>
+                <strong>${draft.title}</strong>
+                <span class="chip">${describeDraft(draft)}</span>
+              </div>
+              <div class="row">
+                <button type="button" @click=${() => void this.openDraft(draft)}>
+                  Finish it
+                </button>
+                <button
+                  type="button"
+                  class="danger"
+                  @click=${() => this.discardDraft(draft)}
+                >
+                  Discard
+                </button>
+              </div>
+            </div>
+            <p class="help">
+              Last answered ${whenAgo(draft.at, now)}${
+                draft.answers.settings.length > 0
+                  ? html`, keeping ${draft.answers.settings.length} of its inputs
+                      settable`
+                  : nothing
+              }.
+            </p>
+          </div>`,
+        )}
+      </div>
+    </section>`;
+  }
+
   override render(): TemplateResult {
     return html`
       ${this.errorBanner(this.error)}
@@ -717,6 +1156,7 @@ export class HostModuleScreen extends OpenHouseElement {
             this.editing ? "Reading the module..." : "Reading your automations...",
           )
         : nothing}
+      ${this.renderDrafts()}
       ${this.editing ? this.renderProvenance() : this.renderSource()}
       ${this.reading ? this.renderInputs() : nothing}
       ${this.reading ? this.renderOutputs() : nothing}
@@ -984,25 +1424,37 @@ export class HostModuleScreen extends OpenHouseElement {
       </section>`;
     }
     return html`<section class="card">
-      <h2>2. Fill in what it asks for</h2>
+      <h2>2. Fill in what it asks for, and what to expose</h2>
       <details class="nested">
         <summary>How these rows work</summary>
-        ${this.seed
+        ${this.editing
           ? html`<p class="muted">
               These are the <strong>module's own</strong> answers: what it does
-              wherever it is installed, until a room changes one for itself. A
-              ticked row stays a dial on the module card; an unticked one is
-              answered once, here, and fixed inside the automation.
+              wherever it is installed, until a room changes one for itself. The
+              switch at the end of a row is what decides whether that row is
+              <strong>exposed</strong>: ticked, it stays a dial on the module
+              card, wherever the module ends up; unticked, it is answered once,
+              here, and fixed inside the automation.
             </p>`
           : html`<p class="muted">
-              Every input the blueprint declares, and every one of them stays an
-              <strong>option</strong> on the module: it is settable there, wherever
-              the module ends up. A row left as "Blueprint default" starts at
-              the blueprint's own default where it has one -- and where it has
-              none, the module is saved and waits: nothing runs until somebody sets
-              that option. Answer a row here instead to give it the value it starts
-              at, or untick one to answer it once and fix it inside the automation.
+              Every input the blueprint declares, and each row ends with the same
+              question: <strong>expose it, or do not</strong>. Ticked, the row is
+              exposed as a setting on the module -- a dial on its card, wherever
+              it is installed. Unticked, it is not exposed: the value it is given
+              here is written into the automation and fixed there, and nothing in
+              the house can change it afterwards. A row left as "Blueprint
+              default" starts at the blueprint's own default where it has one --
+              and where it has none, the module is saved and waits: nothing runs
+              until somebody sets that option.
             </p>`}
+        ${this.decisions.some((decision) => isDeviceInput(decision.input))
+          ? html`<p class="muted">
+              A row that names a <strong>device</strong> has no such switch, and
+              cannot have one: what it would be exposed as is a device -- one
+              house's -- and a slot is the only answer that follows the room the
+              module is put in.
+            </p>`
+          : nothing}
         <p class="muted">
           Every row has a <strong>cast</strong> under it, and it is what to reach
           for when the answer is not the thing itself. Home Assistant's own
@@ -1040,7 +1492,7 @@ export class HostModuleScreen extends OpenHouseElement {
    * input per form is what lets this screen write the title itself -- the input's
    * own, in the same weight as every other heading on the page -- and leave the
    * form's labels to say what each control *is*: what fills it, its value, and
-   * that keeping it makes it a setting.
+   * whether the row is exposed.
    */
   private renderInput(decision: InputDecision, index: number): TemplateResult {
     const input = decision.input;
@@ -1054,10 +1506,21 @@ export class HostModuleScreen extends OpenHouseElement {
     // The plain answer is the field the row always shows -- what fills it, and
     // the value it holds -- and the cast lives in its own `ha-form` behind a
     // closed `<details>`. Ten simple inputs then read as ten rows rather than as
-    // ten four-part forms, while every cast, both editors, the expose tick and
-    // the trigger warnings stay one click away. Splitting the row into two forms
-    // costs nothing: `applyInput` merges a partial answer, reading each field it
-    // did not receive back off the row (`data[...] ?? decision...`).
+    // ten four-part forms, while every cast, both editors and the trigger
+    // warnings stay one click away. Splitting the row into two forms costs
+    // nothing: `applyInput` merges a partial answer, reading each field it did
+    // not receive back off the row (`data[...] ?? decision...`).
+    //
+    // **The exposure switch is not one of the things behind that `<details>`**,
+    // and it used to be. What the switch decides is whether this input is a dial
+    // on the module at all, which is a question about the module rather than
+    // about logic -- and it was drawn inside a drawer whose summary reads "Cast
+    // it", labelled "Keep as a setting", a word about the mechanism and not the
+    // one a person reaches for. The result was an import screen where what a
+    // blueprint would expose could be answered only by accident: nobody opens a
+    // drawer about casts to decide what to make visible. It is drawn here, on
+    // the form the row always shows, so every row ends with the same question in
+    // the same place.
     const baseSchema: FormItem[] = [
       { name: `how_${index}`, selector: howSelector(input, decision.how) },
     ];
@@ -1080,15 +1543,21 @@ export class HostModuleScreen extends OpenHouseElement {
       baseSchema.push({ name: `value_${index}`, selector: value });
     }
     if (decision.value !== undefined) baseData[`value_${index}`] = decision.value;
+    // **Exposed, or not, and nothing else is asked of a device.** A device row
+    // is never exposed: what it would be kept as is a device, one house's, which
+    // is the answer the slot rule exists to take away -- so the switch is not
+    // drawn for one rather than being drawn and refused.
+    if (!device) {
+      baseSchema.push({ name: `expose_${index}`, selector: { boolean: {} } });
+      baseData[`expose_${index}`] = decision.expose;
+    }
     // The cast, and everything it brings, addressed by the same row's index.
     // **The menu is not one of these fields**, and that is the point: it is
     // drawn by `castMenu`, below, because Home Assistant's select selector
     // cannot disable the one entry a house without Node-RED cannot reach -- and
     // a menu that offers a cast there is nowhere to build is a menu that lies.
     const castSchema: FormItem[] = [];
-    const castData: Record<string, unknown> = {
-      [`expose_${index}`]: decision.expose,
-    };
+    const castData: Record<string, unknown> = {};
     if (mode === "template") {
       castSchema.push({ name: `cast_${index}`, selector: { template: {} } });
       castData[`cast_${index}`] = decision.cast ?? "";
@@ -1103,9 +1572,6 @@ export class HostModuleScreen extends OpenHouseElement {
     // The helper and the automation are made by the server when the module is
     // built, and the input binds to the helper -- so there is nothing here for
     // the person to name, pick or type. What the row holds is the editor below.
-    if (!device) {
-      castSchema.push({ name: `expose_${index}`, selector: { boolean: {} } });
-    }
     return html`<div class="field" data-input=${index}>
       <div class="label">${title}</div>
       ${input.description
@@ -1128,6 +1594,7 @@ export class HostModuleScreen extends OpenHouseElement {
           this.applyInput(index, event.detail.value);
         }}
       ></ha-form>
+      ${this.newSlotRow(decision, index)}
       <details>
         <summary>${mode === "none" ? "Cast it" : `Cast it: ${CAST_WORDS[mode]}`}</summary>
         ${mode === "template" && input.in_trigger
@@ -1269,6 +1736,89 @@ export class HostModuleScreen extends OpenHouseElement {
    * input does not undo the others. Only the row that changed is written: a form
    * carries its own three fields and knowing nothing about its neighbours.
    */
+  /**
+   * The one line that turns a slot the house has no word for into a slot it has.
+   *
+   * **The dead end this closes.** A device row is answered with a slot and
+   * nothing else (`howSelector`), so a blueprint that toggles a helper -- a
+   * device no room type provides and no pack brought -- could not be answered at
+   * all: the menu offered the house's roles, none of them fitted, and typing the
+   * name the person calls it reached the server as a name the vocabulary does not
+   * carry, which is refused. True, and nothing a person could act on.
+   *
+   * So when the row holds a name the house does not have, it says so and offers
+   * to add it. What the new slot accepts is **what the blueprint asked for**
+   * (`ModuleInputRow.accepts_domains`): a blueprint that toggles a helper names
+   * `input_boolean` in its own selector, and that is the whole of what the slot
+   * has to accept for a room's picker to offer the right devices. A row whose
+   * selector names no domain is offered nothing, because a slot that accepts
+   * nothing is a role that could be declared and never bound -- the declaration
+   * is refused there, and the sentence says which case this is.
+   *
+   * The server slugs the name, so the row selects what comes back rather than
+   * what was typed: "Toggle Helper" becomes `toggle_helper`, and a row still
+   * holding the typed words would go on being refused after being fixed.
+   */
+  private newSlotRow(
+    decision: InputDecision,
+    index: number,
+  ): TemplateResult | typeof nothing {
+    if (decision.how !== "slot") return nothing;
+    const typed = typeof decision.value === "string" ? decision.value.trim() : "";
+    if (!typed) return nothing;
+    if (this.slots.some((slot) => slot.name === typed)) return nothing;
+    const domains = decision.input.accepts_domains ?? [];
+    if (!domains.length) {
+      return html`<p class="help warn">
+        This house has no slot called <code>${typed}</code>, and the blueprint
+        does not say what kind of device this input takes -- so there is nothing
+        to add. Answer it with one of the house's own slots instead.
+      </p>`;
+    }
+    const busy = this.declaring === decision.input.name;
+    return html`<p class="help">
+      This house has no slot called <code>${typed}</code>.
+      <button
+        type="button"
+        ?disabled=${busy}
+        @click=${() => this.declareSlot(decision, index, typed, domains)}
+      >
+        ${busy ? "Adding…" : `Add it as a slot for ${domains.join(" / ")}`}
+      </button>
+    </p>`;
+  }
+
+  /**
+   * Declare the slot the row is holding, and put the row on the name it took.
+   *
+   * The read afterwards is what makes the name appear in the menu, and it is a
+   * read that **keeps the decisions** (`read(true)`) -- the same one a value
+   * change does, for the same reason: every other row's answer is still the
+   * person's, and a re-read that reset them would undo the import to fix one row
+   * of it.
+   */
+  private async declareSlot(
+    decision: InputDecision,
+    index: number,
+    typed: string,
+    domains: readonly string[],
+  ): Promise<void> {
+    this.declaring = decision.input.name;
+    this.error = null;
+    this.requestUpdate();
+    try {
+      const made = await this.requireClient().declareSlot(typed, domains);
+      await this.read(true);
+      this.applyInput(index, { [`value_${index}`]: made.slot });
+      this.notice = `Added ${made.slot} to this house's slots.`;
+    } catch (error) {
+      this.error = this.toError(error);
+    } finally {
+      this.declaring = "";
+      this.requestUpdate();
+    }
+  }
+
   private applyInput(index: number, data: Record<string, unknown>): void {
     this.decisions = this.decisions.map((decision, at) => {
       if (at !== index) return decision;
@@ -1280,6 +1830,17 @@ export class HostModuleScreen extends OpenHouseElement {
         how === LEAVE
           ? undefined
           : ((data[`value_${index}`] as unknown) ?? decision.value);
+      // **Whether the row is exposed, read off whichever form spoke.** The
+      // switch is drawn on the plain form -- the one somebody answering "should
+      // this be a dial?" is looking at -- so this is the submission it arrives
+      // on, and a submission from the cast form carries no answer and keeps the
+      // one it had. A device input is never exposed whichever form spoke: what
+      // it would be kept as is a device, one house's, which is the answer the
+      // slot rule removes -- and a form reports what it drew, so the switch it
+      // does not carry cannot be read as one that was turned off.
+      const expose = isDeviceInput(decision.input)
+        ? false
+        : ((data[`expose_${index}`] as boolean) ?? decision.expose);
       // **Which form spoke decides which half of the row moves.** The row is two
       // forms -- the plain answer, and the cast behind its own `<details>` -- and
       // each reports only what it drew. The cast menu is the marker: a submission
@@ -1288,7 +1849,7 @@ export class HostModuleScreen extends OpenHouseElement {
       // whole -- a condition builder cleared there has to be able to be cleared,
       // which `?? decision.condition` would undo by putting the old one back.
       if (!(`cast_mode_${index}` in data)) {
-        return { ...decision, how, value };
+        return { ...decision, how, value, expose };
       }
       const mode = (data[`cast_mode_${index}`] as CastMode) ?? castModeOf(decision);
       const written = data[`cast_${index}`];
@@ -1300,11 +1861,7 @@ export class HostModuleScreen extends OpenHouseElement {
         input: decision.input,
         how,
         value,
-        // A device input keeps nothing: the switch is not drawn for one, and a
-        // form reports what it drew.
-        expose: isDeviceInput(decision.input)
-          ? false
-          : ((data[`expose_${index}`] as boolean) ?? decision.expose),
+        expose,
         castMode: mode,
         cast: mode === "template" && typeof written === "string" ? written : decision.cast,
         condition: mode === "condition" ? written : decision.condition,
@@ -1323,18 +1880,21 @@ export class HostModuleScreen extends OpenHouseElement {
   private renderOutputs(): TemplateResult {
     const candidates = this.outputs;
     return html`<section class="card">
-      <h2>3. Say what it publishes</h2>
+      <h2>3. Say what to expose</h2>
       <details class="nested">
         <summary>What an output is</summary>
         <p class="muted">
-          An output is a value from inside this blueprint that other modules,
-          automations and dashboards can read. Each one becomes an entity of its
-          own -- <code>sensor.open_house_&lt;module&gt;_&lt;key&gt;</code> --
-          published by one step added beside the value it reads, not by a rewrite
-          of the blueprint. A row you answered with <em>logic</em> -- a condition,
-          a template, a flow, an automation -- is offered here too: tick it and the
+          The other half of the same question, and the reason this step is here
+          rather than in step 2: an <strong>output</strong> is a value from
+          inside this blueprint that the module <strong>exposes</strong> to the
+          rest of the house. Each one becomes an entity of its own --
+          <code>sensor.open_house_&lt;module&gt;_&lt;key&gt;</code> -- published
+          by one step added beside the value it reads, not by a rewrite of the
+          blueprint. A row you answered with <em>logic</em> -- a condition, a
+          template, a flow, an automation -- is offered here too: tick it and the
           answer that row works out becomes an entity the rest of the house can
-          read, which is what "expose it" means.
+          read. Untick it, or leave it unticked, and it is not exposed: the value
+          stays inside the module and nothing outside can read it.
         </p>
       </details>
       ${candidates.length === 0
@@ -1424,10 +1984,19 @@ export class HostModuleScreen extends OpenHouseElement {
   }
 
   private renderHost(): TemplateResult {
+    // **An edit, and not merely "there is a seed".** A resumed import is seeded
+    // too -- that is how it arrives full -- and every sentence below is a
+    // promise about a module the house *already holds*: that saving rewrites it
+    // everywhere, that the rooms running it are rebuilt, that a room's own
+    // answers survive. Said to somebody picking up an unfinished import it is a
+    // lie about a module that does not exist yet, and it is the kind of lie that
+    // stops them pressing the button. `editing` is the only thing that knows the
+    // difference; `seed` knows only that the form was filled in.
+    const seed = this.editing ? this.seed : null;
     return html`<section class="card">
-      <h2>${this.seed ? "4. Save the changes" : "4. Save it to your store"}</h2>
+      <h2>${seed ? "4. Save the changes" : "4. Save it to your store"}</h2>
       <p class="help">
-        ${this.seed
+        ${seed
           ? html`This <strong>is the module</strong>, not this room's copy of it:
               saving changes what every room running it does. Those rooms keep
               their own answers where they have made any -- what a room has
@@ -1438,11 +2007,11 @@ export class HostModuleScreen extends OpenHouseElement {
               own copy, its own automation and its own outputs. Nothing runs
               until you install it, from the Store tab.`}
       </p>
-      ${this.seed && this.seed.installs.length > 0
+      ${seed && seed.installs.length > 0
         ? html`<div class="banner info">
-            Saving rebuilds ${this.seed.installs.length}
-            ${this.seed.installs.length === 1 ? "installation" : "installations"}:
-            ${this.seed.installs.map((row) => row.room_name).join(", ")}.
+            Saving rebuilds ${seed.installs.length}
+            ${seed.installs.length === 1 ? "installation" : "installations"}:
+            ${seed.installs.map((row) => row.room_name).join(", ")}.
           </div>`
         : nothing}
       ${this.pinned
@@ -1472,7 +2041,7 @@ export class HostModuleScreen extends OpenHouseElement {
             set ${this.unfilled.length === 1 ? "it" : "them"} on the module.
           </div>`
         : nothing}
-      ${this.seed
+      ${seed
         ? nothing
         : html`<div class="field">
             <label class="check">
@@ -1492,7 +2061,7 @@ export class HostModuleScreen extends OpenHouseElement {
         <button type="button" @click=${() => void this.save()} ?disabled=${!this.canSave}>
           ${this.busy
             ? "Saving..."
-            : this.seed
+            : seed
               ? "Save the changes"
               : "Save it to your store"}
         </button>
@@ -1500,7 +2069,7 @@ export class HostModuleScreen extends OpenHouseElement {
       <details class="nested">
         <summary>What saving does</summary>
         <p class="help">
-          ${this.seed
+          ${seed
             ? html`The document itself is unchanged, so this is what the module is
                 from now on: every room running it is built again from the answers
                 above, and an output you untick stops existing in those rooms. A
@@ -1629,11 +2198,20 @@ export function editDecision(
     // Filled in below when the module has an answer; a row it left alone has
     // none, which is what `how: "default"` means.
     value: undefined,
-    // **What the module kept, and that is a different question from what it
+    // **What the module exposed, and that is a different question from what it
     // answered.** A setting is a dial on the module; a binding is what it
     // currently reads. An edit that turned every answer into a dial would put a
     // control on the card for every input the blueprint has.
-    expose: seed.settings.includes(name),
+    //
+    // **And a device row is never exposed, whatever the store says.** The rule
+    // is enforced where the payload is built (`kept`), where the row is drawn
+    // (`renderInput`) and where an answer is read (`applyInput`); this is the
+    // fourth way into a row, and a decision seeded exposed here would be a
+    // device row that disagrees with itself between being opened and being
+    // saved. It is reachable: `settings` is a list of names in a stored
+    // document, and nothing stops an older store -- or a hand-edited one --
+    // naming a device input in it.
+    expose: !isDeviceInput(input) && seed.settings.includes(name),
     castMode: "none",
   };
   // An automation cast is answered by the *automation*, which is Open House's own
@@ -2011,12 +2589,19 @@ export function howSelector(
  * A row is up to three fields, and each one is labelled for the question it
  * asks rather than with the input's name alone. The `how` dropdown answers "what
  * fills this", so it takes the name; the value field takes "… value"; and the
- * Keep switch says what keeping *does*, because a switch labelled only with the
- * input's name reads as a switch for the input -- "turn Lux Sensor off" -- when
- * what it does is leave the input settable on the module afterwards. The label
- * is the whole of how that is told to a person: the switch carries no other
- * text, and a section's paragraph cannot say which of eighteen switches it is
- * about.
+ * last switch says what the row *exposes*, because a switch labelled only with
+ * the input's name reads as a switch for the input -- "turn Lux Sensor off" --
+ * when what it does is leave the input settable on the module afterwards. The
+ * label is the whole of how that is told to a person: the switch carries no
+ * other text, and a section's paragraph cannot say which of eighteen switches it
+ * is about.
+ *
+ * **The label says "expose" because that is the word the person arrives with.**
+ * It used to read "Keep as a setting", which describes the mechanism -- what
+ * ticking *does* -- and never once uses the word for the decision being made.
+ * Somebody importing a blueprint and asking "what does this expose?" has to
+ * translate; and the unticked state, which is the whole of "do not expose", has
+ * no name on the screen at all under that wording.
  */
 export function labelFor(name: string, how?: How, mode?: CastMode): string {
   // Each field is labelled for the question it asks, and the input's *name* is
@@ -2047,7 +2632,7 @@ export function labelFor(name: string, how?: How, mode?: CastMode): string {
     if (mode === "template") return "The template";
     return "The cast";
   }
-  if (name.startsWith("expose_")) return "Keep as a setting";
+  if (name.startsWith("expose_")) return "Expose it as a setting";
   return "What fills it";
 }
 

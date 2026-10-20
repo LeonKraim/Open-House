@@ -43,16 +43,21 @@ import {
   castAutomationAnswers,
   castModeOf,
   castMenuOptions,
+  describeDraft,
+  draftSeed,
   editDecision,
   fieldIndex,
   hostedOutputs,
   howSelector,
+  isDeviceInput,
   labelFor,
   splitOutput,
   valueSelector,
+  whenAgo,
   type How,
   type InputDecision,
 } from "./host-module.ts";
+import type { DraftAnswers, ImportDraft } from "../api/drafts.ts";
 /** A blueprint input, with only the fields the rule under test reads. */
 function input_(selector = "text", rest: Partial<ModuleInputRow> = {}): ModuleInputRow {
   return {
@@ -67,6 +72,7 @@ function input_(selector = "text", rest: Partial<ModuleInputRow> = {}): ModuleIn
     satisfied: false,
     in_trigger: false,
     selector,
+    accepts_domains: [],
     options: [],
     ...rest,
   };
@@ -583,10 +589,16 @@ test("each field of an input's row is labelled for the question it asks", () => 
   // screen itself, in the same weight as every other heading -- a dropdown's
   // label is only a small caption, which is why the title could not be left to
   // it. What these labels answer is what each control *is*: the choice of how
-  // the input is filled, the value, and the act of keeping it as a setting.
+  // the input is filled, the value, and whether the row is exposed.
   assert.equal(labelFor("how_0"), "What fills it");
   assert.equal(labelFor("value_0"), "Value");
-  assert.equal(labelFor("expose_0"), "Keep as a setting");
+  // **The switch is labelled with the word the person arrives with.** It read
+  // "Keep as a setting", which names the mechanism and never once uses the word
+  // for the decision being made -- so somebody importing a blueprint and asking
+  // "what does this expose?" had to translate, and the unticked state, which is
+  // the whole of "do not expose", had no name on the screen at all.
+  assert.equal(labelFor("expose_0"), "Expose it as a setting");
+  assert.ok(!labelFor("expose_0").includes("Keep"));
   // The second field is named for what it holds: "Value" over a box holding
   // logic a person wrote is the wrong word for it.
   assert.equal(labelFor("value_0", "template"), "Condition or template");
@@ -1058,3 +1070,199 @@ test("a cast answers a row, so the card does not call it waiting", () => {
   );
 });
 
+
+// -- what an import left unfinished -----------------------------------------
+
+/**
+ * The rows one import had been given, covering every answer a row can hold.
+ *
+ * One of each on purpose. A round trip that is only checked with the two easy
+ * answers -- a literal and a device -- passes while every cast is quietly lost,
+ * and a cast is exactly the kind of answer somebody spends minutes on.
+ */
+function rows_(): InputDecision[] {
+  return [
+    { input: input_("text", { name: "message" }), how: "literal", value: "Night", expose: true, castMode: "none" },
+    { input: input_("entity", { name: "motion" }), how: "entity", value: "binary_sensor.hall", expose: false, castMode: "none" },
+    { input: input_("entity", { name: "lights" }), how: "slot", value: "light_group", expose: false, castMode: "none" },
+    { input: input_("number", { name: "brightness" }), how: "literal", value: 42, expose: true, castMode: "none" },
+    {
+      input: input_("number", { name: "condition_row" }),
+      how: "default",
+      value: undefined,
+      expose: false,
+      castMode: "condition",
+      condition: { condition: "state" },
+    },
+    {
+      input: input_("number", { name: "template_row" }),
+      how: "template",
+      value: "{{ states('sensor.lux') | int }}",
+      expose: false,
+      castMode: "none",
+    },
+    {
+      input: input_("number", { name: "flow_row" }),
+      how: "entity",
+      value: "sensor.lux",
+      expose: false,
+      castMode: "nodered",
+    },
+    {
+      input: input_("number", {
+        name: "automation_row",
+        automation_id: "open_house_x",
+        automation_entity: "input_boolean.open_house_x_helper",
+      }),
+      how: "default",
+      value: undefined,
+      expose: false,
+      castMode: "automation",
+      automation: "open_house_x",
+      helper: "input_boolean.open_house_x_helper",
+    },
+  ];
+}
+
+/** Those rows as the answers a save would send, which is what a draft keeps. */
+function answersOf_(decisions: readonly InputDecision[]): DraftAnswers {
+  const bound = decisions
+    .map((decision) => [decision.input.name, bindingFor(decision)] as const)
+    .filter((pair) => pair[1] !== null);
+  return {
+    title: "Night lights",
+    description: "",
+    author: "",
+    version: "1.0.0",
+    licence: "no_licence",
+    replace: false,
+    bindings: Object.fromEntries(bound) as Record<string, ModuleBinding>,
+    outputs: [],
+    settings: decisions
+      .filter((decision) => decision.expose && !isDeviceInput(decision.input))
+      .map((decision) => decision.input.name),
+    casts: castAnswers(decisions),
+    flows: castFlowAnswers(decisions),
+    automations: castAutomationAnswers(decisions),
+  };
+}
+
+/** The one thing about a row a person would notice being different. */
+function shape_(decision: InputDecision): unknown[] {
+  return [
+    decision.input.name,
+    decision.how,
+    decision.value,
+    decision.expose,
+    castModeOf(decision),
+    decision.cast,
+    decision.condition,
+    decision.automation,
+  ];
+}
+
+test("a draft resumed puts every row back the way it was left", () => {
+  // **The claim the whole feature rests on**, and the reason a draft keeps the
+  // save's own shape rather than a copy of the screen's: an unfinished import is
+  // put back by the same act that opens a module to change it, so this asserts
+  // that the answers that would have been saved rebuild the rows that gave them.
+  // Every kind of answer is in the fixture, because the one that would be lost
+  // silently is a cast -- a condition, a flow, an automation -- which is the
+  // answer somebody spent the longest on.
+  const before = rows_();
+  const resumed = before.map((decision) =>
+    editDecision(decision.input, draftSeed(answersOf_(before))),
+  );
+  assert.deepEqual(resumed.map(shape_), before.map(shape_));
+});
+
+test("a device row is never exposed, whatever a store's settings say", () => {
+  // The switch is not drawn on a device row, and a form reports only what it
+  // drew -- so a device input named in a module's own `settings` is a row the
+  // person can neither see nor turn off, and the *next* submission is what would
+  // quietly turn it off. Reading it as exposed here would be a row that
+  // disagrees with itself between being opened and being saved. It is reachable:
+  // `settings` is a list of names in a stored document, and nothing stops an
+  // older store -- or a hand-edited one -- naming a device input in it.
+  const seed = draftSeed({ ...answersOf_([]), settings: ["lux_sensor", "message"] });
+  assert.equal(editDecision(input_("entity"), seed).expose, false);
+  // And an ordinary input in that same store is still exposed: this is a rule
+  // about devices, not a switch that stopped working.
+  assert.equal(
+    editDecision(input_("text", { name: "message" }), seed).expose,
+    true,
+  );
+});
+
+test("a draft keeps which inputs were kept settable, and only those", () => {
+  // The switch is the one answer that is *not* visible in the row's value, so a
+  // draft that dropped it would hand back an import where every input had
+  // quietly become a setting -- a module with ten dials where the person had
+  // chosen two.
+  const before = rows_();
+  const seed = draftSeed(answersOf_(before));
+  assert.deepEqual(seed.settings, ["message", "brightness"]);
+  const resumed = before.map((decision) => editDecision(decision.input, seed));
+  assert.deepEqual(
+    resumed.filter((decision) => decision.expose).map((decision) => decision.input.name),
+    ["message", "brightness"],
+  );
+});
+
+/** A draft, with only the fields the list's own wording reads. */
+function draft_(rest: Partial<ImportDraft> = {}): ImportDraft {
+  return {
+    id: "automation:1700000000001",
+    title: "Night lights",
+    at: 1_700_000_000_000,
+    kind: "automation",
+    key: "1700000000001",
+    text: "",
+    answers: {
+      title: "Night lights",
+      description: "",
+      author: "",
+      version: "1.0.0",
+      licence: "no_licence",
+      replace: false,
+      bindings: {},
+      outputs: [],
+      settings: [],
+      casts: {},
+      flows: [],
+      automations: [],
+    },
+    ...rest,
+  };
+}
+
+test("a draft says which source it is about, in the words the list uses", () => {
+  assert.equal(describeDraft(draft_({ kind: "text", key: "" })), "pasted YAML");
+  assert.equal(
+    describeDraft(draft_({ kind: "blueprint", key: "blueprints/night.yaml" })),
+    "blueprint blueprints/night.yaml",
+  );
+  assert.equal(
+    describeDraft(draft_({ kind: "automation", key: "1700000000001" })),
+    "automation 1700000000001",
+  );
+});
+
+test("a draft says how long it has been sitting there without a clock", () => {
+  // The row's claim is "this has been left", so the answer is a phrase and not a
+  // timestamp: a person reading `14:32` has to work out how long ago that was,
+  // which is the one thing the row exists to tell them.
+  const now = 1_700_000_000_000;
+  const ago = (seconds: number) => whenAgo(now - seconds * 1000, now);
+  assert.equal(ago(0), "just now");
+  assert.equal(ago(44), "just now");
+  assert.equal(ago(60), "1 minute ago");
+  assert.equal(ago(600), "10 minutes ago");
+  assert.equal(ago(3600), "1 hour ago");
+  assert.equal(ago(3600 * 5), "5 hours ago");
+  assert.equal(ago(3600 * 24), "yesterday");
+  assert.equal(ago(3600 * 24 * 4), "4 days ago");
+  // A clock that has gone backwards -- a machine that was corrected, a document
+  // from another machine -- reads as "just now" rather than as a negative age.
+  assert.equal(whenAgo(now + 60_000, now), "just now");
+});

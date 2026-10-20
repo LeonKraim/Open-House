@@ -29,6 +29,7 @@ function row_(rest: Partial<ModuleInputRow> = {}): ModuleInputRow {
     satisfied: false,
     in_trigger: false,
     selector: "entity",
+    accepts_domains: [],
     options: [],
     ...rest,
   };

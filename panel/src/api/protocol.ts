@@ -178,6 +178,37 @@ export const COMMANDS = {
   slotSetParts: "open_house/slots/set_parts",
 
   /**
+   * `{ name, domains }` -> `{ slot, slots: { name, domains }[] }`.
+   *
+   * Add a slot to the house's own vocabulary: a role the catalog has no word for
+   * and no installed pack brought. This is the way out of the one dead end the
+   * import screen used to have -- a blueprint that toggles a helper asks for a
+   * device no room type provides, and until a person could declare the word there
+   * was nothing to answer that row with.
+   *
+   * `name` is what the *person* typed, and the server slugs it: "Toggle Helper"
+   * becomes `toggle_helper`, because a slot name is the key a room binds under.
+   * The answer carries the name the server made, so the row can select it without
+   * a second read. `domains` is what the slot accepts, and it must not be empty:
+   * what a slot accepts is what the room's picker filters by, so a slot accepting
+   * nothing is a row no device can be chosen for.
+   *
+   * **This edits the house's vocabulary, not just a setting** -- the same fact
+   * `slotSetParts` states, and the reason both go through the session.
+   */
+  slotDeclare: "open_house/slots/declare",
+
+  /**
+   * `{ slot }` -> `{ slot, slots: { name, domains }[] }`.
+   *
+   * Take a declared slot back out. Refused while a room or the house still binds
+   * it, and the refusal names where -- dropping the declaration under a binding
+   * would leave that binding naming a word the vocabulary no longer carries, which
+   * the rebuild the edit triggers refuses outright.
+   */
+  slotForget: "open_house/slots/forget",
+
+  /**
    * `{ room_id, pack, slot, kind, value, when, device }` -> `InstalledModule`.
    *
    * The "Set it to" half of a slot row: logic on the slot instead of a device a

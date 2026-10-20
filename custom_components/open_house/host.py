@@ -45,6 +45,7 @@ from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 
+from engine import custom_slots
 from engine.install import InstalledSet
 from engine.profiles import Profile, ProfileSet, load_profile_schema
 from ha_adapter import (
@@ -142,6 +143,13 @@ class OpenHouseHost:
         #: because the panel's commands run on the event loop, where a file read
         #: is a blocking call.
         self.catalog = catalog
+        #: The catalog as the *checkout* reads, before any slot a person declared
+        #: was joined in. Kept beside `self.catalog` because the join is not
+        #: invertible: a name taken back out of the declaration would survive in
+        #: the joined copy, so every rebuild of the two has to start from the
+        #: disk's answer (`_join_custom_slots`).
+        self._base_catalog = catalog
+        self._join_custom_slots()
         self._store = store
         self._activity_listeners: list[
             tuple[Callable[[Mapping[str, object]], None], str | None, str | None]
@@ -457,6 +465,110 @@ class OpenHouseHost:
             await self.async_reapply_module(pack, placed)
         return self.session.slot_parts
 
+    async def async_declare_slot(
+        self, name: str, domains: Sequence[str] = ()
+    ) -> Mapping[str, tuple[str, ...]]:
+        """Add a slot to the house's own vocabulary, or answer with what it holds.
+
+        **The one way a person may add a word the catalog does not have.** The
+        vocabulary is the catalog plus what installed packs declare, and neither
+        is a person: a blueprint that toggles a helper asks for a device no room
+        type provides, so the import screen offered nothing that fitted and the
+        row could not be answered at all. Declaring the slot here is what makes
+        that row answerable, and it is deliberately a *house* edit rather than a
+        module one -- the role is the house's, and a second module naming it later
+        finds it already there.
+
+        **A name the house already carries is refused, and that is the whole of
+        the check.** The catalog's words, a pack's declarations and the parts a
+        slot was split into are all names the house already has, and re-declaring
+        one would be a second answer to what it accepts -- a picker filtered by
+        the declaration where the binding layer resolved the catalog's. The
+        refusal says which of them it is, because the person's next move differs:
+        a catalog word needs no declaring, and a pack's means the pack is already
+        installed.
+
+        The name arrives as the *panel* spelled it (`engine.custom_slots.slug`),
+        because the person typed what they call the thing and a slot name is a key.
+        The rules are `engine/custom_slots.py`'s and not restated here: this
+        validates nothing the module does not, and turns its `SlotError` into the
+        one type a command path reports.
+        """
+        try:
+            updated = custom_slots.add(self.session.custom_slots, name, domains)
+        except custom_slots.SlotError as refusal:
+            raise LiveSessionError(str(refusal)) from refusal
+        if name in self.session.bindable_slots() and name not in (
+            self.session.custom_slots
+        ):
+            raise LiveSessionError(
+                f"this house already has a slot called {name!r}, so there is "
+                "nothing to declare: it is a word the catalog carries, or one an "
+                "installed pack brought with it, and both are already bindable"
+            )
+        self.session.set_custom_slots(updated)
+        self._join_custom_slots()
+        await self.async_save()
+        return self.session.custom_slots
+
+    async def async_forget_slot(self, name: str) -> Mapping[str, tuple[str, ...]]:
+        """Take a declared slot back out of the house's vocabulary.
+
+        **Refused while anything still binds it**, and for the reason
+        `async_set_slot_part` refuses to remove a part that holds a device: the
+        declaration is what makes the name a word the vocabulary carries, so
+        dropping it while a room or the house still names it would leave that
+        binding naming a word the rebuild this edit triggers refuses
+        (`engine.binding._validate`) -- a removal that takes the whole house down
+        rather than one that tidies a name. The refusal names the rooms, so a
+        person knows which page to go to.
+
+        A module built around the name is *not* refused, and deliberately: unlike
+        a part, a slot a module names is not what the module acts on -- the room
+        binds it -- so a module left naming a slot the house no longer has is a
+        module that waits, which is the state it was in before the slot was ever
+        declared. The panel's own module list shows it waiting, and re-importing
+        is a click.
+        """
+        held = self.session.custom_slot_bound_in(name)
+        if held:
+            named = ", ".join(repr(place) for place in held)
+            raise LiveSessionError(
+                f"the slot {name!r} holds a device bound in {named}, so it cannot "
+                "be taken away: those bindings name this slot, and taking it away "
+                "would leave them pointing at a role the house no longer has. "
+                "Unbind it first, then take it away"
+            )
+        try:
+            updated = custom_slots.remove(self.session.custom_slots, name)
+        except custom_slots.SlotError as refusal:
+            raise LiveSessionError(str(refusal)) from refusal
+        self.session.set_custom_slots(updated)
+        self._join_custom_slots()
+        await self.async_save()
+        return self.session.custom_slots
+
+    def _join_custom_slots(self) -> None:
+        """Rebuild the catalog's domains from the checkout's plus the declaration.
+
+        **From the base and not from the current catalog**, which is the whole
+        reason `_base_catalog` is kept: the join adds a name, and a name taken
+        back out of the declaration would survive in a copy that had already been
+        joined -- so a forgotten slot would go on being offered a picker until the
+        next restart, which is the opposite of what taking it away means.
+
+        A declared slot has to reach the catalog and not only the session: what a
+        slot accepts is the catalog's to say (`views.with_custom_slots`), and the
+        catalog is read once, when the host is built. Without this, a slot a person
+        just declared would be one the import screen offers and no room can be
+        given a device for until Home Assistant restarts.
+        """
+        from . import views
+
+        self.catalog = views.with_custom_slots(
+            self._base_catalog, self.session.custom_slots
+        )
+
     async def async_reapply_module(self, module: str, room_id: str) -> None:
         """Build one module again from where its slots now point.
 
@@ -761,6 +873,10 @@ class OpenHouseHost:
                 "slot_parts": {
                     parent: list(names)
                     for parent, names in self.session.slot_parts.items()
+                },
+                "custom_slots": {
+                    name: list(accepted)
+                    for name, accepted in self.session.custom_slots.items()
                 },
                 "room_settings": {
                     room_id: dict(values)
@@ -1125,6 +1241,10 @@ def _load(root: Path, build: Callable[[], LiveSession]) -> tuple[LiveSession, Ca
 
     session = build()
     live_modules.preload(session.root, session.user_root)
+    # The catalog as the *checkout* reads it, with no declared slot joined in.
+    # `OpenHouseHost` does the join, because it is the object that holds the
+    # declaration and has to be able to redo the join when one changes -- and the
+    # join is not invertible, so it always starts from this answer.
     return session, views.load_catalog(root)
 
 
@@ -1185,6 +1305,13 @@ def _session(
         # resolves exactly as it did, and `slot_parts.record_from` is the reader
         # that drops a row this version cannot use rather than refusing the house.
         slot_parts=slot_parts.record_from(stored.get("slot_parts")),
+        # Absent from a store written before a person could declare a slot, and
+        # the empty record is the honest reading there: the house has the words
+        # the catalog and its packs gave it and nothing of its own, which is
+        # exactly the house that was running then. `custom_slots.record_from` is
+        # the reader that drops a row this version cannot use rather than
+        # refusing the house.
+        custom_slots=custom_slots.record_from(stored.get("custom_slots")),
         # Absent from a store written before the field existed, and the empty
         # mapping is the honest reading there: the rooms are untuned and the
         # built-in defaults stand in, which is the house that was running then.

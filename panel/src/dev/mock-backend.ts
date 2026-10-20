@@ -1103,6 +1103,7 @@ const MODULE_INPUTS: ModuleInputRow[] = [
     // rendered, which is why `in_trigger` is the flag the cast picker reads.
     in_trigger: true,
     selector: "entity",
+    accepts_domains: ["binary_sensor"],
     options: [],
   },
   {
@@ -1117,6 +1118,7 @@ const MODULE_INPUTS: ModuleInputRow[] = [
     satisfied: true,
     in_trigger: false,
     selector: "number",
+    accepts_domains: [],
     options: [],
   },
 ];
@@ -1147,6 +1149,37 @@ const SLOT_WORDS: ModuleSlotWord[] = [
   { name: "ceiling_light", label: "Ceiling light", house_scope: false },
   { name: "motion_sensor", label: "Motion sensor", house_scope: false },
 ];
+
+/**
+ * The slots a person declared of their own, by name, with what each accepts.
+ *
+ * The mock's `SLOT_WORDS` is a fixed list, so the row that offers to add a slot
+ * would be offered with nothing to add it *to* -- the declaration would vanish on
+ * the next read and the row would be refused again. Written by `slotDeclare` and
+ * `slotForget`, and folded into `slotWords()` for the reason the server folds it
+ * into `known_slots()`: one list, one spelling.
+ */
+const DECLARED_SLOTS: Record<string, string[]> = {};
+
+/** The house's slot words, the declared ones included, as a dropdown offers them. */
+function slotWords(): ModuleSlotWord[] {
+  return [
+    ...SLOT_WORDS,
+    ...Object.keys(DECLARED_SLOTS).map((name) => ({
+      name,
+      label: name,
+      house_scope: false,
+    })),
+  ];
+}
+
+/** What `slotDeclare` and `slotForget` answer with: the declared record. */
+function declaredSlots(): { name: string; domains: string[] }[] {
+  return Object.entries(DECLARED_SLOTS).map(([name, domains]) => ({
+    name,
+    domains: [...domains],
+  }));
+}
 
 /** The licence codes a module may be saved under (`module_definitions.LICENCES`). */
 const LICENCES: string[] = [
@@ -1430,6 +1463,7 @@ const HOSTED_MODULES: HostedModule[] = [
         satisfied: true,
         in_trigger: false,
         selector: "number",
+        accepts_domains: [],
         options: [],
       },
     ],
@@ -2163,6 +2197,35 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
         parts: (SLOT_PARTS[slot] ?? []).map((entry) => ({ name: entry })),
       };
     }
+    case COMMANDS.slotDeclare: {
+      // A slot the house has of its own. The name is slugged the way the server
+      // slugs it -- "Toggle Helper" becomes `toggle_helper` -- so the row that
+      // typed the words selects the key the house binds under rather than the
+      // words it was refused for.
+      const name = String(payload.name)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "");
+      const slug = /^[0-9]/.test(name) ? `s_${name}` : name;
+      const domains = (payload.domains as string[] | undefined) ?? [];
+      if (!slug) throw new Error("a slot needs a name");
+      if (!domains.length) {
+        throw new Error(`the slot '${slug}' needs at least one domain`);
+      }
+      if (SLOT_WORDS.some((word) => word.name === slug)) {
+        throw new Error(`this house already has a slot called ${slug}`);
+      }
+      DECLARED_SLOTS[slug] = [...domains];
+      return { slot: slug, slots: declaredSlots() };
+    }
+    case COMMANDS.slotForget: {
+      const slot = String(payload.slot);
+      if (!(slot in DECLARED_SLOTS)) {
+        throw new Error(`this house has no slot of its own called ${slot}`);
+      }
+      delete DECLARED_SLOTS[slot];
+      return { slot, slots: declaredSlots() };
+    }
     case COMMANDS.moduleSetSlotRule: {
       // "Set it to", on a slot row. The same key space the device override uses,
       // because the two are one decision: a rule takes the device away from the
@@ -2550,7 +2613,7 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
           },
           inputs: MODULE_INPUTS,
           candidates: MODULE_CANDIDATES,
-          slots: SLOT_WORDS,
+          slots: slotWords(),
           rooms: roomsOf(ROOMS),
           licences: LICENCES,
           hosted: HOSTED_MODULES,
@@ -2575,7 +2638,7 @@ function answer(type: string, payload: Record<string, unknown>): unknown {
         },
         inputs: hosted.settings.map((setting) => ({ ...setting })),
         candidates: MODULE_CANDIDATES,
-        slots: SLOT_WORDS,
+        slots: slotWords(),
         rooms: roomsOf(ROOMS),
         licences: LICENCES,
         hosted: HOSTED_MODULES,

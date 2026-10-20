@@ -418,6 +418,34 @@ export class OpenHouseClient {
   }
 
   /**
+   * Declare a slot this house has of its own, and answer with the name it took.
+   *
+   * The way out of the import screen's one dead end: a blueprint that toggles a
+   * helper asks for a device the catalog has no word for, and until a person
+   * could add the word there was nothing to answer that row with. `name` is what
+   * the person typed and the *server* slugs it -- "Toggle Helper" comes back as
+   * `toggle_helper` -- so the answer's `slot` is what the row should select.
+   *
+   * `domains` is what the slot accepts and it must not be empty: what a slot
+   * accepts is what the room's picker filters by, so a slot accepting nothing is
+   * a role that could be declared and never bound. A row knows its own domains
+   * (`ModuleInputRow.accepts_domains`), which is what the blueprint asked for.
+   */
+  declareSlot(
+    name: string,
+    domains: readonly string[],
+  ): Promise<{ slot: string; slots: { name: string; domains: string[] }[] }> {
+    return this.call(COMMANDS.slotDeclare, { name, domains: [...domains] });
+  }
+
+  /** Take a declared slot back out. Refused while anything still binds it. */
+  forgetSlot(
+    slot: string,
+  ): Promise<{ slot: string; slots: { name: string; domains: string[] }[] }> {
+    return this.call(COMMANDS.slotForget, { slot });
+  }
+
+  /**
    * Set one of a module's slots to logic instead of a device ("Set it to").
    *
    * The same four kinds the module input rows offer, held by the slot rather than

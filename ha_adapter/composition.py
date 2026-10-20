@@ -62,6 +62,7 @@ from pathlib import Path
 
 from engine.behaviours import default_behaviours, enable_key
 from engine.binding import House, RoomScope
+from engine.custom_slots import grow as with_custom_slots
 from engine.decision_log import DecisionRecord
 from engine.engine import Clock, Engine
 from engine.install import InstalledSet
@@ -317,6 +318,7 @@ def build_live_house(
     house_settings: Mapping[str, object] | None = None,
     house_bindings: Mapping[str, str] | None = None,
     slot_parts: Mapping[str, tuple[str, ...]] | None = None,
+    custom_slots: Mapping[str, tuple[str, ...]] | None = None,
     room_settings: Mapping[str, Mapping[str, object]] | None = None,
     installed: InstalledSet | None = None,
     module_rooms: Mapping[str, str] | None = None,
@@ -373,6 +375,15 @@ def build_live_house(
     part no room can be given a device for -- and a module naming one would wait
     for a device the screen gave no way to bind.
 
+    `custom_slots` is the slots a *person* declared, by name, with what each
+    accepts (`engine/custom_slots.py`). The third and last growth, and the one
+    that starts from a word nothing else carries: the catalog is closed, a pack
+    brings what its manifest declares, and a blueprint that toggles a helper asks
+    for a device neither provides. It is read last so a declared name can never
+    displace a word the rest of the house is already written against -- though
+    the command layer refuses that collision before it is stored
+    (`OpenHouseHost.async_declare_slot`), and this is the belt to that braces.
+
     `room_settings` is the ROOM layer's recorded values, by room id and resolver
     key: the module a person switched on in the kitchen, the pack option they
     tuned there. Two things write that layer and this is where they meet. The
@@ -425,6 +436,13 @@ def build_live_house(
     # device of a room's own either way, and the record names the parent by the
     # key it binds under.
     vocabulary = with_slot_parts(vocabulary, slot_parts or {})
+    # And the slots a person declared of their own. Last, and read through the
+    # engine's own reader rather than reimplemented here, for the reason the
+    # other two growths state: a declared slot is a vocabulary word, the binding
+    # layer refuses a name the vocabulary does not carry, and a house whose
+    # declared word did not reach the engine would list the slot in its import
+    # screen and refuse the binding that makes it real.
+    vocabulary = with_custom_slots(vocabulary, custom_slots or {})
     document = house_document(house_name, rooms, vocabulary)
     house = House.from_document(
         document,

@@ -52,6 +52,8 @@ from typing import cast
 
 from engine.behaviours import enable_key
 from engine.binding import HouseScope, RoomScope, UnknownSlotError
+from engine.custom_slots import CustomSlots
+from engine.custom_slots import grow as with_custom_slots
 from engine.decision_log import DecisionRecord
 from engine.engine import Clock, Engine
 from engine.install import InstalledSet
@@ -170,6 +172,20 @@ class LiveSession:
     #: the parent's name, so the binding layer, the engine and the panel's slot
     #: list read it without knowing that parts exist.
     slot_parts: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    #: The slots a person declared of their own, by name, with what each accepts.
+    #:
+    #: `engine/custom_slots.py` owns the rules; this is where the record lives.
+    #: House-level like `slot_parts` and for the reason that module gives: the
+    #: catalog is closed, a blueprint that toggles a helper asks for a device no
+    #: room type provides, and until a person could add the word the import screen
+    #: offered nothing that fitted and the row could not be answered at all.
+    #:
+    #: It reaches the engine as vocabulary growth (`composition.build_live_house`)
+    #: exactly as a part does, and it is saved and restored beside `slot_parts`,
+    #: so a house that declared a slot reads the same after a restart as before
+    #: one -- which matters more here than for a part, because the *module* the
+    #: person imported is built around the name.
+    custom_slots: CustomSlots = field(default_factory=dict)
     #: Room-scope settings a person has set, by room id and resolver key.
     #:
     #: The room layer of the resolver, which `build_live_house` fills from the
@@ -233,6 +249,7 @@ class LiveSession:
         house_settings: Mapping[str, object] | None = None,
         house_bindings: Mapping[str, str] | None = None,
         slot_parts: Mapping[str, tuple[str, ...]] | None = None,
+        custom_slots: Mapping[str, tuple[str, ...]] | None = None,
         room_settings: Mapping[str, Mapping[str, object]] | None = None,
         installed: InstalledSet | None = None,
         profiles: ProfileSet | None = None,
@@ -268,6 +285,10 @@ class LiveSession:
             house_bindings=dict(house_bindings or {}),
             slot_parts={
                 parent: tuple(names) for parent, names in (slot_parts or {}).items()
+            },
+            custom_slots={
+                name: tuple(accepted)
+                for name, accepted in (custom_slots or {}).items()
             },
             room_settings={
                 room_id: dict(values)
@@ -371,6 +392,7 @@ class LiveSession:
                 house_settings=self.house_settings,
                 house_bindings=self.house_bindings,
                 slot_parts=self.slot_parts,
+                custom_slots=self.custom_slots,
                 room_settings=self.room_settings,
                 installed=self.installed,
                 module_rooms=self.module_rooms,
@@ -511,7 +533,15 @@ class LiveSession:
         # the rebuild applies, in the same order: a part of a pack's own device is
         # a part of a key the *declaration* brought, so the parts are read over
         # the extended vocabulary rather than beside it.
-        return frozenset(with_slot_parts(extended, self.slot_parts).slots)
+        extended = with_slot_parts(extended, self.slot_parts)
+        # And the slots a person declared of their own, last, because they are the
+        # only growth that starts from a word nothing else carries: a name the
+        # catalog, a pack or a split already brought is that one, and this growth
+        # would not add it anyway (`engine/custom_slots.grow`). Read here rather
+        # than in `with_declared_slots` because the record is the session's and
+        # not the registry's -- `known_slots` is what an import is checked
+        # against, and a name it did not carry is a name `rooms/bind` refuses.
+        return frozenset(with_custom_slots(extended, self.custom_slots).slots)
 
     def unbind(self, room_id: str, slot: str) -> LiveRoom | None:
         """Leave `slot` in `room_id` unbound, or the house's own binding for `HOUSE`."""
@@ -613,6 +643,45 @@ class LiveSession:
             parent: tuple(names) for parent, names in record.items() if names
         }
         self.rebuild()
+
+    def set_custom_slots(self, record: CustomSlots) -> None:
+        """Replace the slots a person declared and rebuild.
+
+        A rebuild for `set_slot_parts`' reason, one step further out: a declared
+        slot is a *vocabulary word* and not a setting, `engine/binding.py` refuses
+        a binding for a name the vocabulary does not carry, and the vocabulary is
+        built by a rebuild. So declaring a slot is the edit that makes a module
+        built around that name buildable at all -- which is the whole of why it
+        exists.
+
+        The caller has already validated the record (`engine/custom_slots`), so
+        there is nothing to refuse here: an unvalidated record would make this a
+        second place the rules live, and the rules have one home.
+        """
+        self.custom_slots = {
+            name: tuple(accepted) for name, accepted in record.items() if accepted
+        }
+        self.rebuild()
+
+    def custom_slot_bound_in(self, name: str) -> tuple[str, ...]:
+        """Everywhere a declared slot holds a device, by the name a person reads.
+
+        The refusal a *removal* is stated with, and `part_bound_in`'s twin one
+        level up. A declared slot may be bound in a room, or by the house, and
+        taking the declaration away while a binding still names it would leave
+        that room naming a word the vocabulary is about to stop carrying -- which
+        the very rebuild the removal triggers refuses
+        (`engine.binding._validate`), taking the whole house down rather than
+        tidying one name.
+
+        The rooms are named rather than counted, and the house's own binding is
+        named as itself, because a person reading the refusal has to know which
+        page to go to.
+        """
+        found = [room.name for room in self.rooms if name in room.bindings]
+        if name in self.house_bindings:
+            found.append("the house")
+        return tuple(found)
 
     def set_installed(self, installed: InstalledSet) -> None:
         """Replace the installed packs and rebuild."""
