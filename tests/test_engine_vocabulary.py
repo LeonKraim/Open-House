@@ -102,16 +102,22 @@ def test_the_house_scope_slots_come_from_the_room_type_catalog(
 
 
 def test_the_house_schema_is_the_frozen_one(vocabulary: Vocabulary) -> None:
-    """The schema the loader hands out is `schemas/house/1.0.0.json`.
+    """The schema the loader hands out is `schemas/house/1.1.0.json`.
 
     A falsifying implementation that carried a hand-written schema would validate
     a house against the engine's idea of a house rather than the frozen one, and
     the two would part company the first time the schema changed.
+
+    1.1.0 rather than 1.0.0, and the assertion names the *current* version on
+    purpose: 1.0.0 required at least one room, which made a house in a home with
+    no areas unsettable. This test is what would notice the path drifting back to
+    a version that refuses the house the setup flow makes.
     """
     assert vocabulary.house_schema["$id"] == (
-        "https://open-house.invalid/schemas/house/1.0.0.json"
+        "https://open-house.invalid/schemas/house/1.1.0.json"
     )
-    assert vocabulary.house_schema["schema_version"] == "1.0.0"
+    assert vocabulary.house_schema["schema_version"] == "1.1.0"
+    assert vocabulary.house_schema["supersedes"] == "1.0.0"
 
 
 def test_the_mode_schema_is_the_frozen_one(vocabulary: Vocabulary) -> None:
@@ -139,7 +145,7 @@ def test_a_missing_mode_schema_fails_naming_the_file(tmp_path: Path) -> None:
         "house:\n  slots: [light_group]\n", encoding="utf-8"
     )
     (tmp_path / "schemas" / "house").mkdir(parents=True)
-    (tmp_path / "schemas" / "house" / "1.0.0.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "schemas" / "house" / "1.1.0.json").write_text("{}", encoding="utf-8")
     with pytest.raises(MissingArtifactError) as raised:
         Vocabulary.load(tmp_path)
     assert raised.value.path == tmp_path / "schemas" / "mode" / "1.0.0.json"
@@ -198,7 +204,7 @@ def test_a_missing_house_schema_fails_naming_the_file(tmp_path: Path) -> None:
     )
     with pytest.raises(MissingArtifactError) as raised:
         Vocabulary.load(tmp_path)
-    assert raised.value.path == tmp_path / "schemas" / "house" / "1.0.0.json"
+    assert raised.value.path == tmp_path / "schemas" / "house" / "1.1.0.json"
 
 
 # --------------------------------------------------------------------------
@@ -268,7 +274,7 @@ def _tree(
         "slots:\n  - name: light_group\n    required: true\n",
     )
     write(tmp_path, "catalog/room_types.yaml", "house:\n  slots: [light_group]\n")
-    write(tmp_path, "schemas/house/1.0.0.json", "{}")
+    write(tmp_path, "schemas/house/1.1.0.json", "{}")
     write(tmp_path, "schemas/mode/1.0.0.json", "{}")
     if policy is not None:
         write(tmp_path, "catalog/pack-policy.yaml", policy)

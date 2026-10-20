@@ -696,17 +696,24 @@ def test_the_composition_builds_the_one_engine() -> None:
     assert isinstance(house.adapter, HAAdapter)
 
 
-def test_a_house_with_no_rooms_cannot_be_composed() -> None:
-    with pytest.raises(LiveHouseError):
-        build_live_house(
-            house_name="Empty",
-            rooms=[],
-            modes=("Home",),
-            transport=FakeHaTransport(),
-            vocabulary_root=paths.ROOT,
-            location=_LOCATION,
-            clock=VirtualClock.started_at(_STARTED_AT),
-        )
+def test_a_house_with_no_rooms_is_composed_rather_than_refused() -> None:
+    """The engine builds over zero rooms, which is what a fresh empty house is.
+
+    It refused one, and the refusal was the second half of the same bug the setup
+    flow had: the flow was taught to allow a house with no areas and this layer
+    still would not build one, so the integration came up with entities and a
+    panel and no host to answer the panel with.
+    """
+    house = build_live_house(
+        house_name="Empty",
+        rooms=[],
+        modes=("Home",),
+        transport=FakeHaTransport(),
+        vocabulary_root=paths.ROOT,
+        location=_LOCATION,
+        clock=VirtualClock.started_at(_STARTED_AT),
+    )
+    assert isinstance(house.engine, Engine)
 
 
 def test_an_area_id_is_projected_to_a_room_the_schema_accepts() -> None:

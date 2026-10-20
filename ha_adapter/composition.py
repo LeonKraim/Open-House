@@ -392,8 +392,13 @@ def build_live_house(
     the person outside their own panel. `LiveSession.set_rooms` is what prunes
     the record when a room is genuinely removed.
     """
-    if not rooms:
-        raise LiveHouseError("a live house needs at least one room")
+    # No floor on the room count. A house with none is a house that has been made
+    # and has nothing in it yet, which is the state a person is in the moment
+    # they finish setup in a home with no areas -- `schemas/house/1.1.0.json`
+    # supersedes the version that required one, and this composes the engine over
+    # whatever rooms there are, including none. The duplicate check below is the
+    # real invariant: zero rooms cannot collide, and one room cannot collide with
+    # itself.
     ids = [room.id for room in rooms]
     if len(set(ids)) != len(ids):
         raise LiveHouseError(f"two rooms share the id {ids}")

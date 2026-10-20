@@ -344,8 +344,11 @@ class LiveSession:
 
     def rebuild(self) -> None:
         """Build the engine these fields produce, reusing the adapter."""
-        if not self.rooms:
-            raise LiveSessionError("a house needs at least one room")
+        # An empty house rebuilds like any other. This used to refuse one, which
+        # made the panel unreachable in exactly the house the setup flow now
+        # allows: every read answers `not_ready` while there is no host, and
+        # there was no host without a room, so the screen that adds the first
+        # room could not load. `build_live_house` no longer refuses either.
         ids = [room.id for room in self.rooms]
         if len(set(ids)) != len(ids):
             raise LiveSessionError(f"two rooms share the id {ids}")

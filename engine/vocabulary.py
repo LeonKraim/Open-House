@@ -56,7 +56,13 @@ _PACK_POLICY_PATH = ("catalog", "pack-policy.yaml")
 #: and this answers a Phase 2 question -- what a declared behaviour's command
 #: means -- that no Phase 1 rule asks.
 _SERVICE_STATES_PATH = ("catalog", "services.yaml")
-_HOUSE_SCHEMA_PATH = ("schemas", "house", "1.0.0.json")
+#: The house schema's *current* version, which is not its first. 1.0.0 required
+#: at least one room; 1.1.0 supersedes it and removes that floor, because a house
+#: with no areas in Home Assistant is one a person can now set up. Naming the
+#: version here rather than resolving the tip at runtime is deliberate and
+#: matches how every other concept's path is written: which version is current is
+#: a decision this file states, not a search it performs.
+_HOUSE_SCHEMA_PATH = ("schemas", "house", "1.1.0.json")
 _MODE_SCHEMA_PATH = ("schemas", "mode", "1.0.0.json")
 
 #: The concept whose published versions *are* the engine's API versions, and the

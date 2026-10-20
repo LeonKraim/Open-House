@@ -80,12 +80,15 @@ def _empty_house() -> Mapping[str, object]:
     nor a file.
 
     Not a fixture, because a fixture is one of four *built* houses and "nothing"
-    is not one of them; and not literally roomless, because
-    `schemas/house/1.0.0.json` gives `rooms` a `minItems` of one, so the smallest
-    house the format can express is one room binding no slot. This one binds
-    nothing and makes no house-scope slot available, so no behaviour can resolve
-    anything in it -- which is what "empty" has to mean for a session that exists
-    to be read (`snapshot`, `get_decision_log`) or to have a pack checked against
+    is not one of them. One room binding no slot rather than no rooms at all, and
+    the reason is what "empty" means here rather than what the format allows:
+    `schemas/house/1.1.0.json` no longer floors `rooms` at one, so a roomless
+    house is expressible -- but this session exists to be *read* (`snapshot`,
+    `get_decision_log`) or to have a pack checked against it, and a house with a
+    room in it that resolves nothing answers those questions with a house-shaped
+    document, while one with no rooms answers them with an absence. The room is
+    the thing that makes "nothing is bound" observable. It binds nothing and
+    makes no house-scope slot available, so no behaviour can resolve anything in
     it.
 
     A function rather than a module constant so each session gets its own

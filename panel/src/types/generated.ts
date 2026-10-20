@@ -33,12 +33,12 @@ export const SCHEMA_VERSIONS = {
   "catalog/slots": "1.0.0",
   "engine-api": "1.0.0",
   "export-document": "1.1.0",
-  "house": "1.0.0",
+  "house": "1.1.0",
   "mode": "1.0.0",
   "pack-manifest": "1.4.0",
   "profile": "1.2.0",
   "room-type": "1.0.0",
-  "scenario": "1.0.0",
+  "scenario": "1.1.0",
   "slot": "1.0.0",
 } as const;
 
@@ -941,7 +941,7 @@ export interface ExportDocumentRoomBinding {
 }
 
 // ----------------------------------------------------------------------
-// house @ 1.0.0
+// house @ 1.1.0
 // ----------------------------------------------------------------------
 export interface House {
   /**
@@ -1437,7 +1437,7 @@ export interface RoomTypeSourceRoom {
 }
 
 // ----------------------------------------------------------------------
-// scenario @ 1.0.0
+// scenario @ 1.1.0
 // ----------------------------------------------------------------------
 export interface Scenario {
   /** What the scenario is for, in the author's words. Read by a human and carried nowhere else. */
@@ -1498,7 +1498,7 @@ export interface ScenarioGiven {
   enable_flags?: { [key: string]: unknown; };
   /**
    * A fixture's name -- minimal, messy, large or no_lux -- or an inline house document
-   * validating against schemas/house/1.0.0.json. Either way the house is built through the fake
+   * validating against schemas/house/1.1.0.json. Either way the house is built through the fake
    * adapter's own operations and is never loaded as a baked snapshot.
    */
   house: unknown;

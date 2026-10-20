@@ -336,7 +336,7 @@ def test_a_refusal_that_is_not_a_missing_thing_is_not_read_as_not_found() -> Non
     for sentence in (
         "the module 'bedtime' does not reach a slot 'light_group'; the slots it "
         "acts through are 'motion_sensor'",
-        "a house needs at least one room",
+        "the last room cannot be deleted; a house keeps at least one",
         "",
     ):
         assert missing(Exception(sentence)) is False

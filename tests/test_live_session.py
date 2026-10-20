@@ -120,9 +120,15 @@ def test_two_rooms_with_one_id_are_refused_at_construction() -> None:
         _session((_room(), _room()))
 
 
-def test_a_house_with_no_rooms_is_refused() -> None:
-    with pytest.raises(LiveSessionError, match="at least one room"):
-        _session(())
+def test_a_house_with_no_rooms_is_composed_rather_than_refused() -> None:
+    """An empty house is a house, and the panel has to be able to load over one.
+
+    This used to refuse, which made the setup flow's own output unusable: a home
+    with no areas sets up to exactly this, every read then answered `not_ready`
+    for want of a host, and the screen that adds the first room never loaded.
+    """
+    session = _session(())
+    assert session.rooms == ()
 
 
 def test_the_adapter_survives_a_rebuild() -> None:

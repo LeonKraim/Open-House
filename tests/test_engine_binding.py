@@ -114,13 +114,36 @@ def test_a_house_is_validated_against_the_frozen_schema(vocabulary: Vocabulary) 
     A falsifying implementation that trusted the document would reach a `KeyError`
     on the first missing field and a silent empty binding on the second, so the
     failure would name neither the house nor the field that made it invalid.
+
+    The violation is a room with an empty name rather than the `rooms: []` this
+    test used, because the schema no longer refuses that: `house/1.1.0.json`
+    supersedes the version whose `minItems` was 1, and an empty house is the one
+    the setup flow makes in a home with no areas.
     """
     with pytest.raises(InvalidHouseError) as raised:
         House.from_document(
-            {"name": "the test house", "rooms": [], "house_scope": {"slots": []}},
+            {
+                "name": "the test house",
+                "rooms": [{"id": "hall", "name": "", "type": "hallway", "bindings": {}}],
+                "house_scope": {"slots": []},
+            },
             vocabulary=vocabulary,
         )
-    assert raised.value.pointer == "/rooms"
+    assert raised.value.pointer == "/rooms/0/name"
+
+
+def test_a_house_with_no_rooms_is_a_valid_house(vocabulary: Vocabulary) -> None:
+    """Zero rooms validates, and resolves to a house that holds none.
+
+    The floor this replaces was a *format* rule rather than an engine one, and it
+    was wrong: it made a house in a home with no areas impossible to describe,
+    which is the state a person is in the moment they finish setting one up.
+    """
+    house = House.from_document(
+        {"name": "the test house", "rooms": [], "house_scope": {"slots": []}},
+        vocabulary=vocabulary,
+    )
+    assert house.rooms == ()
 
 
 def test_a_room_without_bindings_fails_at_that_room(vocabulary: Vocabulary) -> None:

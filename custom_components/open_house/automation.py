@@ -207,8 +207,14 @@ async def async_setup_automation(
     take even that away. The composed engine is not built here any more -- it is
     the session's, built once by the host, so that the panel's edits and the tick
     are the same object and cannot disagree.
+
+    A house with no rooms ticks like any other, and ticking is what notices when
+    one is added: a panel edit replaces the session's rooms and rebuilds the
+    engine, so a house that starts empty begins automating the moment its first
+    room exists. Refusing to start here would have left it inert instead -- and
+    the roomless house is exactly the one the setup flow now allows.
     """
-    if host is None or not runtime.rooms:
+    if host is None:
         return None
     automation = HomeAutomation(hass, entry, runtime, host)
     automation.async_start()

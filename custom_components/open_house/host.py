@@ -651,8 +651,17 @@ class OpenHouseHost:
         from . import modules as module_hosting
 
         room = self.require_room(room_id)
+        # The last room is not deletable, and this is a choice rather than the
+        # format's floor: `schemas/house/1.1.0.json` allows a house with no
+        # rooms, and the setup flow now makes one. What it stops is *arriving*
+        # there by deleting -- a house's bindings, its module placements, its
+        # profile edits all hang off the room they were made in, and the last
+        # delete is one click that would take the whole house's configuration
+        # with it. A house that was set up empty was set up that way on purpose.
         if len(self.session.rooms) <= 1:
-            raise ValueError("a house needs at least one room")
+            raise ValueError(
+                "the last room cannot be deleted; a house keeps at least one"
+            )
         placed = [
             record.slug
             for record in await module_hosting.async_records(self.hass)
@@ -1029,9 +1038,15 @@ async def async_setup_host(
     `async_setup_automation`: an instance with entities but no automation is
     still one a person can look at, and refusing the whole entry would take the
     panel away too -- which is the screen that would explain what is missing.
+
+    A house with **no rooms** is composed like any other, and used to not be:
+    this returned `None` for one, so an instance set up in a home with no areas
+    had no host, every command answered `not_ready`, and the panel that adds the
+    first room sat on "Reading the house" for ever. The catalog is the only thing
+    whose absence is fatal here.
     """
     root = catalog_root()
-    if root is None or not runtime.rooms:
+    if root is None:
         return None
 
     store: Store[dict[str, Any]] = Store(
