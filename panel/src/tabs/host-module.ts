@@ -2775,6 +2775,9 @@ const TYPE_WORDS: Readonly<Record<string, string>> = {
   input_select: "Select",
   input_text: "Text",
   input_datetime: "Date & Time",
+  // Acronyms a person reads as words, not as capitalised syllables.
+  mqtt: "MQTT",
+  zigbee: "Zigbee",
 };
 
 /** `ambient_light_sensor` -> `Ambient Light Sensor`, for a domain off the table. */
