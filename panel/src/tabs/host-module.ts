@@ -447,6 +447,16 @@ export class HostModuleScreen extends OpenHouseElement {
   private slots: ModuleSlotWord[] = [];
   /** The row whose slot is being declared right now, by input name; `""` for none. */
   private declaring = "";
+  /**
+   * What the person said a not-yet-declared slot accepts, by input name.
+   *
+   * Only read for a row the blueprint left silent about the domain -- a
+   * blueprint that does say keeps its own answer, which is the better one. Kept
+   * on the screen rather than in the row's decision because it is not part of
+   * the module: it is the argument to a declaration, and once the slot exists
+   * the row is answered with the slot's name like any other.
+   */
+  private declaringDomains: Record<string, string> = {};
 
   /**
    * The address a **browser** opens Node-RED at, or empty when none is set.
@@ -1750,10 +1760,19 @@ export class HostModuleScreen extends OpenHouseElement {
    * to add it. What the new slot accepts is **what the blueprint asked for**
    * (`ModuleInputRow.accepts_domains`): a blueprint that toggles a helper names
    * `input_boolean` in its own selector, and that is the whole of what the slot
-   * has to accept for a room's picker to offer the right devices. A row whose
-   * selector names no domain is offered nothing, because a slot that accepts
-   * nothing is a role that could be declared and never bound -- the declaration
-   * is refused there, and the sentence says which case this is.
+   * has to accept for a room's picker to offer the right devices.
+   *
+   * **A blueprint that names no domain is asked, not refused.** A slot must
+   * accept at least one domain or there is nothing for a room's picker to
+   * filter by (`engine/custom_slots.py` is the rule), but only the *blueprint*
+   * was ever consulted for one -- and plenty of them say nothing at all. A
+   * Blackshome blueprint asks for `entity: multiple: true` with no domain under
+   * it, which is a blueprint asking for a device and leaving the kind to the
+   * person. Refusing there turned the one row that most needed the declaration
+   * into the one row that could not have it: Smart Light's "Scenes & Scripts -
+   * Toggle Helper" is exactly that shape, and it is the input that sent somebody
+   * to this screen. The document's silence is not an answer, so the row asks the
+   * person directly and declares what they say.
    *
    * The server slugs the name, so the row selects what comes back rather than
    * what was typed: "Toggle Helper" becomes `toggle_helper`, and a row still
@@ -1767,24 +1786,49 @@ export class HostModuleScreen extends OpenHouseElement {
     const typed = typeof decision.value === "string" ? decision.value.trim() : "";
     if (!typed) return nothing;
     if (this.slots.some((slot) => slot.name === typed)) return nothing;
-    const domains = decision.input.accepts_domains ?? [];
-    if (!domains.length) {
-      return html`<p class="help warn">
-        This house has no slot called <code>${typed}</code>, and the blueprint
-        does not say what kind of device this input takes -- so there is nothing
-        to add. Answer it with one of the house's own slots instead.
+    const busy = this.declaring === decision.input.name;
+    const { accepts, asked } = slotDeclaration(
+      decision.input,
+      this.declaringDomains[decision.input.name] ?? "",
+    );
+    const add = html`<button
+      type="button"
+      ?disabled=${busy || accepts.length === 0}
+      @click=${() => this.declareSlot(decision, index, typed, accepts)}
+    >
+      ${busy
+        ? "Adding…"
+        : accepts.length
+          ? `Add it as a slot for ${accepts.join(" / ")}`
+          : "Add it"}
+    </button>`;
+    if (!asked) {
+      return html`<p class="help">
+        This house has no slot called <code>${typed}</code>. ${add}
       </p>`;
     }
-    const busy = this.declaring === decision.input.name;
     return html`<p class="help">
-      This house has no slot called <code>${typed}</code>.
-      <button
-        type="button"
+      This house has no slot called <code>${typed}</code>. The blueprint does
+      not say what kind of device it takes, so say what this slot accepts:
+      <select
         ?disabled=${busy}
-        @click=${() => this.declareSlot(decision, index, typed, domains)}
+        .value=${this.declaringDomains[decision.input.name] ?? ""}
+        @change=${(event: Event) => {
+          this.declaringDomains = {
+            ...this.declaringDomains,
+            [decision.input.name]: (event.target as HTMLSelectElement).value,
+          };
+          this.requestUpdate();
+        }}
       >
-        ${busy ? "Adding…" : `Add it as a slot for ${domains.join(" / ")}`}
-      </button>
+        <option value="">What it takes…</option>
+        ${DOMAIN_CHOICES.map(
+          (choice) => html`<option value=${choice.value}>
+            ${choice.label}
+          </option>`,
+        )}
+      </select>
+      ${add}
     </p>`;
   }
 
@@ -2487,6 +2531,39 @@ export function hostedOutputs(hosted: readonly HostedModule[]): string[] {
  * control `bySelector` would give such a selector therefore never renders for one
  * -- but the set is one question asked in two places, so it is written once.
  */
+/**
+ * What a slot a person declares may accept, when the blueprint did not say.
+ *
+ * A **floor**, not the vocabulary: these are the domains a device role is
+ * plausibly made of, spelled the way Home Assistant spells them, so the person
+ * picks a thing rather than typing `input_boolean` from memory. The server
+ * accepts any domain string, so a house that needs one of the rest is not shut
+ * out -- it is only this menu that would have to grow, and growing it is one
+ * row here.
+ *
+ * `input_boolean` leads because it is the case that asked for this: a blueprint
+ * that toggles a helper names no domain at all, and "Toggle Helper" is what the
+ * person typed to say so.
+ */
+const DOMAIN_CHOICES: readonly { value: string; label: string }[] = [
+  { value: "input_boolean", label: "input_boolean -- a toggle helper" },
+  { value: "switch", label: "switch" },
+  { value: "light", label: "light" },
+  { value: "binary_sensor", label: "binary_sensor" },
+  { value: "sensor", label: "sensor" },
+  { value: "button", label: "button" },
+  { value: "fan", label: "fan" },
+  { value: "cover", label: "cover" },
+  { value: "lock", label: "lock" },
+  { value: "media_player", label: "media_player" },
+  { value: "climate", label: "climate" },
+  { value: "scene", label: "scene" },
+  { value: "script", label: "script" },
+  { value: "select", label: "select" },
+  { value: "number", label: "number" },
+  { value: "vacuum", label: "vacuum" },
+];
+
 const DEVICE_SELECTORS: ReadonlySet<string> = new Set([
   "entity",
   "target",
@@ -2564,6 +2641,31 @@ const HOWS: readonly { value: How; label: string }[] = [
  * option comes back beside the two slots, and the person can keep it or move it
  * to a slot themselves. Nothing here offers a *new* device answer.
  */
+/**
+ * What a row holding an unknown slot name would declare, and who decided it.
+ *
+ * **The blueprint's answer wins when it has one.** `accepts_domains` is the
+ * blueprint's own selector read back, so it is the only thing that knows what
+ * the input was written for -- a blueprint that names `input_boolean` gets a
+ * slot for exactly that, with no question asked.
+ *
+ * **Its silence is a question, not an answer.** Plenty of blueprints ask for
+ * `entity` and name no domain underneath, leaving the kind of device to whoever
+ * fills the row. `asked` says which of the two happened, because the row draws a
+ * choice for one and a plain button for the other, and `accepts` is empty until
+ * that choice is made -- a declaration with no domain is the one shape the
+ * server refuses (`engine/custom_slots.py`), so the button has to wait for it
+ * rather than send it.
+ */
+export function slotDeclaration(
+  input: ModuleInputRow,
+  chosen: string,
+): { accepts: string[]; asked: boolean } {
+  const declared = input.accepts_domains ?? [];
+  if (declared.length) return { accepts: [...declared], asked: false };
+  return { accepts: chosen ? [chosen] : [], asked: true };
+}
+
 export function howSelector(
   input: ModuleInputRow,
   current: How,

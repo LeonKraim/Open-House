@@ -51,6 +51,7 @@ import {
   howSelector,
   isDeviceInput,
   labelFor,
+  slotDeclaration,
   splitOutput,
   valueSelector,
   whenAgo,
@@ -1192,6 +1193,37 @@ test("a device row is never exposed, whatever a store's settings say", () => {
     editDecision(input_("text", { name: "message" }), seed).expose,
     true,
   );
+});
+
+test("a blueprint that names no domain is asked what the slot takes", () => {
+  // Smart Light's "Scenes & Scripts - Toggle Helper" is `entity` with no domain
+  // under it -- the blueprint asks for a device and leaves the kind to the
+  // person. Refusing the declaration there made the one row that most needed it
+  // the one row that could not have it, which is the dead end the declaration
+  // exists to remove.
+  const silent = input_("entity");
+  // Nothing is declared until the person says what it takes: a slot accepting
+  // nothing is the shape the server refuses, and a button that sends it is a
+  // press that cannot work.
+  assert.deepEqual(slotDeclaration(silent, ""), { accepts: [], asked: true });
+  assert.deepEqual(slotDeclaration(silent, "input_boolean"), {
+    accepts: ["input_boolean"],
+    asked: true,
+  });
+
+  // A blueprint that does name one is not asked -- its answer is the better
+  // one, because the selector is the only thing that knows what the input was
+  // written for.
+  const named = input_("entity", { accepts_domains: ["light"] });
+  assert.deepEqual(slotDeclaration(named, ""), {
+    accepts: ["light"],
+    asked: false,
+  });
+  // And a leftover choice cannot override it.
+  assert.deepEqual(slotDeclaration(named, "switch"), {
+    accepts: ["light"],
+    asked: false,
+  });
 });
 
 test("a draft keeps which inputs were kept settable, and only those", () => {
