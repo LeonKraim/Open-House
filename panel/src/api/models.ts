@@ -1272,4 +1272,16 @@ export interface ModuleSlotWord {
    * screen inferring it from the name.
    */
   house_scope: boolean;
+  /**
+   * The domains the role takes, which is its *type*: `light_group` accepts
+   * `light`, `motion_sensor` accepts `binary_sensor`.
+   *
+   * What an input's own selector asked for (`ModuleInputRow.accepts_domains`)
+   * is the other half of the same question, and the two are compared when the
+   * row is offered a slot: a row that takes a light is not answered with the
+   * house's motion sensor. Empty when nothing declared a type for it -- a
+   * fixture or a pack's own role -- which is read as "not known" rather than
+   * "takes nothing", so such a slot is still offered.
+   */
+  accepts_domains: string[];
 }

@@ -1774,6 +1774,14 @@ export class HostModuleScreen extends OpenHouseElement {
    * to this screen. The document's silence is not an answer, so the row asks the
    * person directly and declares what they say.
    *
+   * **The name follows the type when nobody has given one.** A row the
+   * blueprint has typed ("this input takes a light") has a name it should have
+   * (`defaultSlotName`): "Light Slot". So the row offers to add *that* even
+   * when the value field is empty -- which is the state a freshly opened import
+   * is in, and the reason a house with no light slot showed a person an empty
+   * menu and nothing to do about it. A name the person did type is theirs and
+   * is what gets added; the derived one is the default, not an override.
+   *
    * The server slugs the name, so the row selects what comes back rather than
    * what was typed: "Toggle Helper" becomes `toggle_helper`, and a row still
    * holding the typed words would go on being refused after being fixed.
@@ -1784,27 +1792,58 @@ export class HostModuleScreen extends OpenHouseElement {
   ): TemplateResult | typeof nothing {
     if (decision.how !== "slot") return nothing;
     const typed = typeof decision.value === "string" ? decision.value.trim() : "";
-    if (!typed) return nothing;
-    if (this.slots.some((slot) => slot.name === typed)) return nothing;
     const busy = this.declaring === decision.input.name;
     const { accepts, asked } = slotDeclaration(
       decision.input,
       this.declaringDomains[decision.input.name] ?? "",
     );
+    // A type the house can already answer is a row with a menu to pick from,
+    // not a row with nothing: the role the house has is the answer, and the
+    // person is the one who picks it.
+    if (
+      !typed &&
+      this.slots.some((slot) => slotFits(decision.input, slot))
+    ) {
+      return nothing;
+    }
+    // What the slot will be called: what the person typed, or -- when they have
+    // not named one -- what its type calls itself. Neither, for a blueprint
+    // that names no domain and a row holding no name, is a row with nothing to
+    // offer: which slot is meant is exactly what is unknown there.
+    const proposed = typed || defaultSlotName(accepts);
+    if (!proposed) return nothing;
+    // Compared by the words a person reads as well as the key: a slot the house
+    // already has is not offered to be declared again under a new spelling.
+    const known = this.slots.some(
+      (slot) =>
+        slot.name === proposed ||
+        slot.label.toLowerCase() === proposed.toLowerCase(),
+    );
+    if (known) return nothing;
     const add = html`<button
       type="button"
       ?disabled=${busy || accepts.length === 0}
-      @click=${() => this.declareSlot(decision, index, typed, accepts)}
+      @click=${() => this.declareSlot(decision, index, proposed, accepts)}
     >
       ${busy
         ? "Adding…"
-        : accepts.length
-          ? `Add it as a slot for ${accepts.join(" / ")}`
-          : "Add it"}
+        : typed
+          ? accepts.length
+            ? `Add it as a slot for ${accepts.join(" / ")}`
+            : "Add it"
+          : `Add “${proposed}”`}
     </button>`;
     if (!asked) {
+      if (typed) {
+        return html`<p class="help">
+          This house has no slot called <code>${typed}</code>. ${add}
+        </p>`;
+      }
+      // Nothing typed and a type named: the type is the whole answer, and the
+      // name it gives the role is the default -- so the row is one sentence and
+      // one button rather than a menu with nothing in it.
       return html`<p class="help">
-        This house has no slot called <code>${typed}</code>. ${add}
+        This house has no ${accepts.join(" / ")} slot yet. ${add}
       </p>`;
     }
     return html`<p class="help">
@@ -2471,10 +2510,18 @@ export function valueSelector(
     // -- so naming one of the others globally would promise a resolution nothing
     // makes, and the module would wait for a device it could never be given.
     // Offering the two lists separately is what makes the choice honest.
-    const offered =
+    const byScope =
       decision.how === "global_slot"
         ? slots.filter((slot) => slot.house_scope)
         : slots;
+    // **Only roles of the kind this input takes.** A slot carries its type
+    // (`ModuleSlotWord.accepts_domains`), and so does the input, and a row that
+    // takes a light is not answered with the house's motion sensor: the module
+    // would wait for a device its room's picker would never offer for it. The
+    // menu is where the two are compared, because it is the one place both are
+    // known at once -- and where nothing narrows it the row is simply offered
+    // every role, as before.
+    const offered = byScope.filter((slot) => slotFits(decision.input, slot));
     return {
       select: {
         mode: "dropdown",
@@ -2664,6 +2711,79 @@ export function slotDeclaration(
   const declared = input.accepts_domains ?? [];
   if (declared.length) return { accepts: [...declared], asked: false };
   return { accepts: chosen ? [chosen] : [], asked: true };
+}
+
+/**
+ * The name a slot of this type is given: `["light"]` -> `"Light Slot"`.
+ *
+ * **The name follows the type, so it does not have to be typed.** A person
+ * answering a device row was asked to name the role and to say what it takes,
+ * which is the same question twice for the commonest case: if the blueprint
+ * wants a light, the slot a house lacks is the house's light slot, and the name
+ * "Light Slot" says which type it is to every reader of the house afterwards.
+ * The server slugs it (`Light Slot` -> `light_slot`), so the stored key and the
+ * words on the screen are the same name (`engine/custom_slots.slug`).
+ *
+ * The first named domain decides. A selector that takes two kinds is one slot
+ * of both types, and the name can only carry one of them; the type the row is
+ * filtered by is the whole list, so nothing is lost but the word.
+ *
+ * Empty for a blueprint that named no domain: there is no type to derive from,
+ * and the person names the slot themselves (`slotDeclaration.asked`).
+ */
+export function defaultSlotName(domains: readonly string[]): string {
+  const first = (domains ?? [])[0];
+  if (!first) return "";
+  const words = TYPE_WORDS[first] ?? titleWords(first);
+  return `${words} Slot`;
+}
+
+/**
+ * Whether a role is one an input of this type can be answered with.
+ *
+ * **A slot's type is what it accepts, and an input's type is what its selector
+ * asked for.** The comparison is an intersection: a slot taking `light` fits a
+ * row asking for `light`, and a row that names two domains fits a slot that
+ * takes either.
+ *
+ * **An empty list on either side is unknown, not "matches nothing".** A pack's
+ * role and a fixture may carry no domains, and an input may name none at all
+ * (`slotDeclaration.asked` is where that is asked about); hiding those would
+ * take away roles that are in fact bindable, so they stay in the menu and the
+ * person is the one who decides they do not fit.
+ */
+export function slotFits(input: ModuleInputRow, slot: ModuleSlotWord): boolean {
+  const wanted = input.accepts_domains ?? [];
+  const takes = slot.accepts_domains ?? [];
+  if (!wanted.length || !takes.length) return true;
+  return wanted.some((domain) => takes.includes(domain));
+}
+
+/**
+ * The words a domain is written in: `binary_sensor` -> `Binary Sensor`.
+ *
+ * One table, because the names a person reads should be the same ones the
+ * domain picker offers (`DOMAIN_CHOICES`) -- a slot called "Toggle Helper Slot"
+ * for the type the picker calls "a toggle helper" is one vocabulary, and a word
+ * invented twice is a word that drifts.
+ */
+const TYPE_WORDS: Readonly<Record<string, string>> = {
+  input_boolean: "Toggle Helper",
+  binary_sensor: "Binary Sensor",
+  media_player: "Media Player",
+  input_number: "Number",
+  input_select: "Select",
+  input_text: "Text",
+  input_datetime: "Date & Time",
+};
+
+/** `ambient_light_sensor` -> `Ambient Light Sensor`, for a domain off the table. */
+function titleWords(domain: string): string {
+  return domain
+    .split("_")
+    .filter((word) => word)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
 }
 
 export function howSelector(

@@ -1145,9 +1145,24 @@ const MODULE_CANDIDATES: ModuleCandidate[] = [
 
 /** The house's slot words, as a dropdown offers them. */
 const SLOT_WORDS: ModuleSlotWord[] = [
-  { name: "ambient_light_sensor", label: "Ambient light sensor", house_scope: false },
-  { name: "ceiling_light", label: "Ceiling light", house_scope: false },
-  { name: "motion_sensor", label: "Motion sensor", house_scope: false },
+  {
+    name: "ambient_light_sensor",
+    label: "Ambient light sensor",
+    house_scope: false,
+    accepts_domains: ["sensor"],
+  },
+  {
+    name: "ceiling_light",
+    label: "Ceiling light",
+    house_scope: false,
+    accepts_domains: ["light"],
+  },
+  {
+    name: "motion_sensor",
+    label: "Motion sensor",
+    house_scope: false,
+    accepts_domains: ["binary_sensor"],
+  },
 ];
 
 /**
@@ -1169,6 +1184,7 @@ function slotWords(): ModuleSlotWord[] {
       name,
       label: name,
       house_scope: false,
+      accepts_domains: [...(DECLARED_SLOTS[name] ?? [])],
     })),
   ];
 }

@@ -43,6 +43,7 @@ import {
   castAutomationAnswers,
   castModeOf,
   castMenuOptions,
+  defaultSlotName,
   describeDraft,
   draftSeed,
   editDecision,
@@ -52,6 +53,7 @@ import {
   isDeviceInput,
   labelFor,
   slotDeclaration,
+  slotFits,
   splitOutput,
   valueSelector,
   whenAgo,
@@ -446,8 +448,18 @@ test("a global slot offer lists only the roles the house answers", () => {
   // given. The room's own list keeps every role, because every role can be
   // bound in a room.
   const slots = [
-    { name: "light_group", label: "Light group", house_scope: true },
-    { name: "fridge_contact", label: "Fridge contact", house_scope: false },
+    {
+      name: "light_group",
+      label: "Light group",
+      house_scope: true,
+      accepts_domains: ["light"],
+    },
+    {
+      name: "fridge_contact",
+      label: "Fridge contact",
+      house_scope: false,
+      accepts_domains: ["binary_sensor"],
+    },
   ];
   const room = valueSelector(decision_("slot", ""), [], slots) as {
     select: { options: { value: string }[]; custom_value?: boolean };
@@ -468,6 +480,48 @@ test("a global slot offer lists only the roles the house answers", () => {
   // type that the list does not already carry.
   assert.equal(room.select.custom_value, true);
   assert.equal(house.select.custom_value, false);
+});
+
+test("a row is offered only the roles its own type fits", () => {
+  // The menu is where the two types meet: an input that takes a light is not
+  // answering itself with the house's motion sensor. Both roles below are in
+  // the house; only one of them is a light.
+  const slots = [
+    {
+      name: "light_group",
+      label: "Light group",
+      house_scope: true,
+      accepts_domains: ["light"],
+    },
+    {
+      name: "motion_sensor",
+      label: "Motion sensor",
+      house_scope: true,
+      accepts_domains: ["binary_sensor"],
+    },
+  ];
+  const light = {
+    input: input_("entity", { accepts_domains: ["light"] }),
+    how: "slot" as const,
+    value: "",
+    expose: false,
+  };
+  const offered = valueSelector(light, [], slots) as {
+    select: { options: { value: string }[] };
+  };
+  assert.deepEqual(
+    offered.select.options.map((option) => option.value),
+    ["light_group"],
+  );
+  // A row that names no type is not narrowed at all: there is nothing to
+  // compare, and hiding roles there would take away answers that do work.
+  const any = valueSelector(decision_("slot", "", "entity"), [], slots) as {
+    select: { options: { value: string }[] };
+  };
+  assert.deepEqual(
+    any.select.options.map((option) => option.value),
+    ["light_group", "motion_sensor"],
+  );
 });
 
 test("a slot row with no name chosen is no binding", () => {
@@ -1224,6 +1278,57 @@ test("a blueprint that names no domain is asked what the slot takes", () => {
     accepts: ["light"],
     asked: false,
   });
+});
+
+test("a slot's default name is its type's name", () => {
+  // The name a role is given is the type it takes, because that is the fact the
+  // blueprint already stated and the person should not have to type twice. A
+  // house importing Smart Light with no light slot gets "Light Slot" proposed,
+  // and the server slugs it to `light_slot`.
+  assert.equal(defaultSlotName(["light"]), "Light Slot");
+  assert.equal(defaultSlotName(["binary_sensor"]), "Binary Sensor Slot");
+  assert.equal(defaultSlotName(["input_boolean"]), "Toggle Helper Slot");
+  assert.equal(defaultSlotName(["humidifier"]), "Humidifier Slot");
+  // No type is no name: the person names the slot, and the row asks them what
+  // it takes instead of proposing one.
+  assert.equal(defaultSlotName([]), "");
+});
+
+test("only roles of the input's own type are offered", () => {
+  // A slot's type is what it accepts and an input's type is what its selector
+  // asked for, so a row that takes a light is not answered with the house's
+  // motion sensor -- the module would wait for a device its room could never
+  // offer for that role.
+  const light = input_("entity", { accepts_domains: ["light"] });
+  const group = {
+    name: "light_group",
+    label: "Light group",
+    house_scope: true,
+    accepts_domains: ["light"],
+  };
+  const motion = {
+    name: "motion_sensor",
+    label: "Motion sensor",
+    house_scope: true,
+    accepts_domains: ["binary_sensor"],
+  };
+  assert.equal(slotFits(light, group), true);
+  assert.equal(slotFits(light, motion), false);
+  // A row asking for either kind fits a slot of either one.
+  const either = input_("entity", { accepts_domains: ["light", "switch"] });
+  assert.equal(slotFits(either, group), true);
+  // Unknown on either side is not a mismatch: a role that declares no type and
+  // an input that names no domain stay offered and the person decides.
+  assert.equal(slotFits(input_("entity"), motion), true);
+  assert.equal(
+    slotFits(light, {
+      name: "pack_role",
+      label: "Pack role",
+      house_scope: false,
+      accepts_domains: [],
+    }),
+    true,
+  );
 });
 
 test("a draft keeps which inputs were kept settable, and only those", () => {

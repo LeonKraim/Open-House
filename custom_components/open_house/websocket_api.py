@@ -2273,11 +2273,19 @@ async def ws_modules_read(
             # -- any other role has no global binding it would ever resolve, so
             # offering one here would be offering a promise the build cannot
             # keep.
+            # **A role's type rides with its name**, because a slot is not
+            # offered to every row the same way: a blueprint that takes a light
+            # cannot be answered with the house's motion sensor, so the menu is
+            # filtered by what each side accepts (`panel/src/tabs/host-module.ts`,
+            # `slotFits`). The join is the same one a room's bind picker gets
+            # (`views.slot_domains`), so a slot means the same type wherever it
+            # is drawn, and a *part* of a role carries its parent's.
             "slots": [
                 {
                     "name": name,
                     "label": _slot_label(name),
                     "house_scope": name in house_scope_slots,
+                    "accepts_domains": list(views.slot_domains(host, name)),
                 }
                 for name in host.known_slots()
             ],

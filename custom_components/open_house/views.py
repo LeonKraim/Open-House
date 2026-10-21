@@ -524,7 +524,7 @@ def binding_statuses(
     result: list[Mapping[str, object]] = []
     for slot in sorted(slots):
         entity_id = room.bindings.get(slot)
-        accepted = _slot_domains(host, slot)
+        accepted = slot_domains(host, slot)
         status: Mapping[str, object] = {
             "slot": slot,
             "label": label(slot),
@@ -552,7 +552,7 @@ def binding_statuses(
     return tuple(result)
 
 
-def _slot_domains(host: OpenHouseHost, slot: str) -> tuple[str, ...]:
+def slot_domains(host: OpenHouseHost, slot: str) -> tuple[str, ...]:
     """What a slot accepts, following a *part* back to the slot it was split from.
 
     The catalog is where a slot's domains come from, and it has no entry for a key
