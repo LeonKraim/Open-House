@@ -919,6 +919,12 @@ export interface HostedModule {
   outputs: ModuleOutput[];
 }
 
+/** One labelled entry in a `select` input's menu, as Home Assistant takes it. */
+export interface SelectOption {
+  label: string;
+  value: string | number | boolean;
+}
+
 /** One blueprint input, as the import screen offers it. */
 export interface ModuleInputRow {
   name: string;
@@ -964,8 +970,16 @@ export interface ModuleInputRow {
    * declaration is refused in -- a slot that accepts nothing proposes nothing.
    */
   accepts_domains: string[];
-  /** A `select` input's menu, empty for every other kind. */
-  options: string[];
+  /**
+   * A `select` input's menu, empty for every other kind.
+   *
+   * Home Assistant's two option shapes, exactly as its select selector takes
+   * them: a bare string is its own label and value, and a `{label, value}` pair
+   * is drawn by the label and answered with the value. A blueprint that labels
+   * "ON Time" over `time_on` sends the pair, and flattening it to text would
+   * both display the pair and stop the blueprint's own default matching it.
+   */
+  options: (string | SelectOption)[];
   /**
    * How the module's setting is filled: `literal`, `entity`, `output`, `slot`,
    * or empty for one left on the blueprint's own default. Only meaningful on a

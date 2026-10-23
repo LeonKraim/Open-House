@@ -226,8 +226,21 @@ export function bySelector(input: ModuleInputRow): Record<string, unknown> {
       // The blueprint's own menu, in the order it wrote it. A select with no
       // options reads as free text rather than as a menu of nothing, and the
       // server sends the options for exactly this reason.
+      //
+      // **`multiple` travels with it.** A blueprint that writes `multiple: true`
+      // and `default: []` asks for a menu a person may tick several entries in,
+      // and its comparisons read the answer as a *list*. A control drawn without
+      // the flag answers with one string, so choosing "ON Time" would hand the
+      // module `time_on` where it tests for membership -- an answer of the wrong
+      // shape, silently, from a control that looked right.
       return input.options.length > 0
-        ? { select: { mode: "dropdown", options: input.options } }
+        ? {
+            select: {
+              mode: "dropdown",
+              options: input.options,
+              multiple: input.multiple,
+            },
+          }
         : { text: {} };
     default:
       return { text: {} };

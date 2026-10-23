@@ -668,8 +668,25 @@ test("a select input keeps the blueprint's own menu", () => {
     input_("select", { options: ["day", "night"] }),
   );
   assert.deepEqual(selector, {
-    select: { mode: "dropdown", options: ["day", "night"] },
+    select: { mode: "dropdown", options: ["day", "night"], multiple: false },
   });
+});
+
+test("a select that takes several says so, and keeps its labelled pairs", () => {
+  // Smart Light's "Use The Time Options" is `multiple: true` with
+  // `default: []`, and its comparisons read the answer as a list. A control
+  // without the flag answers with one string, so the choice is the wrong shape
+  // and the blueprint silently matches nothing. The labelled pair is carried as
+  // a pair for the same reason: flattening it shows the repr and stops the
+  // blueprint's own default from matching an option.
+  const options = [
+    { label: "ON Time", value: "time_on" },
+    { label: "OFF Time", value: "time_off" },
+  ];
+  assert.deepEqual(
+    bySelector(input_("select", { options, multiple: true })),
+    { select: { mode: "dropdown", options, multiple: true } },
+  );
 });
 
 test("an action input gets the action editor", () => {

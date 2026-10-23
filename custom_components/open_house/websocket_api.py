@@ -1466,7 +1466,10 @@ async def ws_slot_declare(
 
 
 @websocket_api.websocket_command(
-    {vol.Required("type"): SLOT_FORGET, vol.Required("slot"): vol.All(str, vol.Length(min=1))}
+    {
+        vol.Required("type"): SLOT_FORGET,
+        vol.Required("slot"): vol.All(str, vol.Length(min=1)),
+    }
 )
 @websocket_api.async_response
 @_admin
@@ -3889,13 +3892,23 @@ def _selector_kind(declared: Mapping[str, Any]) -> str:
     return "text"
 
 
-def _selector_options(declared: Mapping[str, Any]) -> list[str]:
+def _selector_options(declared: Mapping[str, Any]) -> list[Any]:
     """A `select` input's menu, so an unknown token cannot be typed into it.
 
     The options are the input's own, including when they are given one per line
     as a block scalar -- which is how most of the corpus writes them -- because a
     menu that dropped half of its entries would be worse than no menu: the
     blueprint's comparisons would silently never match what the person chose.
+
+    **A `{label, value}` option stays a pair.** Home Assistant's select selector
+    takes either a bare string (value and label the same) or a `SelectOptionDict`,
+    and the frontend draws the label while answering with the value. Flattening
+    the dict with `str()` -- which this did -- handed the menu the Python repr as
+    its text, so a blueprint that labels "ON Time" with `value: time_on` showed
+    `{'label': 'ON Time', 'value': 'time_on'}`, and the blueprint's own default
+    (`time_on`) matched no option at all and left the control blank. The value is
+    passed through untouched because a selector may answer with a number or a
+    boolean, and stringifying it would break the same match one type over.
     """
     selector = declared.get("selector")
     block = selector.get("select") if isinstance(selector, Mapping) else None
@@ -3905,7 +3918,24 @@ def _selector_options(declared: Mapping[str, Any]) -> list[str]:
     if isinstance(options, str):
         return [line.strip() for line in options.splitlines() if line.strip()]
     if isinstance(options, list):
-        return [str(option) for option in options]
+        found: list[Any] = []
+        for option in options:
+            if not isinstance(option, Mapping):
+                found.append(str(option))
+                continue
+            value = option.get("value")
+            if value is None:
+                # An option with no `value` is not one Home Assistant can
+                # answer with, so it is not one this menu should offer.
+                continue
+            label = option.get("label")
+            found.append(
+                {
+                    "label": str(label) if label is not None else str(value),
+                    "value": value,
+                }
+            )
+        return found
     return []
 
 

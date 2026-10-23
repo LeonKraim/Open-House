@@ -36,6 +36,9 @@ Four claims, one per defect:
     it was caught and logged as a store that refused the house. The whole suite
     passed: nothing here had asked whether the write happened, only what the
     reply said.
+  * A select input's `{label, value}` options reach the panel as pairs. They
+    were flattened with `str()`, so the menu showed the Python repr and the
+    blueprint's default matched no option, leaving the control blank.
 """
 
 from __future__ import annotations
@@ -461,6 +464,52 @@ def test_every_device_selector_the_panel_knows_is_named_for_it() -> None:
     assert kind({"selector": {"select": {"options": ["a"]}}}) == "select"
     assert kind({"selector": {"colour_rgb": {}}}) == "text"
     assert kind({}) == "text"
+
+
+def test_a_select_inputs_labelled_options_are_pairs_not_reprs() -> None:
+    """**A label belongs on the menu and the value to the blueprint.**
+
+    Home Assistant's select selector takes a bare string -- its own label and
+    value -- or a `{label, value}` pair, and the frontend draws the label while
+    answering with the value. `str()` on a pair handed the menu
+    `{'label': 'ON Time', 'value': 'time_on'}` as its text, and because the
+    blueprint's `default: time_on` matched none of the flattened strings, the
+    control opened blank with nothing selected.
+    """
+    options = _compiled(WS_MODULE, "_selector_options", {"Mapping": Mapping})
+
+    labelled = {
+        "selector": {
+            "select": {
+                "options": [
+                    {"label": "ON Time", "value": "time_on"},
+                    {"label": "OFF Time", "value": "time_off"},
+                ]
+            }
+        }
+    }
+    assert options(labelled) == [
+        {"label": "ON Time", "value": "time_on"},
+        {"label": "OFF Time", "value": "time_off"},
+    ]
+    # A block scalar is one bare option per line, as most of the corpus writes
+    # it, and a pair's value is passed through untouched: a selector may answer
+    # with a number, and stringifying it would break the same default match.
+    assert options({"selector": {"select": {"options": "one\ntwo\n"}}}) == [
+        "one",
+        "two",
+    ]
+    assert options(
+        {
+            "selector": {
+                "select": {"options": [{"value": 1}, {"label": "One", "value": 1}]}
+            }
+        }
+    ) == [{"label": "1", "value": 1}, {"label": "One", "value": 1}]
+    # Anything else -- no selector, no options -- is an empty menu rather than a
+    # refusal, which is what leaves the row a text box (`bySelector`).
+    assert options({}) == []
+    assert options({"selector": {"select": {}}}) == []
 
 
 # --------------------------------------------------------------------------
